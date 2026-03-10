@@ -24,7 +24,7 @@ namespace bench {
 class Component {
 public:
     explicit Component(std::string name);
-    virtual ~Component() = default;
+    virtual ~Component() { power_off(); }
 
     const std::string& name() const { return name_; }
 

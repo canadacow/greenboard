@@ -18,6 +18,7 @@ add_executable(bench
     src/board/motherboard.cpp
     src/tools/multimeter.cpp
     src/ic/ic_8284a.cpp
+    src/ic/ic_8288.cpp
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)

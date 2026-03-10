@@ -2,6 +2,7 @@
 #include "board/motherboard.h"
 #include "tools/multimeter.h"
 #include "ic/ic_8284a.h"
+#include "ic/ic_8288.h"
 #include <thread>
 #include <chrono>
 
@@ -41,6 +42,14 @@ int main() {
     mb.u11.insert(std::move(clk_gen));
     spdlog::info("  Clock:   {} [{}] -- {}", mb.u11.ref(), mb.u11.label(), mb.u11.occupied() ? "occupied" : "empty");
 
+    // --- Insert 8288 bus controller into socket U6 ---
+    spdlog::info("--- Inserting 8288 bus controller ---");
+    auto bus_ctrl = std::make_unique<bench::IC_8288>();
+    bus_ctrl->install(mb.u6);
+    bus_ctrl->power_on();
+    mb.u6.insert(std::move(bus_ctrl));
+    spdlog::info("  BusCtrl: {} [{}] -- {}", mb.u6.ref(), mb.u6.label(), mb.u6.occupied() ? "occupied" : "empty");
+
     // --- Power on: VCC goes High, 8284A starts oscillating ---
     spdlog::info("--- Power on ---");
     mb.power_on();
@@ -63,18 +72,40 @@ int main() {
     if (reset_sig) spdlog::info("  RESET (U11.10): {} -- {}", reset_sig->name(), reset_sig->level() == bench::Level::HiZ ? "HiZ" : (reset_sig->level() == bench::Level::High ? "High" : "Low"));
     if (ready_sig) spdlog::info("  READY (U11.5):  {} -- {}", ready_sig->name(), ready_sig->level() == bench::Level::HiZ ? "HiZ" : (ready_sig->level() == bench::Level::High ? "High" : "Low"));
 
+    // --- 8288 bus controller signal check ---
+    spdlog::info("--- 8288 bus controller signals ---");
+    auto ale_sig  = dmm.probe("U6", 5);
+    auto den_sig  = dmm.probe("U6", 4);
+    auto dtr_sig  = dmm.probe("U6", 16);
+    auto memr_sig = dmm.probe("U6", 7);
+    auto memw_sig = dmm.probe("U6", 8);
+    auto ior_sig  = dmm.probe("U6", 13);
+    auto iow_sig  = dmm.probe("U6", 12);
+    auto inta_sig = dmm.probe("U6", 14);
+
+    auto level_str = [](bench::Signal* s) -> const char* {
+        if (!s) return "N/C";
+        switch (s->level()) {
+            case bench::Level::High: return "High";
+            case bench::Level::Low:  return "Low";
+            default: return "HiZ";
+        }
+    };
+
+    if (ale_sig)  spdlog::info("  ALE   (U6.5):  {} -- {}", ale_sig->name(), level_str(ale_sig));
+    if (den_sig)  spdlog::info("  ~DEN  (U6.4):  {} -- {}", den_sig->name(), level_str(den_sig));
+    if (dtr_sig)  spdlog::info("  DT/~R (U6.16): {} -- {}", dtr_sig->name(), level_str(dtr_sig));
+    if (memr_sig) spdlog::info("  ~MEMR (U6.7):  {} -- {}", memr_sig->name(), level_str(memr_sig));
+    if (memw_sig) spdlog::info("  ~MEMW (U6.8):  {} -- {}", memw_sig->name(), level_str(memw_sig));
+    if (ior_sig)  spdlog::info("  ~IOR  (U6.13): {} -- {}", ior_sig->name(), level_str(ior_sig));
+    if (iow_sig)  spdlog::info("  ~IOW  (U6.12): {} -- {}", iow_sig->name(), level_str(iow_sig));
+    if (inta_sig) spdlog::info("  ~INTA (U6.14): {} -- {}", inta_sig->name(), level_str(inta_sig));
+
     spdlog::info("PSU POWER_GOOD: {}", mb.psu.power_good.level() == bench::Level::High ? "YES" : "NO");
 
-    // Power off.
+    // Power off. IC threads join via jthread destructor when
+    // Sockets destruct (before Signals, per declaration order).
     mb.power_off();
-
-    // Give the 8284A thread time to notice VCC dropped and exit.
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-    // Shut down the IC.
-    if (auto* ic = mb.u11.occupant()) {
-        ic->power_off();
-    }
 
     spdlog::info("Done.");
     return 0;
