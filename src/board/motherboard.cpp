@@ -189,6 +189,8 @@ void Motherboard::build_net_map() {
     net_map_["~DMA_WAIT"]   = &rdy_wait;
     net_map_["~DMA_AEN"]    = &aen;
     net_map_["RDY_TO_DMA"]  = &dreq0;  // PIT ch1 out -> DMA ch0 request
+    net_map_["N-000286"]    = &hrq;    // U35.10 (HRQ out) -> bus arb logic
+    net_map_["N-000281"]    = &tc;     // U35.36 (~EOP / TC)
 
     // --- 8255A PPI ---
     net_map_["~PPI_CS"] = &ppi_cs;

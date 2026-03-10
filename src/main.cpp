@@ -7,6 +7,7 @@
 #include "ic/ic_74s175.h"
 #include "ic/ic_8259a.h"
 #include "ic/ic_8255a.h"
+#include "ic/ic_8237a.h"
 #include <thread>
 #include <chrono>
 
@@ -77,6 +78,14 @@ int main() {
     ppi->power_on();
     mb.u36.insert(std::move(ppi));
     spdlog::info("  PPI:     {} [{}] -- {}", mb.u36.ref(), mb.u36.label(), mb.u36.occupied() ? "occupied" : "empty");
+
+    // --- Insert 8237A DMA controller into socket U35 ---
+    spdlog::info("--- Inserting 8237A DMA ---");
+    auto dma = std::make_unique<bench::IC_8237A>();
+    dma->install(mb.u35);
+    dma->power_on();
+    mb.u35.insert(std::move(dma));
+    spdlog::info("  DMA:     {} [{}] -- {}", mb.u35.ref(), mb.u35.label(), mb.u35.occupied() ? "occupied" : "empty");
 
     // --- Insert 8253 PIT into socket U34 ---
     spdlog::info("--- Inserting 8253 PIT ---");
@@ -182,6 +191,20 @@ int main() {
     if (ppi_pb7_sig) spdlog::info("  PB7   (U36.25): {} -- {}", ppi_pb7_sig->name(), level_str(ppi_pb7_sig));
     if (ppi_pc5_sig) spdlog::info("  PC5   (U36.12): {} -- {}", ppi_pc5_sig->name(), level_str(ppi_pc5_sig));
     if (ppi_pc7_sig) spdlog::info("  PC7   (U36.10): {} -- {}", ppi_pc7_sig->name(), level_str(ppi_pc7_sig));
+
+    // --- 8237A DMA signal check ---
+    spdlog::info("--- 8237A DMA signals ---");
+    auto dma_hrq_sig   = dmm.probe("U35", 10);
+    auto dma_hlda_sig  = dmm.probe("U35", 7);
+    auto dma_dreq0_sig = dmm.probe("U35", 19);
+    auto dma_dack0_sig = dmm.probe("U35", 25);
+    auto dma_cs_sig    = dmm.probe("U35", 11);
+
+    if (dma_hrq_sig)   spdlog::info("  HRQ    (U35.10): {} -- {}", dma_hrq_sig->name(), level_str(dma_hrq_sig));
+    if (dma_hlda_sig)  spdlog::info("  HLDA   (U35.7):  {} -- {}", dma_hlda_sig->name(), level_str(dma_hlda_sig));
+    if (dma_dreq0_sig) spdlog::info("  DREQ0  (U35.19): {} -- {}", dma_dreq0_sig->name(), level_str(dma_dreq0_sig));
+    if (dma_dack0_sig) spdlog::info("  ~DACK0 (U35.25): {} -- {}", dma_dack0_sig->name(), level_str(dma_dack0_sig));
+    if (dma_cs_sig)    spdlog::info("  ~CS    (U35.11): {} -- {}", dma_cs_sig->name(), level_str(dma_cs_sig));
 
     spdlog::info("PSU POWER_GOOD: {}", mb.psu.power_good.level() == bench::Level::High ? "YES" : "NO");
 
