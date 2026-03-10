@@ -10,11 +10,11 @@ Signal::Signal(std::string name) : name_(std::move(name)) {}
 void Signal::drive(Level lvl) {
     Level old = level_.load(std::memory_order_acquire);
     if (lvl == old) return;
+    prev_level_ = old;
     level_.store(lvl, std::memory_order_release);
 
-    // Subscriber mailboxes live in a static pool -- always valid memory.
     for (auto* mb : subscribers_) {
-        mb->post(SignalEvent{this, old, lvl});
+        mb->wake();
     }
 }
 

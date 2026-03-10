@@ -36,22 +36,24 @@ void IC_74S175::install(Socket& socket) {
     spdlog::debug("[74S175] installed into socket {}", socket.ref());
 }
 
-void IC_74S175::on_signal_change(Signal& signal, Level old_level, Level new_level) {
+void IC_74S175::on_signal_change() {
     // ~CLR: async clear when driven Low.
-    if (&signal == pin_clr_) {
-        if (new_level == Level::Low)
+    if (pin_clr_) {
+        Level cur = pin_clr_->level();
+        if (cur == Level::Low && clr_prev_ != Level::Low)
             clear_all();
-        return;
+        clr_prev_ = cur;
     }
 
     // CLK rising edge: latch D inputs.
-    if (&signal == pin_clk_) {
-        if (old_level != Level::High && new_level == Level::High) {
+    if (pin_clk_) {
+        Level cur = pin_clk_->level();
+        if (cur == Level::High && clk_prev_ != Level::High) {
             // Only latch if ~CLR is not asserted.
             if (!pin_clr_ || pin_clr_->level() != Level::Low)
                 on_clk_rising();
         }
-        return;
+        clk_prev_ = cur;
     }
 }
 

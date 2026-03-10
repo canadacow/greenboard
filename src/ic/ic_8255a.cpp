@@ -54,37 +54,37 @@ void IC_8255A::install(Socket& socket) {
     spdlog::debug("[8255A] installed into socket {}", socket.ref());
 }
 
-void IC_8255A::on_signal_change(Signal& signal, Level old_level, Level new_level) {
-    // RESET: high = reset all ports to input mode
-    if (&signal == pin_reset_ && new_level == Level::High) {
+void IC_8255A::on_signal_change() {
+    Level reset_cur = pin_reset_ ? pin_reset_->level() : Level::HiZ;
+    Level wr_cur = pin_wr_ ? pin_wr_->level() : Level::HiZ;
+    Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;
+    Level rd_cur = pin_rd_ ? pin_rd_->level() : Level::HiZ;
+
+    // RESET rising edge
+    if (reset_cur == Level::High && reset_prev_ != Level::High)
         on_reset();
-        return;
-    }
 
-    // Bus write: ~CS and ~WR both active (Low)
-    if (&signal == pin_wr_ && new_level == Level::Low) {
-        if (pin_cs_ && pin_cs_->level() == Level::Low)
-            on_bus_write();
-    }
-    if (&signal == pin_cs_ && new_level == Level::Low) {
-        if (pin_wr_ && pin_wr_->level() == Level::Low)
-            on_bus_write();
-    }
+    // Bus write: ~WR falling while ~CS active
+    if (wr_cur == Level::Low && wr_prev_ != Level::Low && cs_cur == Level::Low)
+        on_bus_write();
+    if (cs_cur == Level::Low && cs_prev_ != Level::Low && wr_cur == Level::Low)
+        on_bus_write();
 
-    // Bus read: ~CS and ~RD both active (Low)
-    if (&signal == pin_rd_ && new_level == Level::Low) {
-        if (pin_cs_ && pin_cs_->level() == Level::Low)
-            on_bus_read();
-    }
-    if (&signal == pin_cs_ && new_level == Level::Low) {
-        if (pin_rd_ && pin_rd_->level() == Level::Low)
-            on_bus_read();
-    }
+    // Bus read: ~RD falling while ~CS active
+    if (rd_cur == Level::Low && rd_prev_ != Level::Low && cs_cur == Level::Low)
+        on_bus_read();
+    if (cs_cur == Level::Low && cs_prev_ != Level::Low && rd_cur == Level::Low)
+        on_bus_read();
 
     // Release data bus when ~RD or ~CS goes inactive
-    if ((&signal == pin_rd_ || &signal == pin_cs_) && new_level == Level::High) {
+    if ((rd_cur == Level::High && rd_prev_ != Level::High) ||
+        (cs_cur == Level::High && cs_prev_ != Level::High))
         release_data();
-    }
+
+    reset_prev_ = reset_cur;
+    wr_prev_ = wr_cur;
+    cs_prev_ = cs_cur;
+    rd_prev_ = rd_cur;
 }
 
 void IC_8255A::on_reset() {

@@ -6,7 +6,9 @@
       "Bash(.venv/Scripts/python.exe scripts/parse_brd.py)",
       "Bash(.venv/Scripts/python.exe scripts/compare_brd_vs_code.py)",
       "Bash(cmake --build build --config Debug)",
-      "Bash(.venv/Scripts/python.exe scripts/verify_components.py)"
+      "Bash(.venv/Scripts/python.exe scripts/verify_components.py)",
+      "Bash(cmake --build build --target test_8088)",
+      "Bash(timeout 5 ./build/Debug/test_8088.exe)"
     ]
   }
 }

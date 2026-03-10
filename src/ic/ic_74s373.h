@@ -35,7 +35,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
+    void on_signal_change() override;
 
 private:
     void update_outputs();
@@ -49,6 +49,7 @@ private:
     Signal* pin_vcc_ = nullptr;  // Pin 20: VCC
 
     Level latch_[8] = {};  // Latched values
+    Level le_prev_ = Level::HiZ;
 };
 
 } // namespace bench

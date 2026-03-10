@@ -36,7 +36,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
+    void on_signal_change() override;
 
 private:
     void update_outputs();

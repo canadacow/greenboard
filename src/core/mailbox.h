@@ -11,33 +11,15 @@ namespace bench {
 
 class Signal;
 
-// A signal change event delivered to a component's mailbox.
-struct SignalEvent {
-    Signal* signal;
-    Level old_level;
-    Level new_level;
-};
-
-// Lock-free MPSC ring buffer for signal events.
-//
-// Allocated from a static pool so its memory remains valid after the
-// owning Component is destroyed. Signals hold Mailbox* and post() is
-// always safe -- writes go to valid memory even if nobody reads.
+// Wake-only mailbox. No queue -- just a semaphore to wake the consumer
+// when any connected signal changes. Components poll signal levels
+// directly when woken.
 struct alignas(64) Mailbox {
-    static constexpr uint32_t kCapacity = 256;  // must be power of 2
+    alignas(64) std::atomic<bool> sleeping{false};
+    std::binary_semaphore         sem{0};
 
-    SignalEvent ring[kCapacity] = {};
-    alignas(64) std::atomic<uint32_t> tail{0};     // next write slot (producers)
-    alignas(64) uint32_t              head{0};      // next read slot (consumer only)
-    alignas(64) std::atomic<uint32_t> committed{0}; // slots fully written
-    alignas(64) std::atomic<bool>     sleeping{false};
-    std::binary_semaphore             sem{0};
-
-    // Thread-safe: may be called from any thread (lock-free).
-    void post(const SignalEvent& event) {
-        uint32_t slot = tail.fetch_add(1, std::memory_order_acq_rel);
-        ring[slot & (kCapacity - 1)] = event;
-        committed.fetch_add(1, std::memory_order_release);
+    // Wake the consumer (if sleeping). Called from any thread.
+    void wake() {
         if (sleeping.load(std::memory_order_acquire))
             sem.release();
     }

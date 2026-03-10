@@ -13,19 +13,15 @@ class Signal;
 // Base class for any IC or active component on the motherboard.
 //
 // Each component runs on its own thread. When a signal it's subscribed
-// to changes, a SignalEvent is posted to its mailbox. The component's
-// thread wakes up and calls on_signal_change().
+// to changes, the component's mailbox semaphore is released. The
+// component wakes and calls on_signal_change() to poll pin levels.
 //
 // This mirrors real hardware: ICs react concurrently to signal changes
 // on their input pins. The wires (Signals) are the communication mechanism.
 //
-// Reactive components (default): block on the mailbox, wake on signal changes.
-// Active components (e.g. oscillators): override run() with their own loop
-// and call drain_mailbox() periodically to process signal events.
-//
-// The mailbox ring buffer lives in a static pool that outlives all
-// Components. Signals hold Mailbox* so post() is always safe to call,
-// even after the Component is destroyed.
+// Reactive components (default): block on the mailbox, wake on signal
+// changes, call on_signal_change() to check pin levels.
+// Active components (e.g. oscillators): override run() with their own loop.
 class Component {
 public:
     explicit Component(std::string name);
@@ -42,8 +38,8 @@ public:
     Mailbox* mailbox() const { return mailbox_; }
 
 protected:
-    // Derived classes implement these.
-    virtual void on_signal_change(Signal& signal, Level old_level, Level new_level) = 0;
+    // Called when woken from wait_mailbox. Check pin levels directly.
+    virtual void on_signal_change() {}
     virtual void on_power_on() {}
     virtual void on_power_off() {}
 
@@ -51,13 +47,7 @@ protected:
     // Default implementation blocks on the mailbox waiting for signal events.
     virtual void run(std::stop_token stop);
 
-    // Non-blocking: process all pending mailbox events right now.
-    // Active components call this inside their spin loop to handle
-    // input signal changes (RDY, RES, etc.) without blocking.
-    void drain_mailbox();
-
-    // Block until at least one event arrives, then drain all pending.
-    // Used by reactive components or for waiting on VCC.
+    // Block until a connected signal changes, then return.
     void wait_mailbox(std::stop_token& stop);
 
     // Check if stop has been requested on this component's thread.

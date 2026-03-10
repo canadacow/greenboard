@@ -69,57 +69,54 @@ void IC_8237A::install(Socket& socket) {
     spdlog::debug("[8237A] installed into socket {}", socket.ref());
 }
 
-void IC_8237A::on_signal_change(Signal& signal, Level old_level, Level new_level) {
-    // RESET
-    if (&signal == pin_reset_ && new_level == Level::High) {
+void IC_8237A::on_signal_change() {
+    Level reset_cur = pin_reset_ ? pin_reset_->level() : Level::HiZ;
+    Level iow_cur = pin_iow_ ? pin_iow_->level() : Level::HiZ;
+    Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;
+    Level ior_cur = pin_ior_ ? pin_ior_->level() : Level::HiZ;
+    Level clk_cur = pin_clk_ ? pin_clk_->level() : Level::HiZ;
+    Level hlda_cur = pin_hlda_ ? pin_hlda_->level() : Level::HiZ;
+
+    // RESET rising edge
+    if (reset_cur == Level::High && reset_prev_ != Level::High)
         on_reset();
-        return;
-    }
 
-    // Bus write: ~CS + ~IOW both active
-    if (&signal == pin_iow_ && new_level == Level::Low) {
-        if (pin_cs_ && pin_cs_->level() == Level::Low)
-            on_bus_write();
-    }
-    if (&signal == pin_cs_ && new_level == Level::Low) {
-        if (pin_iow_ && pin_iow_->level() == Level::Low)
-            on_bus_write();
-    }
+    // Bus write: ~IOW falling while ~CS active
+    if (iow_cur == Level::Low && iow_prev_ != Level::Low && cs_cur == Level::Low)
+        on_bus_write();
+    if (cs_cur == Level::Low && cs_prev_ != Level::Low && iow_cur == Level::Low)
+        on_bus_write();
 
-    // Bus read: ~CS + ~IOR both active
-    if (&signal == pin_ior_ && new_level == Level::Low) {
-        if (pin_cs_ && pin_cs_->level() == Level::Low)
-            on_bus_read();
-    }
-    if (&signal == pin_cs_ && new_level == Level::Low) {
-        if (pin_ior_ && pin_ior_->level() == Level::Low)
-            on_bus_read();
-    }
+    // Bus read: ~IOR falling while ~CS active
+    if (ior_cur == Level::Low && ior_prev_ != Level::Low && cs_cur == Level::Low)
+        on_bus_read();
+    if (cs_cur == Level::Low && cs_prev_ != Level::Low && ior_cur == Level::Low)
+        on_bus_read();
 
     // Release data bus when ~IOR or ~CS goes inactive
-    if ((&signal == pin_ior_ || &signal == pin_cs_) && new_level == Level::High) {
+    if ((ior_cur == Level::High && ior_prev_ != Level::High) ||
+        (cs_cur == Level::High && cs_prev_ != Level::High))
         release_data();
-    }
 
     // DREQ changes -- check for new DMA requests
-    for (int i = 0; i < 4; ++i) {
-        if (&signal == pin_dreq_[i]) {
-            evaluate_dreq();
-            return;
-        }
-    }
+    evaluate_dreq();
 
     // CLK falling edge -- advance DMA state machine
-    if (&signal == pin_clk_ && old_level == Level::High && new_level == Level::Low) {
+    if (clk_cur == Level::Low && clk_prev_ == Level::High)
         on_clk_falling();
-    }
 
     // HLDA rising -- CPU has released the bus
-    if (&signal == pin_hlda_ && new_level == Level::High) {
-        if (state_ == State::RequestPending) {
+    if (hlda_cur == Level::High && hlda_prev_ != Level::High) {
+        if (state_ == State::RequestPending)
             state_ = State::Transfer;
-        }
     }
+
+    reset_prev_ = reset_cur;
+    iow_prev_ = iow_cur;
+    cs_prev_ = cs_cur;
+    ior_prev_ = ior_cur;
+    clk_prev_ = clk_cur;
+    hlda_prev_ = hlda_cur;
 }
 
 void IC_8237A::on_reset() {

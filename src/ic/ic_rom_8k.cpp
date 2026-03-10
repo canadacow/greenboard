@@ -57,9 +57,9 @@ void IC_ROM_8K::install(Socket& socket) {
     spdlog::debug("[{}] installed into socket {}", name(), socket.ref());
 }
 
-void IC_ROM_8K::on_signal_change(Signal& signal, Level /*old_level*/, Level new_level) {
-    if (&signal == pin_cs_) {
-        if (new_level == Level::Low)
+void IC_ROM_8K::on_signal_change() {
+    if (pin_cs_) {
+        if (pin_cs_->level() == Level::Low)
             drive_output();
         else
             release_output();

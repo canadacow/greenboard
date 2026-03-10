@@ -26,21 +26,6 @@ void IC_8284A::install(Socket& socket) {
     spdlog::debug("[8284A] installed into socket {}", socket.ref());
 }
 
-void IC_8284A::on_signal_change(Signal& signal, Level old_level, Level new_level) {
-    if (&signal == pin_res_) {
-        // RES input: High = normal operation, Low = assert RESET
-        res_input_.store(new_level == Level::High, std::memory_order_relaxed);
-    }
-    else if (&signal == pin_rdy1_) {
-        rdy1_input_.store(new_level == Level::High, std::memory_order_relaxed);
-    }
-    else if (&signal == pin_aen1_) {
-        // ~AEN1 is active low: Low = RDY1 enabled
-        aen1_input_.store(new_level == Level::Low, std::memory_order_relaxed);
-    }
-    // VCC changes are handled in the run() loop directly.
-}
-
 void IC_8284A::run(std::stop_token stop) {
     spdlog::debug("[8284A] thread started, waiting for VCC");
 
@@ -56,11 +41,6 @@ void IC_8284A::run(std::stop_token stop) {
 
     // Assert RESET on power-up (RES starts low from RC delay).
     if (pin_reset_) pin_reset_->drive(Level::High);
-
-    // Latch initial input states.
-    if (pin_res_)  res_input_.store(pin_res_->level() == Level::High, std::memory_order_relaxed);
-    if (pin_rdy1_) rdy1_input_.store(pin_rdy1_->level() == Level::High, std::memory_order_relaxed);
-    if (pin_aen1_) aen1_input_.store(pin_aen1_->level() == Level::Low, std::memory_order_relaxed);
 
     // --- Oscillator spin loop ---
     // OSC toggles every tick.
@@ -96,13 +76,14 @@ void IC_8284A::run(std::stop_token stop) {
             if (!clk_state) {
                 // READY: RDY1 is valid when ~AEN1 is active (low).
                 bool ready = true;
-                if (aen1_input_.load(std::memory_order_relaxed))
-                    ready = rdy1_input_.load(std::memory_order_relaxed);
+                bool aen1 = pin_aen1_ && pin_aen1_->level() == Level::Low;
+                if (aen1)
+                    ready = pin_rdy1_ && pin_rdy1_->level() == Level::High;
                 if (pin_ready_) pin_ready_->drive(ready ? Level::High : Level::Low);
 
                 // RESET: inverted and synchronized RES input.
                 // RES high (PWR_GOOD) = no reset. RES low = assert reset.
-                bool res = res_input_.load(std::memory_order_relaxed);
+                bool res = pin_res_ && pin_res_->level() == Level::High;
                 if (pin_reset_) pin_reset_->drive(res ? Level::Low : Level::High);
             }
 
@@ -112,9 +93,6 @@ void IC_8284A::run(std::stop_token stop) {
                 if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
             }
         }
-
-        // Drain mailbox: process any RDY/RES/VCC changes that arrived.
-        drain_mailbox();
 
         ++total_ticks;
     }

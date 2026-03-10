@@ -33,41 +33,15 @@ void IC_74S245::install(Socket& socket) {
     spdlog::debug("[74S245] installed into socket {}", socket.ref());
 }
 
-void IC_74S245::on_signal_change(Signal& signal, Level /*old_level*/, Level new_level) {
+void IC_74S245::on_signal_change() {
     bool enabled = pin_g_ && pin_g_->level() == Level::Low;
 
-    // If disabled, release all outputs
     if (!enabled) {
-        if (&signal == pin_g_) release_all();
+        release_all();
         return;
     }
 
-    // Control change: full update
-    if (&signal == pin_g_ || &signal == pin_dir_) {
-        update_outputs();
-        return;
-    }
-
-    bool a_to_b = pin_dir_ && pin_dir_->level() == Level::High;
-
-    // Only propagate from input side to output side
-    if (a_to_b) {
-        // A -> B: propagate A-side changes to B
-        for (int i = 0; i < 8; ++i) {
-            if (&signal == pin_a_[i] && pin_b_[i]) {
-                pin_b_[i]->drive(new_level);
-                return;
-            }
-        }
-    } else {
-        // B -> A: propagate B-side changes to A
-        for (int i = 0; i < 8; ++i) {
-            if (&signal == pin_b_[i] && pin_a_[i]) {
-                pin_a_[i]->drive(new_level);
-                return;
-            }
-        }
-    }
+    update_outputs();
 }
 
 void IC_74S245::update_outputs() {

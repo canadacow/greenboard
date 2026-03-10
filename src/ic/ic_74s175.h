@@ -41,7 +41,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
+    void on_signal_change() override;
 
 private:
     void on_clk_rising();
@@ -64,6 +64,8 @@ private:
 
     // Internal state
     bool q_[4] = {};
+    Level clr_prev_ = Level::HiZ;
+    Level clk_prev_ = Level::HiZ;
 };
 
 } // namespace bench

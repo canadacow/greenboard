@@ -43,20 +43,21 @@ void IC_74S373::install(Socket& socket) {
     spdlog::debug("[74S373] installed into socket {}", socket.ref());
 }
 
-void IC_74S373::on_signal_change(Signal& signal, Level /*old_level*/, Level new_level) {
-    // LE falling edge: capture D inputs
-    if (&signal == pin_le_ && new_level == Level::Low) {
-        for (int i = 0; i < 8; ++i)
-            latch_[i] = pin_d_[i] ? pin_d_[i]->level() : Level::HiZ;
+void IC_74S373::on_signal_change() {
+    if (pin_le_) {
+        Level cur = pin_le_->level();
+        // LE falling edge: capture D inputs
+        if (cur == Level::Low && le_prev_ != Level::Low) {
+            for (int i = 0; i < 8; ++i)
+                latch_[i] = pin_d_[i] ? pin_d_[i]->level() : Level::HiZ;
+        }
+        le_prev_ = cur;
     }
 
-    // D input change while transparent (LE High): update latch
-    bool transparent = pin_le_ && pin_le_->level() == Level::High;
-    if (transparent) {
-        for (int i = 0; i < 8; ++i) {
-            if (&signal == pin_d_[i])
-                latch_[i] = new_level;
-        }
+    // Transparent mode (LE High): update latch from current D levels
+    if (pin_le_ && pin_le_->level() == Level::High) {
+        for (int i = 0; i < 8; ++i)
+            latch_[i] = pin_d_[i] ? pin_d_[i]->level() : Level::HiZ;
     }
 
     update_outputs();

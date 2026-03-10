@@ -41,64 +41,64 @@ void IC_8259A::install(Socket& socket) {
     spdlog::debug("[8259A] installed into socket {}", socket.ref());
 }
 
-void IC_8259A::on_signal_change(Signal& signal, Level old_level, Level new_level) {
-    // Bus write: ~CS and ~WR both falling (active)
-    if (&signal == pin_wr_ && new_level == Level::Low) {
-        if (pin_cs_ && pin_cs_->level() == Level::Low)
-            on_bus_write();
-    }
-    if (&signal == pin_cs_ && new_level == Level::Low) {
-        if (pin_wr_ && pin_wr_->level() == Level::Low)
-            on_bus_write();
-    }
+void IC_8259A::on_signal_change() {
+    Level wr_cur = pin_wr_ ? pin_wr_->level() : Level::HiZ;
+    Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;
+    Level rd_cur = pin_rd_ ? pin_rd_->level() : Level::HiZ;
+    Level inta_cur = pin_inta_ ? pin_inta_->level() : Level::HiZ;
 
-    // Bus read: ~CS and ~RD both active
-    if (&signal == pin_rd_ && new_level == Level::Low) {
-        if (pin_cs_ && pin_cs_->level() == Level::Low)
-            on_bus_read();
-    }
-    if (&signal == pin_cs_ && new_level == Level::Low) {
-        if (pin_rd_ && pin_rd_->level() == Level::Low)
-            on_bus_read();
-    }
+    // Bus write: ~WR falling while ~CS active
+    if (wr_cur == Level::Low && wr_prev_ != Level::Low && cs_cur == Level::Low)
+        on_bus_write();
+    // Bus write: ~CS falling while ~WR active
+    if (cs_cur == Level::Low && cs_prev_ != Level::Low && wr_cur == Level::Low)
+        on_bus_write();
+
+    // Bus read: ~RD falling while ~CS active
+    if (rd_cur == Level::Low && rd_prev_ != Level::Low && cs_cur == Level::Low)
+        on_bus_read();
+    // Bus read: ~CS falling while ~RD active
+    if (cs_cur == Level::Low && cs_prev_ != Level::Low && rd_cur == Level::Low)
+        on_bus_read();
 
     // Release data bus when ~RD or ~CS goes inactive
-    if ((&signal == pin_rd_ || &signal == pin_cs_) && new_level == Level::High) {
+    if ((rd_cur == Level::High && rd_prev_ != Level::High) ||
+        (cs_cur == Level::High && cs_prev_ != Level::High))
         release_data();
-    }
 
     // ~INTA falling edge
-    if (&signal == pin_inta_ && old_level != Level::Low && new_level == Level::Low) {
+    if (inta_cur == Level::Low && inta_prev_ != Level::Low)
         on_inta_falling();
-    }
 
     // ~INTA rising edge: release data bus after second pulse
-    if (&signal == pin_inta_ && new_level == Level::High && inta_count_ >= 2) {
+    if (inta_cur == Level::High && inta_prev_ != Level::High && inta_count_ >= 2) {
         release_data();
         inta_count_ = 0;
         inta_level_ = -1;
     }
 
+    wr_prev_ = wr_cur;
+    cs_prev_ = cs_cur;
+    rd_prev_ = rd_cur;
+    inta_prev_ = inta_cur;
+
     // IRQ line changes -- edge detection
     for (int i = 0; i < 8; ++i) {
-        if (&signal == pin_ir_[i]) {
-            bool was_low = (ir_prev_ & (1 << i)) == 0;
-            if (new_level == Level::High) {
-                ir_prev_ |= (1 << i);
-                if (edge_triggered_ && was_low) {
-                    // Rising edge detected -- set IRR bit
-                    irr_ |= (1 << i);
-                    evaluate_int();
-                }
-            } else {
-                ir_prev_ &= ~(1 << i);
-                if (!edge_triggered_) {
-                    // Level-triggered: clear IRR when line goes low
-                    irr_ &= ~(1 << i);
-                    evaluate_int();
-                }
+        if (!pin_ir_[i]) continue;
+        bool now_high = pin_ir_[i]->level() == Level::High;
+        bool was_low = (ir_prev_ & (1 << i)) == 0;
+        if (now_high && was_low) {
+            ir_prev_ |= (1 << i);
+            if (edge_triggered_) {
+                irr_ |= (1 << i);
+                evaluate_int();
             }
-            break;
+        } else if (!now_high && !was_low) {
+            ir_prev_ &= ~(1 << i);
+            if (!edge_triggered_) {
+                irr_ &= ~(1 << i);
+                evaluate_int();
+            }
         }
     }
 }

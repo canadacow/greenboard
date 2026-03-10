@@ -35,3 +35,14 @@ target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt)
 
 # Set working directory to project root so relative paths (e.g. assets/) resolve correctly.
 set_target_properties(bench PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+# 8088 test bench -- isolated CPU instruction tests
+add_executable(test_8088
+    src/test/test_8088.cpp
+    src/core/signal.cpp
+    src/core/component.cpp
+    src/board/socket.cpp
+    src/ic/ic_8088.cpp
+)
+target_include_directories(test_8088 PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_8088 PRIVATE spdlog::spdlog fmt::fmt)

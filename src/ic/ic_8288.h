@@ -57,7 +57,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
+    void on_signal_change() override;
 
 private:
     // Bus cycle type decoded from S0-S2
@@ -93,6 +93,7 @@ private:
     // Internal state
     State state_ = State::Idle;
     BusCycle cycle_ = BusCycle::Passive;
+    Level clk_prev_ = Level::HiZ;
 };
 
 } // namespace bench

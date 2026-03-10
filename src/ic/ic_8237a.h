@@ -45,7 +45,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
+    void on_signal_change() override;
 
 private:
     void on_bus_write();
@@ -109,6 +109,14 @@ private:
     State state_ = State::Idle;
     int active_ch_ = -1;        // which channel is currently active
     bool disabled_ = false;     // controller disabled (command bit 2)
+
+    // Edge tracking
+    Level reset_prev_ = Level::HiZ;
+    Level iow_prev_ = Level::HiZ;
+    Level cs_prev_ = Level::HiZ;
+    Level ior_prev_ = Level::HiZ;
+    Level clk_prev_ = Level::HiZ;
+    Level hlda_prev_ = Level::HiZ;
 };
 
 } // namespace bench

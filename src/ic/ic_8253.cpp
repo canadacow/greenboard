@@ -46,36 +46,41 @@ void IC_8253::install(Socket& socket) {
     spdlog::debug("[8253] installed into socket {}", socket.ref());
 }
 
-void IC_8253::on_signal_change(Signal& signal, Level old_level, Level new_level) {
+void IC_8253::on_signal_change() {
     // CLK falling edge triggers counter decrement.
     for (int i = 0; i < 3; ++i) {
-        if (&signal == pin_clk_[i]) {
-            if (old_level == Level::High && new_level == Level::Low)
+        if (pin_clk_[i]) {
+            Level cur = pin_clk_[i]->level();
+            if (cur == Level::Low && clk_prev_[i] == Level::High)
                 on_clk_falling(i);
-            return;
+            clk_prev_[i] = cur;
         }
     }
 
     // GATE level changes.
     for (int i = 0; i < 3; ++i) {
-        if (&signal == pin_gate_[i]) {
-            on_gate_change(i, new_level == Level::High);
-            return;
+        if (pin_gate_[i]) {
+            Level cur = pin_gate_[i]->level();
+            if (cur != gate_prev_[i])
+                on_gate_change(i, cur == Level::High);
+            gate_prev_[i] = cur;
         }
     }
 
     // ~WR falling edge: CPU writes to PIT.
-    if (&signal == pin_wr_) {
-        if (old_level != Level::Low && new_level == Level::Low)
+    if (pin_wr_) {
+        Level cur = pin_wr_->level();
+        if (cur == Level::Low && wr_prev_ != Level::Low)
             on_write_falling();
-        return;
+        wr_prev_ = cur;
     }
 
     // ~RD falling edge: CPU reads from PIT.
-    if (&signal == pin_rd_) {
-        if (old_level != Level::Low && new_level == Level::Low)
+    if (pin_rd_) {
+        Level cur = pin_rd_->level();
+        if (cur == Level::Low && rd_prev_ != Level::Low)
             on_read_falling();
-        return;
+        rd_prev_ = cur;
     }
 }
 

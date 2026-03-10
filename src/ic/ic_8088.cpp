@@ -47,7 +47,8 @@ static constexpr uint8_t BUS_MEMR    = 5;  // 1,0,1
 static constexpr uint8_t BUS_MEMW    = 6;  // 1,1,0
 static constexpr uint8_t BUS_PASSIVE = 7;  // 1,1,1
 
-IC_8088::IC_8088() : Component("8088") {}
+IC_8088::IC_8088(uint16_t start_cs, uint16_t start_ip)
+    : Component("8088"), start_cs_(start_cs), start_ip_(start_ip) {}
 
 void IC_8088::install(Socket& socket) {
     for (int i = 0; i < 8; ++i)
@@ -72,7 +73,7 @@ void IC_8088::install(Socket& socket) {
     pin_lock_  = socket.pin_signal(29);
     pin_rqgt0_ = socket.pin_signal(30);
 
-    // CLK is polled directly (active IC), not through mailbox.
+    if (pin_clk_)   pin_clk_->connect(this);
     if (pin_reset_) pin_reset_->connect(this);
     if (pin_nmi_)   pin_nmi_->connect(this);
     if (pin_vcc_)   pin_vcc_->connect(this);
@@ -80,9 +81,23 @@ void IC_8088::install(Socket& socket) {
     spdlog::debug("[8088] installed into socket {}", socket.ref());
 }
 
-void IC_8088::on_signal_change(Signal& signal, Level /*old_level*/, Level new_level) {
-    if (&signal == pin_nmi_ && new_level == Level::High)
-        nmi_pending_ = true;
+void IC_8088::on_signal_change() {
+    // CLK edge detection
+    if (pin_clk_) {
+        Level cur = pin_clk_->level();
+        if (cur == Level::High && clk_prev_ != Level::High)
+            clk_rose_ = true;
+        if (cur == Level::Low && clk_prev_ != Level::Low)
+            clk_fell_ = true;
+        clk_prev_ = cur;
+    }
+    // NMI rising edge detection
+    if (pin_nmi_) {
+        Level cur = pin_nmi_->level();
+        if (cur == Level::High && nmi_prev_ != Level::High)
+            nmi_pending_ = true;
+        nmi_prev_ = cur;
+    }
 }
 
 void IC_8088::run(std::stop_token stop) {
@@ -102,7 +117,7 @@ void IC_8088::run(std::stop_token stop) {
 
     if (pin_reset_ && pin_reset_->level() == Level::High) {
         // RESET is currently asserted -- wait for it to deassert.
-        spdlog::info("[8088] RESET asserted -- CS:IP = F000:0100");
+        spdlog::info("[8088] RESET asserted -- CS:IP = {:04X}:{:04X}", start_cs_, start_ip_);
         while (!stop.stop_requested()) {
             wait_mailbox(stop);
             if (stop.stop_requested()) return;
@@ -110,7 +125,7 @@ void IC_8088::run(std::stop_token stop) {
         }
     } else {
         // RESET pulse already completed (or never happened).
-        spdlog::info("[8088] RESET complete -- CS:IP = F000:0100");
+        spdlog::info("[8088] RESET complete -- CS:IP = {:04X}:{:04X}", start_cs_, start_ip_);
     }
 
     spdlog::info("[8088] starting execution");
@@ -119,7 +134,7 @@ void IC_8088::run(std::stop_token stop) {
 
     while (!stop.stop_requested()) {
         if (pin_vcc_ && pin_vcc_->level() != Level::High) break;
-        drain_mailbox();  // process NMI, etc.
+        on_signal_change();  // process NMI, CLK edges
         execute();
     }
 
@@ -143,6 +158,8 @@ void IC_8088::drive_address(uint32_t address) {
     for (int i = 0; i < 12; ++i)
         if (pin_a_upper_[i])
             pin_a_upper_[i]->drive((address >> (i + 8)) & 1 ? Level::High : Level::Low);
+    spdlog::debug("[8088] drive_address 0x{:05X} ad[0]@{} level={}", address,
+        (void*)pin_ad_[0], pin_ad_[0] ? (int)pin_ad_[0]->level() : -1);
 }
 
 void IC_8088::drive_data(uint8_t value) {
@@ -156,6 +173,16 @@ uint8_t IC_8088::read_data() {
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i] && pin_ad_[i]->level() == Level::High)
             val |= (1 << i);
+    spdlog::debug("[8088] read_data -> 0x{:02X} (AD levels: {}{}{}{}{}{}{}{})",
+        val,
+        pin_ad_[7] ? (int)pin_ad_[7]->level() : -1,
+        pin_ad_[6] ? (int)pin_ad_[6]->level() : -1,
+        pin_ad_[5] ? (int)pin_ad_[5]->level() : -1,
+        pin_ad_[4] ? (int)pin_ad_[4]->level() : -1,
+        pin_ad_[3] ? (int)pin_ad_[3]->level() : -1,
+        pin_ad_[2] ? (int)pin_ad_[2]->level() : -1,
+        pin_ad_[1] ? (int)pin_ad_[1]->level() : -1,
+        pin_ad_[0] ? (int)pin_ad_[0]->level() : -1);
     return val;
 }
 
@@ -177,52 +204,92 @@ void IC_8088::drive_status_passive() {
 }
 
 void IC_8088::wait_clk_rising() {
-    Level lv;
-    while ((lv = pin_clk_->level()) != Level::High && lv != Level::HiZ
-           && !stop_.stop_requested()) ;
+    while (!clk_rose_ && !stop_.stop_requested()) {
+        wait_mailbox(stop_);
+        on_signal_change();
+    }
+    clk_rose_ = false;
 }
 
 void IC_8088::wait_clk_falling() {
-    Level lv;
-    while ((lv = pin_clk_->level()) != Level::Low && lv != Level::HiZ
-           && !stop_.stop_requested()) ;
+    while (!clk_fell_ && !stop_.stop_requested()) {
+        wait_mailbox(stop_);
+        on_signal_change();
+    }
+    clk_fell_ = false;
 }
 
 uint8_t IC_8088::bus_read_byte(uint32_t address) {
     if (stop_.stop_requested()) return 0;
-    drive_address(address & 0xFFFFF);
+    spdlog::debug("[8088] bus_read_byte(0x{:05X}) -- drive status MEMR", address & 0xFFFFF);
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
-    wait_clk_rising(); wait_clk_falling();
-    release_data();
-    wait_clk_rising(); wait_clk_falling();
+    clk_rose_ = false; clk_fell_ = false;  // discard stale edges
+    spdlog::debug("[8088]   wait T1 rise...");
     wait_clk_rising();
+    spdlog::debug("[8088]   T1 rise -- drive address 0x{:05X}", address & 0xFFFFF);
+    drive_address(address & 0xFFFFF);
+    spdlog::debug("[8088]   wait T1 fall (ALE)...");
+    wait_clk_falling();
+    spdlog::debug("[8088]   T1 fall -- release AD");
+    release_data();
+    spdlog::debug("[8088]   wait T2 rise...");
+    wait_clk_rising();
+    spdlog::debug("[8088]   T2 rise");
+    wait_clk_falling();
+    spdlog::debug("[8088]   T2 fall");
+    spdlog::debug("[8088]   wait T3 rise...");
+    wait_clk_rising();
+    spdlog::debug("[8088]   T3 rise -- drive status passive");
+    drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
            && !stop_.stop_requested()) {
+        spdlog::debug("[8088]   Tw (READY not high)");
         wait_clk_falling(); wait_clk_rising();
     }
+    spdlog::debug("[8088]   wait T3 fall (sample data)...");
     wait_clk_falling();
     uint8_t data = read_data();
-    drive_status_passive();
+    spdlog::debug("[8088]   T3 fall -- READ 0x{:05X} -> 0x{:02X}", address & 0xFFFFF, data);
+    spdlog::debug("[8088]   wait T4...");
     wait_clk_rising(); wait_clk_falling();
+    spdlog::debug("[8088]   T4 done");
     return data;
 }
 
 void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     if (stop_.stop_requested()) return;
-    drive_address(address & 0xFFFFF);
+    spdlog::debug("[8088] bus_write_byte(0x{:05X}, 0x{:02X}) -- drive status MEMW", address & 0xFFFFF, value);
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
-    wait_clk_rising(); wait_clk_falling();
-    drive_data(value);
-    wait_clk_rising(); wait_clk_falling();
+    clk_rose_ = false; clk_fell_ = false;  // discard stale edges
+    spdlog::debug("[8088]   wait T1 rise...");
     wait_clk_rising();
+    spdlog::debug("[8088]   T1 rise -- drive address 0x{:05X}", address & 0xFFFFF);
+    drive_address(address & 0xFFFFF);
+    spdlog::debug("[8088]   wait T1 fall (ALE)...");
+    wait_clk_falling();
+    spdlog::debug("[8088]   T1 fall -- drive write data 0x{:02X}", value);
+    drive_data(value);
+    spdlog::debug("[8088]   wait T2 rise...");
+    wait_clk_rising();
+    spdlog::debug("[8088]   T2 rise");
+    wait_clk_falling();
+    spdlog::debug("[8088]   T2 fall");
+    spdlog::debug("[8088]   wait T3 rise...");
+    wait_clk_rising();
+    spdlog::debug("[8088]   T3 rise -- drive status passive");
+    drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
            && !stop_.stop_requested()) {
+        spdlog::debug("[8088]   Tw (READY not high)");
         wait_clk_falling(); wait_clk_rising();
     }
+    spdlog::debug("[8088]   wait T3 fall...");
     wait_clk_falling();
+    spdlog::debug("[8088]   T3 fall -- WRITE 0x{:05X} <- 0x{:02X}", address & 0xFFFFF, value);
     release_data();
-    drive_status_passive();
+    spdlog::debug("[8088]   wait T4...");
     wait_clk_rising(); wait_clk_falling();
+    spdlog::debug("[8088]   T4 done");
 }
 
 uint16_t IC_8088::bus_read_word(uint32_t address) {
@@ -238,38 +305,42 @@ void IC_8088::bus_write_word(uint32_t address, uint16_t value) {
 
 uint8_t IC_8088::io_read_byte(uint16_t port) {
     if (stop_.stop_requested()) return 0;
-    drive_address(port);
     drive_status((BUS_IOR >> 2) & 1, (BUS_IOR >> 1) & 1, BUS_IOR & 1);
-    wait_clk_rising(); wait_clk_falling();
+    clk_rose_ = false; clk_fell_ = false;
+    wait_clk_rising();
+    drive_address(port);
+    wait_clk_falling();
     release_data();
     wait_clk_rising(); wait_clk_falling();
     wait_clk_rising();
+    drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
            && !stop_.stop_requested()) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
     uint8_t data = read_data();
-    drive_status_passive();
     wait_clk_rising(); wait_clk_falling();
     return data;
 }
 
 void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     if (stop_.stop_requested()) return;
-    drive_address(port);
     drive_status((BUS_IOW >> 2) & 1, (BUS_IOW >> 1) & 1, BUS_IOW & 1);
-    wait_clk_rising(); wait_clk_falling();
+    clk_rose_ = false; clk_fell_ = false;
+    wait_clk_rising();
+    drive_address(port);
+    wait_clk_falling();
     drive_data(value);
     wait_clk_rising(); wait_clk_falling();
     wait_clk_rising();
+    drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
            && !stop_.stop_requested()) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
     release_data();
-    drive_status_passive();
     wait_clk_rising(); wait_clk_falling();
 }
 
@@ -391,8 +462,8 @@ void IC_8088::decode_rm_reg() {
 
 void IC_8088::cpu_reset() {
     std::memset(regs_, 0, sizeof(regs_));
-    regs16()[REG_CS] = 0xF000;
-    reg_ip_ = 0x0100;
+    regs16()[REG_CS] = start_cs_;
+    reg_ip_ = start_ip_;
     seg_override_en_ = 0;
     rep_override_en_ = 0;
     trap_flag_ = 0;

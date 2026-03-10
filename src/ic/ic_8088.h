@@ -44,13 +44,13 @@ namespace bench {
 //            Each instruction step drives bus signals for memory/IO access.
 class IC_8088 : public Component {
 public:
-    IC_8088();
+    IC_8088(uint16_t start_cs = 0xF000, uint16_t start_ip = 0x0100);
 
     void install(Socket& socket);
 
 protected:
     void run(std::stop_token stop) override;
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
+    void on_signal_change() override;
 
 private:
     // --- Bus operations ---
@@ -271,8 +271,18 @@ private:
     // Interrupt state
     bool nmi_pending_ = false;
 
+    // CLK edge tracking -- set by on_signal_change(), consumed by wait_clk_*
+    bool clk_rose_ = false;
+    bool clk_fell_ = false;
+    Level clk_prev_ = Level::HiZ;
+    Level nmi_prev_ = Level::HiZ;
+
     // Cached stop token for CLK spin loops
     std::stop_token stop_;
+
+    // Start address (set via constructor, applied in cpu_reset)
+    uint16_t start_cs_;
+    uint16_t start_ip_;
 };
 
 } // namespace bench

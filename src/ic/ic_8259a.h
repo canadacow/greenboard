@@ -35,7 +35,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
+    void on_signal_change() override;
 
 private:
     // Initialization state machine
@@ -95,6 +95,12 @@ private:
     // Initialization state
     InitState init_state_ = InitState::Ready;
     bool initialized_ = false;
+
+    // Edge tracking for on_signal_change
+    Level wr_prev_ = Level::HiZ;
+    Level cs_prev_ = Level::HiZ;
+    Level rd_prev_ = Level::HiZ;
+    Level inta_prev_ = Level::HiZ;
 };
 
 } // namespace bench

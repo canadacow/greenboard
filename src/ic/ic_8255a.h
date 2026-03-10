@@ -43,7 +43,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
+    void on_signal_change() override;
 
 private:
     void on_bus_write();
@@ -92,6 +92,12 @@ private:
     bool pb_input_ = true;
     bool pc_upper_input_ = true;
     bool pc_lower_input_ = true;
+
+    // Edge tracking
+    Level reset_prev_ = Level::HiZ;
+    Level wr_prev_ = Level::HiZ;
+    Level cs_prev_ = Level::HiZ;
+    Level rd_prev_ = Level::HiZ;
 };
 
 } // namespace bench

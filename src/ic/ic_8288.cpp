@@ -37,10 +37,12 @@ void IC_8288::install(Socket& socket) {
     spdlog::debug("[8288] installed into socket {}", socket.ref());
 }
 
-void IC_8288::on_signal_change(Signal& signal, Level old_level, Level new_level) {
-    // Only act on CLK rising edge.
-    if (&signal == pin_clk_ && old_level != Level::High && new_level == Level::High) {
-        on_clk_rising();
+void IC_8288::on_signal_change() {
+    if (pin_clk_) {
+        Level cur = pin_clk_->level();
+        if (cur == Level::High && clk_prev_ != Level::High)
+            on_clk_rising();
+        clk_prev_ = cur;
     }
 }
 

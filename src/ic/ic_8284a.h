@@ -1,7 +1,6 @@
 #pragma once
 #include "core/component.h"
 #include "board/socket.h"
-#include <atomic>
 
 namespace bench {
 
@@ -31,8 +30,8 @@ namespace bench {
 //
 // Thread model:
 //   The IC's thread IS the oscillator. When VCC goes High, it enters a
-//   spin loop toggling OSC/CLK/PCLK. drain_mailbox() is called each tick
-//   to process RDY and RES input changes. When VCC drops, it stops.
+//   spin loop toggling OSC/CLK/PCLK. RDY/RES pins are polled directly
+//   each tick. When VCC drops, it stops.
 class IC_8284A : public Component {
 public:
     IC_8284A();
@@ -43,7 +42,6 @@ public:
 
 protected:
     void run(std::stop_token stop) override;
-    void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
 
 private:
     // Output pins (we drive these)
@@ -58,11 +56,6 @@ private:
     Signal* pin_rdy1_  = nullptr;   // Pin  4: RDY1
     Signal* pin_aen1_  = nullptr;   // Pin  3: ~AEN1
     Signal* pin_vcc_   = nullptr;   // Pin 18: VCC
-
-    // Internal state
-    std::atomic<bool> res_input_{false};     // latched RES state
-    std::atomic<bool> rdy1_input_{true};     // latched RDY1 state
-    std::atomic<bool> aen1_input_{false};    // latched ~AEN1 state (active low)
 };
 
 } // namespace bench
