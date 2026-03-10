@@ -143,16 +143,18 @@ struct BusGlue {
             break;
 
         case TState::T4:
-            if (is_read_cycle()) {
-                release_ad();
-            }
             // Per 8288: status goes active in T4 of prev cycle to start next.
             // Overlap T4/T1 so we don't burn an extra tick.
             if (status != 7) {
+                // T4/T1 overlap: CPU already drove next address on AD lines.
+                // Do NOT release_ad() -- it would clobber the new address.
                 t_state = TState::T1;
                 cycle_type = status;
                 spdlog::debug("[BusGlue]   -> T1 NEW CYCLE (overlapped T4) type={}", cycle_type);
             } else {
+                if (is_read_cycle()) {
+                    release_ad();
+                }
                 t_state = TState::IDLE;
                 spdlog::debug("[BusGlue]   -> IDLE");
             }
