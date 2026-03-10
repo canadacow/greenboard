@@ -223,11 +223,11 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     if (stop_.stop_requested()) return 0;
     spdlog::debug("[8088] bus_read_byte(0x{:05X}) -- drive status MEMR", address & 0xFFFFF);
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
+    drive_address(address & 0xFFFFF);
     clk_rose_ = false; clk_fell_ = false;  // discard stale edges
     spdlog::debug("[8088]   wait T1 rise...");
     wait_clk_rising();
-    spdlog::debug("[8088]   T1 rise -- drive address 0x{:05X}", address & 0xFFFFF);
-    drive_address(address & 0xFFFFF);
+    spdlog::debug("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
     spdlog::debug("[8088]   wait T1 fall (ALE)...");
     wait_clk_falling();
     spdlog::debug("[8088]   T1 fall -- release AD");
@@ -260,11 +260,11 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     if (stop_.stop_requested()) return;
     spdlog::debug("[8088] bus_write_byte(0x{:05X}, 0x{:02X}) -- drive status MEMW", address & 0xFFFFF, value);
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
+    drive_address(address & 0xFFFFF);
     clk_rose_ = false; clk_fell_ = false;  // discard stale edges
     spdlog::debug("[8088]   wait T1 rise...");
     wait_clk_rising();
-    spdlog::debug("[8088]   T1 rise -- drive address 0x{:05X}", address & 0xFFFFF);
-    drive_address(address & 0xFFFFF);
+    spdlog::debug("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
     spdlog::debug("[8088]   wait T1 fall (ALE)...");
     wait_clk_falling();
     spdlog::debug("[8088]   T1 fall -- drive write data 0x{:02X}", value);
@@ -306,9 +306,9 @@ void IC_8088::bus_write_word(uint32_t address, uint16_t value) {
 uint8_t IC_8088::io_read_byte(uint16_t port) {
     if (stop_.stop_requested()) return 0;
     drive_status((BUS_IOR >> 2) & 1, (BUS_IOR >> 1) & 1, BUS_IOR & 1);
+    drive_address(port);
     clk_rose_ = false; clk_fell_ = false;
     wait_clk_rising();
-    drive_address(port);
     wait_clk_falling();
     release_data();
     wait_clk_rising(); wait_clk_falling();
@@ -327,9 +327,9 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
 void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     if (stop_.stop_requested()) return;
     drive_status((BUS_IOW >> 2) & 1, (BUS_IOW >> 1) & 1, BUS_IOW & 1);
+    drive_address(port);
     clk_rose_ = false; clk_fell_ = false;
     wait_clk_rising();
-    drive_address(port);
     wait_clk_falling();
     drive_data(value);
     wait_clk_rising(); wait_clk_falling();
