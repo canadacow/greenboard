@@ -180,6 +180,10 @@ public:
     // =====================================================================
     Signal reset_drv{"RESET_DRV"}; // Active reset (active high, derived from 8284 RESET)
 
+    // Owns dynamically created Signal objects (for nets not declared as members).
+    // MUST be declared before Sockets so it outlives IC threads on destruction.
+    std::vector<std::unique_ptr<Signal>> dynamic_signals_;
+
     // =====================================================================
     // IC SOCKETS  (sourced from BRD: 64_256KB_SYSTEM_BOARD_rev1_2a)
     // =====================================================================
@@ -563,9 +567,6 @@ private:
     // Net name -> Signal* lookup. Includes all named signals on the board
     // plus dynamically created signals for anonymous/internal nets.
     std::unordered_map<std::string, Signal*> net_map_;
-
-    // Owns dynamically created Signal objects (for nets not declared as members).
-    std::vector<std::unique_ptr<Signal>> dynamic_signals_;
 
     // Component registry: ref -> typed pointers for BRD wiring.
     std::unordered_map<std::string, Socket*> sockets_;

@@ -177,8 +177,9 @@ int main() {
 
     spdlog::info("PSU POWER_GOOD: {}", mb.psu.power_good.level() == bench::Level::High ? "YES" : "NO");
 
-    // Power off. IC threads join via jthread destructor when
-    // Sockets destruct (before Signals, per declaration order).
+    // Power off. VCC drop causes IC run() loops to exit.
+    // Threads join via jthread destructor when Sockets destruct
+    // (Signals outlive Sockets per declaration order in Motherboard).
     mb.power_off();
 
     spdlog::info("Done.");

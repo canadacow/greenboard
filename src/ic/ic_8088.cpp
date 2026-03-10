@@ -72,30 +72,21 @@ void IC_8088::install(Socket& socket) {
     pin_lock_  = socket.pin_signal(29);
     pin_rqgt0_ = socket.pin_signal(30);
 
-    if (pin_clk_)   pin_clk_->connect(this);
+    // CLK is polled directly (active IC), not through mailbox.
     if (pin_reset_) pin_reset_->connect(this);
-    if (pin_intr_)  pin_intr_->connect(this);
     if (pin_nmi_)   pin_nmi_->connect(this);
     if (pin_vcc_)   pin_vcc_->connect(this);
 
     spdlog::debug("[8088] installed into socket {}", socket.ref());
 }
 
-void IC_8088::on_signal_change(Signal& signal, Level old_level, Level new_level) {
-    if (&signal == pin_clk_) {
-        clk_level_ = (new_level == Level::High);
-        clk_sem_.release();
-        return;
-    }
-    if (&signal == pin_nmi_ && new_level == Level::High && old_level != Level::High)
+void IC_8088::on_signal_change(Signal& signal, Level /*old_level*/, Level new_level) {
+    if (&signal == pin_nmi_ && new_level == Level::High)
         nmi_pending_ = true;
 }
 
 void IC_8088::run(std::stop_token stop) {
     stop_ = stop;
-
-    // Register stop callback to release clk_sem_ so wait_clk_* unblocks.
-    std::stop_callback clk_stop(stop, [this]() { clk_sem_.release(); });
 
     while (!stop.stop_requested()) {
         wait_mailbox(stop);
@@ -104,27 +95,31 @@ void IC_8088::run(std::stop_token stop) {
     }
     spdlog::info("[8088] VCC detected, waiting for RESET");
 
-    while (!stop.stop_requested()) {
-        wait_mailbox(stop);
-        if (stop.stop_requested()) return;
-        if (pin_reset_ && pin_reset_->level() == Level::High) break;
-    }
+    // Sample RESET on CLK edges, like the real chip.
+    // Stay in reset while RESET is High. Start executing when it goes Low.
+    // If we missed the pulse entirely (RESET already Low), proceed immediately.
     cpu_reset();
-    spdlog::info("[8088] RESET -- CS:IP = F000:0100");
 
-    while (!stop.stop_requested()) {
-        wait_mailbox(stop);
-        if (stop.stop_requested()) return;
-        if (pin_reset_ && pin_reset_->level() != Level::High) break;
+    if (pin_reset_ && pin_reset_->level() == Level::High) {
+        // RESET is currently asserted -- wait for it to deassert.
+        spdlog::info("[8088] RESET asserted -- CS:IP = F000:0100");
+        while (!stop.stop_requested()) {
+            wait_mailbox(stop);
+            if (stop.stop_requested()) return;
+            if (pin_reset_->level() != Level::High) break;
+        }
+    } else {
+        // RESET pulse already completed (or never happened).
+        spdlog::info("[8088] RESET complete -- CS:IP = F000:0100");
     }
-    spdlog::info("[8088] RESET released, loading BIOS tables");
-    load_bios_tables();
-    spdlog::info("[8088] BIOS tables loaded, starting execution");
+
+    spdlog::info("[8088] starting execution");
 
     drive_status_passive();
 
     while (!stop.stop_requested()) {
         if (pin_vcc_ && pin_vcc_->level() != Level::High) break;
+        drain_mailbox();  // process NMI, etc.
         execute();
     }
 
@@ -135,7 +130,6 @@ void IC_8088::run(std::stop_token stop) {
     if (pin_lock_) pin_lock_->release();
     if (pin_qs0_) pin_qs0_->release();
     if (pin_qs1_) pin_qs1_->release();
-    spdlog::info("[8088] powered off");
 }
 
 // ========================================================================
@@ -183,21 +177,27 @@ void IC_8088::drive_status_passive() {
 }
 
 void IC_8088::wait_clk_rising() {
-    while (!clk_level_ && !stop_.stop_requested()) clk_sem_.acquire();
+    Level lv;
+    while ((lv = pin_clk_->level()) != Level::High && lv != Level::HiZ
+           && !stop_.stop_requested()) ;
 }
 
 void IC_8088::wait_clk_falling() {
-    while (clk_level_ && !stop_.stop_requested()) clk_sem_.acquire();
+    Level lv;
+    while ((lv = pin_clk_->level()) != Level::Low && lv != Level::HiZ
+           && !stop_.stop_requested()) ;
 }
 
 uint8_t IC_8088::bus_read_byte(uint32_t address) {
+    if (stop_.stop_requested()) return 0;
     drive_address(address & 0xFFFFF);
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
     wait_clk_rising(); wait_clk_falling();
     release_data();
     wait_clk_rising(); wait_clk_falling();
     wait_clk_rising();
-    while (pin_ready_ && pin_ready_->level() != Level::High) {
+    while (pin_ready_ && pin_ready_->level() != Level::High
+           && !stop_.stop_requested()) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
@@ -208,13 +208,15 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
 }
 
 void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
+    if (stop_.stop_requested()) return;
     drive_address(address & 0xFFFFF);
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
     wait_clk_rising(); wait_clk_falling();
     drive_data(value);
     wait_clk_rising(); wait_clk_falling();
     wait_clk_rising();
-    while (pin_ready_ && pin_ready_->level() != Level::High) {
+    while (pin_ready_ && pin_ready_->level() != Level::High
+           && !stop_.stop_requested()) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
@@ -235,13 +237,15 @@ void IC_8088::bus_write_word(uint32_t address, uint16_t value) {
 }
 
 uint8_t IC_8088::io_read_byte(uint16_t port) {
+    if (stop_.stop_requested()) return 0;
     drive_address(port);
     drive_status((BUS_IOR >> 2) & 1, (BUS_IOR >> 1) & 1, BUS_IOR & 1);
     wait_clk_rising(); wait_clk_falling();
     release_data();
     wait_clk_rising(); wait_clk_falling();
     wait_clk_rising();
-    while (pin_ready_ && pin_ready_->level() != Level::High) {
+    while (pin_ready_ && pin_ready_->level() != Level::High
+           && !stop_.stop_requested()) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
@@ -252,13 +256,15 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
 }
 
 void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
+    if (stop_.stop_requested()) return;
     drive_address(port);
     drive_status((BUS_IOW >> 2) & 1, (BUS_IOW >> 1) & 1, BUS_IOW & 1);
     wait_clk_rising(); wait_clk_falling();
     drive_data(value);
     wait_clk_rising(); wait_clk_falling();
     wait_clk_rising();
-    while (pin_ready_ && pin_ready_->level() != Level::High) {
+    while (pin_ready_ && pin_ready_->level() != Level::High
+           && !stop_.stop_requested()) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
@@ -359,10 +365,10 @@ void IC_8088::decode_rm_reg() {
     uint32_t tab = 4 * !i_mod_;
 
     if (i_mod_ < 3) {
-        int seg_reg = seg_override_en_ ? seg_override_ : bios_table_[tab + 3][i_rm_];
-        int base_reg_idx = bios_table_[tab][i_rm_];
-        int idx_reg_idx = bios_table_[tab + 1][i_rm_];
-        int disp_mult = bios_table_[tab + 2][i_rm_];
+        int seg_reg = seg_override_en_ ? seg_override_ : TABLE[tab + 3][i_rm_];
+        int base_reg_idx = TABLE[tab][i_rm_];
+        int idx_reg_idx = TABLE[tab + 1][i_rm_];
+        int disp_mult = TABLE[tab + 2][i_rm_];
         uint16_t offset = (uint16_t)(regs16()[idx_reg_idx]
                           + disp_mult * (int16_t)i_data1_
                           + regs16()[base_reg_idx]);
@@ -393,17 +399,6 @@ void IC_8088::cpu_reset() {
     nmi_pending_ = false;
 }
 
-void IC_8088::load_bios_tables() {
-    // In 8086tiny, BIOS is at REGS_BASE+0x100 (= 0xF0100).
-    // Table pointers are 16-bit values at REGS_BASE + 2*(0x81+i).
-    // These are outside our register file, so they go through the bus.
-    for (int i = 0; i < 20; i++) {
-        uint16_t table_ptr = bus_read_word(REGS_BASE + 2 * (0x81 + i));
-        for (int j = 0; j < 256; j++)
-            bios_table_[i][j] = bus_read_byte(REGS_BASE + table_ptr + j);
-    }
-}
-
 int IC_8088::set_CF(int new_CF) { return regs8()[FLAG_CF] = !!new_CF; }
 int IC_8088::set_AF(int new_AF) { return regs8()[FLAG_AF] = !!new_AF; }
 int IC_8088::set_OF(int new_OF) { return regs8()[FLAG_OF] = !!new_OF; }
@@ -419,19 +414,19 @@ void IC_8088::set_AF_OF_arith() {
 void IC_8088::make_flags() {
     scratch_uint_ = 0xF002;
     for (int i = 8; i >= 0; --i)
-        scratch_uint_ += regs8()[FLAG_CF + i] << bios_table_[TABLE_FLAGS_BITFIELDS][i];
+        scratch_uint_ += regs8()[FLAG_CF + i] << TABLE[TABLE_FLAGS_BITFIELDS][i];
 }
 
 void IC_8088::set_flags(int new_flags) {
     for (int i = 8; i >= 0; --i)
-        regs8()[FLAG_CF + i] = !!(1 << bios_table_[TABLE_FLAGS_BITFIELDS][i] & new_flags);
+        regs8()[FLAG_CF + i] = !!(1 << TABLE[TABLE_FLAGS_BITFIELDS][i] & new_flags);
 }
 
 void IC_8088::set_opcode(uint8_t opcode) {
-    xlat_opcode_id_ = bios_table_[TABLE_XLAT_OPCODE][raw_opcode_id_ = opcode];
-    extra_ = bios_table_[TABLE_XLAT_SUBFUNCTION][opcode];
-    i_mod_size_ = bios_table_[TABLE_I_MOD_SIZE][opcode];
-    set_flags_type_ = bios_table_[TABLE_STD_FLAGS][opcode];
+    xlat_opcode_id_ = TABLE[TABLE_XLAT_OPCODE][raw_opcode_id_ = opcode];
+    extra_ = TABLE[TABLE_XLAT_SUBFUNCTION][opcode];
+    i_mod_size_ = TABLE[TABLE_I_MOD_SIZE][opcode];
+    set_flags_type_ = TABLE[TABLE_STD_FLAGS][opcode];
 }
 
 void IC_8088::pc_interrupt(uint8_t interrupt_num) {
@@ -498,10 +493,10 @@ void IC_8088::execute() {
     case 0: { // Conditional jump (Jcc)
         scratch_uchar_ = raw_opcode_id_ / 2 & 7;
         reg_ip_ += (int8_t)(i_data0_ & 0xFF) * (i_w_ ^ (
-            regs8()[bios_table_[TABLE_COND_JUMP_DECODE_A][scratch_uchar_]] ||
-            regs8()[bios_table_[TABLE_COND_JUMP_DECODE_B][scratch_uchar_]] ||
-            regs8()[bios_table_[TABLE_COND_JUMP_DECODE_C][scratch_uchar_]] ^
-            regs8()[bios_table_[TABLE_COND_JUMP_DECODE_D][scratch_uchar_]]));
+            regs8()[TABLE[TABLE_COND_JUMP_DECODE_A][scratch_uchar_]] ||
+            regs8()[TABLE[TABLE_COND_JUMP_DECODE_B][scratch_uchar_]] ||
+            regs8()[TABLE[TABLE_COND_JUMP_DECODE_C][scratch_uchar_]] ^
+            regs8()[TABLE[TABLE_COND_JUMP_DECODE_D][scratch_uchar_]]));
         break;
     }
     case 1: { // MOV reg, imm
@@ -1111,14 +1106,14 @@ void IC_8088::execute() {
 
     // Advance IP by computed instruction length
     reg_ip_ += (i_mod_ * (i_mod_ != 3) + 2 * (!i_mod_ && i_rm_ == 6)) * i_mod_size_
-             + bios_table_[TABLE_BASE_INST_SIZE][raw_opcode_id_]
-             + bios_table_[TABLE_I_W_SIZE][raw_opcode_id_] * (i_w_ + 1);
+             + TABLE[TABLE_BASE_INST_SIZE][raw_opcode_id_]
+             + TABLE[TABLE_I_W_SIZE][raw_opcode_id_] * (i_w_ + 1);
 
     // Update SZP flags
     if (set_flags_type_ & FLAGS_UPDATE_SZP) {
         regs8()[FLAG_SF] = sign_of(op_result_);
         regs8()[FLAG_ZF] = !(i_w_ ? (uint16_t)op_result_ : (uint8_t)op_result_);
-        regs8()[FLAG_PF] = bios_table_[TABLE_PARITY_FLAG][(uint8_t)op_result_];
+        regs8()[FLAG_PF] = TABLE[TABLE_PARITY_FLAG][(uint8_t)op_result_];
         if (set_flags_type_ & FLAGS_UPDATE_AO_ARITH) set_AF_OF_arith();
         if (set_flags_type_ & FLAGS_UPDATE_OC_LOGIC) { set_CF(0); set_OF(0); }
     }

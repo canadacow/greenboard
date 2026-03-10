@@ -8,6 +8,8 @@
 
 namespace bench {
 
+class Signal;
+
 // Base class for any IC or active component on the motherboard.
 //
 // Each component runs on its own thread. When a signal it's subscribed
@@ -21,10 +23,9 @@ namespace bench {
 // Active components (e.g. oscillators): override run() with their own loop
 // and call drain_mailbox() periodically to process signal events.
 //
-// Mailbox: pre-allocated lock-free MPSC ring buffer. Multiple producer
-// threads (Signal::drive) push events via atomic fetch_add on the write
-// index. Single consumer thread pops via relaxed read index advance.
-// A binary_semaphore provides the wake signal (no mutex/condvar).
+// The mailbox ring buffer lives in a static pool that outlives all
+// Components. Signals hold Mailbox* so post() is always safe to call,
+// even after the Component is destroyed.
 class Component {
 public:
     explicit Component(std::string name);
@@ -37,9 +38,8 @@ public:
     void power_off();
     bool is_powered() const { return thread_.joinable(); }
 
-    // Called by Signal::drive() to deliver a signal change to this component.
-    // Thread-safe: may be called from any thread (lock-free).
-    void post(const SignalEvent& event);
+    // The mailbox for this component. Signals store this pointer.
+    Mailbox* mailbox() const { return mailbox_; }
 
 protected:
     // Derived classes implement these.
@@ -66,19 +66,7 @@ protected:
 private:
     std::string name_;
     std::jthread thread_;
-
-    // Pre-allocated lock-free MPSC ring buffer.
-    // Producers: atomic fetch_add on tail_ to claim a slot, then write.
-    // Consumer: reads from head_, advances after processing.
-    static constexpr uint32_t kCapacity = 256;  // must be power of 2
-    SignalEvent ring_[kCapacity];
-    alignas(64) std::atomic<uint32_t> tail_{0};   // next write slot (producers)
-    alignas(64) uint32_t head_{0};                 // next read slot (consumer only)
-    alignas(64) std::atomic<uint32_t> committed_{0}; // slots fully written
-
-    // Lazy wake: producer only calls sem_.release() when consumer is sleeping.
-    alignas(64) std::atomic<bool> sleeping_{false};
-    std::binary_semaphore sem_{0};
+    Mailbox* mailbox_;  // from static pool, outlives this Component
 };
 
 } // namespace bench

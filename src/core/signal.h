@@ -1,5 +1,6 @@
 #pragma once
 #include "core/types.h"
+#include "core/mailbox.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -9,14 +10,6 @@
 namespace bench {
 
 class Component;
-class Signal;
-
-// A signal change event delivered to a component's mailbox.
-struct SignalEvent {
-    Signal* signal;
-    Level old_level;
-    Level new_level;
-};
 
 // A single named signal line -- a wire/trace on the motherboard.
 //
@@ -25,8 +18,9 @@ struct SignalEvent {
 // trace, every other IC sees the voltage change instantly.
 //
 // In our model, Signal is a mailbox. drive() updates the level and
-// posts a SignalEvent to every subscribed Component's mailbox.
-// Thread-safe: multiple IC threads may read; typically one drives.
+// posts a SignalEvent to every subscribed Mailbox. The Mailbox memory
+// lives in a static pool, so post() is safe even after the owning
+// Component is destroyed.
 class Signal {
 public:
     explicit Signal(std::string name);
@@ -54,7 +48,8 @@ private:
     std::atomic<Level> level_{Level::HiZ};
     Level pull_ = Level::HiZ;  // default: no pull, floats
 
-    std::vector<Component*> subscribers_;
+    // Subscribers stored as Mailbox* (from static pool, always valid).
+    std::vector<Mailbox*> subscribers_;
     std::mutex sub_mutex_;  // only used by connect/disconnect (setup time)
 };
 

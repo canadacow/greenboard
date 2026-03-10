@@ -12,9 +12,9 @@ void Signal::drive(Level lvl) {
     if (lvl == old) return;
     level_.store(lvl, std::memory_order_release);
 
-    // Subscriber list is immutable after construction -- no lock needed.
-    for (auto* c : subscribers_) {
-        c->post(SignalEvent{this, old, lvl});
+    // Subscriber mailboxes live in a static pool -- always valid memory.
+    for (auto* mb : subscribers_) {
+        mb->post(SignalEvent{this, old, lvl});
     }
 }
 
@@ -33,13 +33,14 @@ void Signal::set_pull(Level pull) {
 
 void Signal::connect(Component* c) {
     std::lock_guard<std::mutex> lock(sub_mutex_);
-    subscribers_.push_back(c);
+    subscribers_.push_back(c->mailbox());
 }
 
 void Signal::disconnect(Component* c) {
     std::lock_guard<std::mutex> lock(sub_mutex_);
+    auto* mb = c->mailbox();
     subscribers_.erase(
-        std::remove(subscribers_.begin(), subscribers_.end(), c),
+        std::remove(subscribers_.begin(), subscribers_.end(), mb),
         subscribers_.end());
 }
 
