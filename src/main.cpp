@@ -6,6 +6,7 @@
 #include "ic/ic_8253.h"
 #include "ic/ic_74s175.h"
 #include "ic/ic_8259a.h"
+#include "ic/ic_8255a.h"
 #include <thread>
 #include <chrono>
 
@@ -68,6 +69,14 @@ int main() {
     pic->power_on();
     mb.u2.insert(std::move(pic));
     spdlog::info("  PIC:     {} [{}] -- {}", mb.u2.ref(), mb.u2.label(), mb.u2.occupied() ? "occupied" : "empty");
+
+    // --- Insert 8255A PPI into socket U36 ---
+    spdlog::info("--- Inserting 8255A PPI ---");
+    auto ppi = std::make_unique<bench::IC_8255A>();
+    ppi->install(mb.u36);
+    ppi->power_on();
+    mb.u36.insert(std::move(ppi));
+    spdlog::info("  PPI:     {} [{}] -- {}", mb.u36.ref(), mb.u36.label(), mb.u36.occupied() ? "occupied" : "empty");
 
     // --- Insert 8253 PIT into socket U34 ---
     spdlog::info("--- Inserting 8253 PIT ---");
@@ -157,6 +166,22 @@ int main() {
     if (pic_cs_sig)   spdlog::info("  ~CS   (U2.1):   {} -- {}", pic_cs_sig->name(), level_str(pic_cs_sig));
     if (pic_ir0_sig)  spdlog::info("  IR0   (U2.18):  {} -- {}", pic_ir0_sig->name(), level_str(pic_ir0_sig));
     if (pic_ir1_sig)  spdlog::info("  IR1   (U2.19):  {} -- {}", pic_ir1_sig->name(), level_str(pic_ir1_sig));
+
+    // --- 8255A PPI signal check ---
+    spdlog::info("--- 8255A PPI signals ---");
+    auto ppi_cs_sig  = dmm.probe("U36", 6);
+    auto ppi_pb0_sig = dmm.probe("U36", 18);  // speaker gate
+    auto ppi_pb1_sig = dmm.probe("U36", 19);  // speaker data
+    auto ppi_pb7_sig = dmm.probe("U36", 25);  // keyboard clear
+    auto ppi_pc5_sig = dmm.probe("U36", 12);  // T/C2 out
+    auto ppi_pc7_sig = dmm.probe("U36", 10);  // parity check
+
+    if (ppi_cs_sig)  spdlog::info("  ~CS   (U36.6):  {} -- {}", ppi_cs_sig->name(), level_str(ppi_cs_sig));
+    if (ppi_pb0_sig) spdlog::info("  PB0   (U36.18): {} -- {}", ppi_pb0_sig->name(), level_str(ppi_pb0_sig));
+    if (ppi_pb1_sig) spdlog::info("  PB1   (U36.19): {} -- {}", ppi_pb1_sig->name(), level_str(ppi_pb1_sig));
+    if (ppi_pb7_sig) spdlog::info("  PB7   (U36.25): {} -- {}", ppi_pb7_sig->name(), level_str(ppi_pb7_sig));
+    if (ppi_pc5_sig) spdlog::info("  PC5   (U36.12): {} -- {}", ppi_pc5_sig->name(), level_str(ppi_pc5_sig));
+    if (ppi_pc7_sig) spdlog::info("  PC7   (U36.10): {} -- {}", ppi_pc7_sig->name(), level_str(ppi_pc7_sig));
 
     spdlog::info("PSU POWER_GOOD: {}", mb.psu.power_good.level() == bench::Level::High ? "YES" : "NO");
 
