@@ -2,6 +2,7 @@
 #include "core/types.h"
 #include "core/signal.h"
 #include <string>
+#include <vector>
 #include <thread>
 #include <atomic>
 #include <semaphore>
@@ -58,6 +59,9 @@ private:
     std::jthread thread_;
     Mailbox* mailbox_;  // from static pool, outlives this Component
     bool pending_ack_ = false;  // deferred ack from previous wait_mailbox
+    std::vector<Signal*> connected_signals_;  // for auto-disconnect on destroy
+
+    friend class Signal;  // Signal::connect registers here
 };
 
 } // namespace bench

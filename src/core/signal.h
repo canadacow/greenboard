@@ -40,6 +40,9 @@ public:
     void set_pull(Level pull);
     Level pull() const { return pull_; }
 
+    // Reset level to HiZ (power-off). Wiring (subscribers) stays intact.
+    void reset();
+
     // Subscribe/unsubscribe a component to signal change events.
     void connect(Component* c);
     void disconnect(Component* c);
@@ -78,9 +81,10 @@ public:
     Signal& operator[](int i) { return *lines_[i]; }
     const Signal& operator[](int i) const { return *lines_[i]; }
 
-    // Convenience: drive/release all lines from an integer value.
+    // Convenience: drive/release/reset all lines.
     void drive(uint32_t value);
     void release();
+    void reset();
     uint32_t read() const;
 
     // Connect/disconnect a component to all lines in this bus.

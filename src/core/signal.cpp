@@ -26,6 +26,12 @@ void Signal::release() {
     drive(pull_);
 }
 
+void Signal::reset() {
+    level_.store(Level::HiZ, std::memory_order_release);
+    prev_level_ = Level::HiZ;
+    // Don't touch subscribers or pull -- wiring stays.
+}
+
 void Signal::set_pull(Level pull) {
     pull_ = pull;
     // If currently floating, apply the pull immediately.
@@ -37,6 +43,7 @@ void Signal::set_pull(Level pull) {
 void Signal::connect(Component* c) {
     std::lock_guard<std::mutex> lock(sub_mutex_);
     subscribers_.push_back(c->mailbox());
+    c->connected_signals_.push_back(this);
 }
 
 void Signal::disconnect(Component* c) {
@@ -65,6 +72,12 @@ void Bus::drive(uint32_t value) {
 void Bus::release() {
     for (auto& line : lines_) {
         line->release();
+    }
+}
+
+void Bus::reset() {
+    for (auto& line : lines_) {
+        line->reset();
     }
 }
 

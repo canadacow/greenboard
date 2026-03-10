@@ -470,6 +470,10 @@ void IC_8088::cpu_reset() {
     rep_override_en_ = 0;
     trap_flag_ = 0;
     nmi_pending_ = false;
+    clk_rose_ = false;
+    clk_fell_ = false;
+    prefetch_len_ = 0;
+    prefetch_base_ = 0;
 }
 
 int IC_8088::set_CF(int new_CF) { return regs8()[FLAG_CF] = !!new_CF; }

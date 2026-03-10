@@ -19,7 +19,12 @@ void Component::power_off() {
     thread_.request_stop();
     mailbox_->wake();  // wake consumer if blocking
     thread_.join();
-    spdlog::debug("[{}] powered off", name_);
+    // Flush any un-acked pending from the deferred ack pattern.
+    if (pending_ack_) {
+        Signal::ack();
+        pending_ack_ = false;
+    }
+    spdlog::trace("[{}] powered off", name_);
 }
 
 // Default run loop for reactive components: block on mailbox, check pins.

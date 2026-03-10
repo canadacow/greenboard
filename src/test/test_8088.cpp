@@ -1,4 +1,4 @@
-// Minimal 8088 test bench.
+// 8088 CPU test bench -- data-driven instruction tests.
 //
 // The CPU is real -- full pin-level, CLK-driven, threaded.
 // Everything else is combinational: BusGlue emulates the 8288 + address
@@ -6,6 +6,9 @@
 // synchronously inside TestClock's drive loop, BEFORE the CLK edge
 // reaches the CPU's mailbox. This guarantees BusGlue sees the bus state
 // and drives data before the CPU reads it.
+//
+// Each test is a flat binary assembled by NASM, loaded at F000:0123
+// (physical 0xF0123). DS=SS=0 after reset. Results checked at 0x0200+.
 
 #include "core/signal.h"
 #include "core/component.h"
@@ -14,6 +17,9 @@
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <cstring>
+#include <fstream>
+#include <vector>
+#include <string>
 #include <thread>
 #include <chrono>
 
@@ -77,14 +83,6 @@ struct BusGlue {
     bool is_read_cycle() { return cycle_type == 4 || cycle_type == 5; }
     bool is_write_cycle() { return cycle_type == 2 || cycle_type == 6; }
 
-    // Per 8088 datasheet:
-    //   Status active at T4(prev)/idle, stays active T1-T2, passive at T3.
-    //   Address on AD0-7 during T1 (after CLK rise).
-    //   ALE latches address at T1 CLK fall.
-    //   Data on AD0-7 during T2-T3 (reads: memory drives; writes: CPU drives).
-    //   CPU samples read data at T3 fall.
-    //   CPU drives write data starting at T1 fall.
-
     const char* tstate_name() {
         switch (t_state) {
         case TState::IDLE: return "IDLE";
@@ -96,7 +94,6 @@ struct BusGlue {
         return "?";
     }
 
-    // on_clk_rising: runs BEFORE CLK goes high.
     void on_clk_rising() {
         uint8_t status = decode_status();
         spdlog::trace("[BusGlue] CLK_RISE  state={} status={} bus_addr=0x{:05X} ad=0x{:02X}",
@@ -143,11 +140,7 @@ struct BusGlue {
             break;
 
         case TState::T4:
-            // Per 8288: status goes active in T4 of prev cycle to start next.
-            // Overlap T4/T1 so we don't burn an extra tick.
             if (status != 7) {
-                // T4/T1 overlap: CPU already drove next address on AD lines.
-                // Do NOT release_ad() -- it would clobber the new address.
                 t_state = TState::T1;
                 cycle_type = status;
                 spdlog::trace("[BusGlue]   -> T1 NEW CYCLE (overlapped T4) type={}", cycle_type);
@@ -162,7 +155,6 @@ struct BusGlue {
         }
     }
 
-    // on_clk_falling: runs BEFORE CLK goes low.
     void on_clk_falling() {
         spdlog::trace("[BusGlue] CLK_FALL  state={} bus_addr=0x{:05X} ad=0x{:02X}",
             tstate_name(), read_address(), read_ad());
@@ -170,6 +162,12 @@ struct BusGlue {
             cycle_addr = read_address();
             spdlog::trace("[BusGlue]   ALE latch addr=0x{:05X}", cycle_addr);
         }
+    }
+
+    void reset() {
+        t_state = TState::IDLE;
+        cycle_type = 7;
+        cycle_addr = 0;
     }
 };
 
@@ -208,11 +206,82 @@ private:
     BusGlue& bus_;
 };
 
+// =========================================================================
+// Test definition: binary file + expected memory values.
+// =========================================================================
+struct Expect { uint32_t addr; uint16_t value; const char* label; };
+
+struct TestCase {
+    const char* name;
+    const char* bin_file;
+    std::vector<Expect> expects;
+};
+
+static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        spdlog::error("  cannot open {}", path);
+        return false;
+    }
+    f.seekg(0, std::ios::end);
+    auto size = f.tellg();
+    f.seekg(0);
+    if (load_addr + size > (1 << 20)) {
+        spdlog::error("  binary too large: {} bytes at 0x{:05X}", (int)size, load_addr);
+        return false;
+    }
+    f.read(reinterpret_cast<char*>(mem + load_addr), size);
+    spdlog::debug("  loaded {} bytes at 0x{:05X}", (int)size, load_addr);
+    return true;
+}
+
 int main() {
     spdlog::set_level(spdlog::level::debug);
     spdlog::info("=== 8088 Test Bench ===");
+    spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
-    // Signals
+    // Test table
+    std::vector<TestCase> tests = {
+        {"MOV/XCHG", "test_mov.bin", {
+            {0x0200, 0x1234, "MOV imm16"},
+            {0x0202, 0x5678, "MOV reg-reg"},
+            {0x0204, 0x00AB, "MOV byte"},
+            {0x0206, 0xDEF0, "XCHG ax"},
+            {0x0208, 0x9ABC, "XCHG bx"},
+        }},
+        {"ALU", "test_alu.bin", {
+            {0x0200, 0x0042, "ADD"},
+            {0x0202, 0x0010, "SUB"},
+            {0x0204, 0xFFBE, "NEG"},
+            {0x0206, 0x1234, "AND"},
+            {0x0208, 0xFFFF, "OR"},
+            {0x020A, 0xEDCB, "XOR"},
+            {0x020C, 0xEDCA, "NOT"},
+            {0x020E, 0x2468, "SHL"},
+            {0x0210, 0x048D, "SHR"},
+            {0x0212, 0x0001, "CMP/JE"},
+            {0x0214, 0x008A, "ADC"},
+            {0x0216, 0x00FE, "SBB"},
+        }},
+        {"CALL/RET", "test_call_ret.bin", {
+            {0x0200, 0x0007, "near CALL/RET"},
+            {0x0202, 0x1234, "PUSH/POP"},
+            {0x0204, 0x000A, "nested CALL"},
+            {0x0206, 0xBEEF, "PUSH/POP cross"},
+        }},
+        {"Jumps/Loops", "test_jumps.bin", {
+            {0x0200, 0x0001, "JE"},
+            {0x0202, 0x0001, "JNE"},
+            {0x0204, 0x0001, "JL"},
+            {0x0206, 0x0001, "JG"},
+            {0x0208, 0x0001, "JB"},
+            {0x020A, 0x0001, "JA"},
+            {0x020C, 0x0005, "LOOP count"},
+            {0x020E, 0x0037, "LOOP sum"},
+        }},
+    };
+
+    // --- Wiring (permanent) ---
     Signal vcc{"+5V"}, gnd{"GND"}, clk{"CLK"}, reset{"RESET"};
     Signal ready{"READY"}, nmi{"NMI"}, intr{"INTR"}, test_pin{"~TEST"};
     Signal cpu_lock{"~LOCK"}, rqgt0{"~RQ/GT0"};
@@ -220,7 +289,6 @@ int main() {
     Bus ad{"AD", 8};
     Bus a_upper{"A", 12};
 
-    // Wire CPU socket
     Socket cpu_socket{"U3", "8088", 40};
     cpu_socket.wire(1, gnd); cpu_socket.wire(20, gnd);
     cpu_socket.wire(31, vcc); cpu_socket.wire(40, vcc);
@@ -234,13 +302,8 @@ int main() {
     cpu_socket.wire(24, qs1); cpu_socket.wire(25, qs0);
     cpu_socket.wire(26, s0); cpu_socket.wire(27, s1); cpu_socket.wire(28, s2);
 
-    ready.drive(Level::High);
-    s0.drive(Level::High);  // passive state (all High = status 7)
-    s1.drive(Level::High);
-    s2.drive(Level::High);
     auto* cpu = cpu_socket.emplace<IC_8088>(0xF000, 0x0123);
 
-    // BusGlue (not a Component -- just a struct)
     Signal* ad_ptrs[8];
     Signal* a_upper_ptrs[12];
     for (int i = 0; i < 8; ++i)  ad_ptrs[i] = &ad[i];
@@ -253,39 +316,55 @@ int main() {
     bus.s0 = &s0;
     bus.s1 = &s1;
     bus.s2 = &s2;
-    std::memset(bus.mem, 0xF4, sizeof(bus.mem));
 
-    // Load test program at F000:0123 = 0xF0123
-    // MOV AX, 0x1234       (B8 34 12)
-    // MOV [0x0200], AX     (A3 00 02)   -- DS=0 after reset
-    // HLT                  (F4)
-    uint8_t code[] = { 0xB8, 0x34, 0x12, 0xA3, 0x00, 0x02, 0xF4 };
-    std::memcpy(bus.mem + 0xF0123, code, sizeof(code));
+    TestClock clk_ic(clk, bus);
 
-    // Clock (calls BusGlue synchronously)
-    auto clk_ic = std::make_unique<TestClock>(clk, bus);
+    // --- Run tests (power cycle between each) ---
+    int passed = 0, failed = 0;
 
-    // Power on
-    vcc.drive(Level::High);
-    clk_ic->power_on();
-    cpu->power_on();
+    for (auto& tc : tests) {
+        spdlog::info("--- {} ---", tc.name);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        // Reset memory and BusGlue state
+        std::memset(bus.mem, 0xF4, sizeof(bus.mem));
+        bus.reset();
 
-    // Power off
-    vcc.drive(Level::HiZ);
-    cpu->power_off();
-    clk_ic->power_off();
+        // Load binary
+        std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;
+        if (!load_bin(path, bus.mem, 0xF0123)) { ++failed; continue; }
 
-    // Check
-    uint16_t result = bus.mem[0x200] | (bus.mem[0x201] << 8);
-    spdlog::info("[0x0200] = 0x{:04X} (expected 0x1234)", result);
+        // Power on
+        ready.drive(Level::High);
+        s0.drive(Level::High);
+        s1.drive(Level::High);
+        s2.drive(Level::High);
+        vcc.drive(Level::High);
+        clk_ic.power_on();
+        cpu->power_on();
 
-    if (result == 0x1234) {
-        spdlog::info("PASS");
-        return 0;
-    } else {
-        spdlog::error("FAIL");
-        return 1;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // Power off
+        vcc.drive(Level::HiZ);
+        cpu->power_off();
+        clk_ic.power_off();
+
+        // Check results
+        bool pass = true;
+        for (auto& e : tc.expects) {
+            uint16_t actual = bus.mem[e.addr] | (bus.mem[e.addr + 1] << 8);
+            if (actual != e.value) {
+                spdlog::error("  FAIL {}: [0x{:04X}] = 0x{:04X} (expected 0x{:04X})",
+                    e.label, e.addr, actual, e.value);
+                pass = false;
+            } else {
+                spdlog::info("  ok   {}: [0x{:04X}] = 0x{:04X}",
+                    e.label, e.addr, actual);
+            }
+        }
+        if (pass) ++passed; else ++failed;
     }
+
+    spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
+    return failed > 0 ? 1 : 0;
 }
