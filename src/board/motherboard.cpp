@@ -49,6 +49,13 @@ void Motherboard::power_on() {
     sw1.apply();
     sw2.apply();
     for (auto& j : jumpers) j.apply();
+
+    // Power on all inserted ICs.
+    for (auto& [ref, sock] : sockets_) {
+        if (sock->occupied())
+            sock->occupant()->power_on();
+    }
+
     spdlog::info("5150 powered on");
 }
 

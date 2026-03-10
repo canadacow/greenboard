@@ -38,6 +38,16 @@ public:
     bool occupied() const { return occupant_ != nullptr; }
     Component* occupant() const { return occupant_.get(); }
 
+    // Create, install, and insert an IC in one call.
+    template<typename IC, typename... Args>
+    IC* emplace(Args&&... args) {
+        auto ic = std::make_unique<IC>(std::forward<Args>(args)...);
+        IC* ptr = ic.get();
+        ptr->install(*this);
+        insert(std::move(ic));
+        return ptr;
+    }
+
 private:
     std::string ref_;       // e.g. "U3"
     std::string label_;     // e.g. "8088"

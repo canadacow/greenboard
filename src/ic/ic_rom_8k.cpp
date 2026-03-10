@@ -4,18 +4,18 @@
 
 namespace bench {
 
-IC_ROM_8K::IC_ROM_8K(const std::string& label) : Component(label) {}
-
-bool IC_ROM_8K::load(const std::string& file_path) {
-    std::ifstream f(file_path, std::ios::binary);
-    if (!f) {
-        spdlog::error("[{}] failed to open ROM file: {}", name(), file_path);
-        return false;
+IC_ROM_8K::IC_ROM_8K(const std::string& label, const std::string& file_path)
+    : Component(label)
+{
+    if (!file_path.empty()) {
+        std::ifstream f(file_path, std::ios::binary);
+        if (!f) {
+            spdlog::error("[{}] failed to open ROM file: {}", name(), file_path);
+            return;
+        }
+        f.read(reinterpret_cast<char*>(rom_.data()), rom_.size());
+        spdlog::info("[{}] loaded {} bytes from {}", name(), f.gcount(), file_path);
     }
-    f.read(reinterpret_cast<char*>(rom_.data()), rom_.size());
-    auto bytes_read = f.gcount();
-    spdlog::info("[{}] loaded {} bytes from {}", name(), bytes_read, file_path);
-    return bytes_read > 0;
 }
 
 void IC_ROM_8K::install(Socket& socket) {

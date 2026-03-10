@@ -178,6 +178,7 @@ private:
     // CLK tracking for bus cycle timing
     volatile bool clk_level_ = false;
     std::binary_semaphore clk_sem_{0};
+    std::stop_token stop_;  // cached for CLK wait interruptibility
 };
 
 } // namespace bench

@@ -92,6 +92,11 @@ void IC_8088::on_signal_change(Signal& signal, Level old_level, Level new_level)
 }
 
 void IC_8088::run(std::stop_token stop) {
+    stop_ = stop;
+
+    // Register stop callback to release clk_sem_ so wait_clk_* unblocks.
+    std::stop_callback clk_stop(stop, [this]() { clk_sem_.release(); });
+
     while (!stop.stop_requested()) {
         wait_mailbox(stop);
         if (stop.stop_requested()) return;
@@ -178,11 +183,11 @@ void IC_8088::drive_status_passive() {
 }
 
 void IC_8088::wait_clk_rising() {
-    while (!clk_level_) clk_sem_.acquire();
+    while (!clk_level_ && !stop_.stop_requested()) clk_sem_.acquire();
 }
 
 void IC_8088::wait_clk_falling() {
-    while (clk_level_) clk_sem_.acquire();
+    while (clk_level_ && !stop_.stop_requested()) clk_sem_.acquire();
 }
 
 uint8_t IC_8088::bus_read_byte(uint32_t address) {

@@ -30,9 +30,9 @@ namespace bench {
 // Threading: Reactive IC. Default run() -- blocks on mailbox.
 class IC_ROM_8K : public Component {
 public:
-    explicit IC_ROM_8K(const std::string& label = "ROM");
+    explicit IC_ROM_8K(const std::string& label = "ROM",
+                       const std::string& file_path = "");
 
-    bool load(const std::string& file_path);
     void install(Socket& socket);
 
 protected:
