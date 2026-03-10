@@ -1,0 +1,9 @@
+{
+  "name": "bench",
+  "version-string": "0.1.0",
+  "description": "IBM PC 5150 motherboard emulator with modeled interconnects",
+  "dependencies": [
+    "spdlog",
+    "fmt"
+  ]
+}

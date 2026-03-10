@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake --preset default)",
+      "Bash(.venv/Scripts/python.exe -c \":*)",
+      "Bash(.venv/Scripts/python.exe scripts/parse_brd.py)",
+      "Bash(.venv/Scripts/python.exe scripts/compare_brd_vs_code.py)",
+      "Bash(cmake --build build --config Debug)",
+      "Bash(.venv/Scripts/python.exe scripts/verify_components.py)"
+    ]
+  }
+}
