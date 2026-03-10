@@ -16,7 +16,12 @@ add_executable(bench
     src/board/passive.cpp
     src/board/brd_parser.cpp
     src/board/motherboard.cpp
+    src/tools/multimeter.cpp
+    src/ic/ic_8284a.cpp
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt)
+
+# Set working directory to project root so relative paths (e.g. assets/) resolve correctly.
+set_target_properties(bench PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

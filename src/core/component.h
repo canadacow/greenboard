@@ -17,6 +17,10 @@ namespace bench {
 //
 // This mirrors real hardware: ICs react concurrently to signal changes
 // on their input pins. The wires (Signals) are the communication mechanism.
+//
+// Reactive components (default): block on the mailbox, wake on signal changes.
+// Active components (e.g. oscillators): override run() with their own loop
+// and call drain_mailbox() periodically to process signal events.
 class Component {
 public:
     explicit Component(std::string name);
@@ -25,7 +29,6 @@ public:
     const std::string& name() const { return name_; }
 
     // Power control -- starts/stops the component's thread.
-    // jthread handles auto-join on destruction and stop_token for cancellation.
     void power_on();
     void power_off();
     bool is_powered() const { return thread_.joinable(); }
@@ -40,14 +43,28 @@ protected:
     virtual void on_power_on() {}
     virtual void on_power_off() {}
 
+    // Override for active components (oscillators, etc.) that need their own loop.
+    // Default implementation blocks on the mailbox waiting for signal events.
+    virtual void run(std::stop_token stop);
+
+    // Non-blocking: process all pending mailbox events right now.
+    // Active components call this inside their spin loop to handle
+    // input signal changes (RDY, RES, etc.) without blocking.
+    void drain_mailbox();
+
+    // Block until at least one event arrives, then drain all pending.
+    // Used by reactive components or for waiting on VCC.
+    void wait_mailbox(std::stop_token& stop);
+
+    // Check if stop has been requested on this component's thread.
+    bool stop_requested() const;
+
 private:
     std::string name_;
     std::jthread thread_;
     std::queue<SignalEvent> mailbox_;
     std::mutex mtx_;
     std::condition_variable_any cv_;
-
-    void run(std::stop_token stop);
 };
 
 } // namespace bench
