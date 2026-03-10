@@ -167,6 +167,8 @@ void Motherboard::build_net_map() {
     net_map_["IRQ5"] = &irq5;
     net_map_["IRQ6"] = &irq6;
     net_map_["IRQ7"] = &irq7;
+    net_map_["N-000178"] = &intr;       // U2.17 (INT) -> U3.18 (INTR)
+    net_map_["N-000220"] = &pic_int;    // U2.16 (~SP/~EN) -- master mode signal
     net_map_["I/O_CH_RDY"]  = &rdy_wait;
     net_map_["~I/O_CH_CK"]  = &parity_chk;
     net_map_["I/O_CH_CK"]   = &parity_chk;

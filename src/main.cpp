@@ -5,6 +5,7 @@
 #include "ic/ic_8288.h"
 #include "ic/ic_8253.h"
 #include "ic/ic_74s175.h"
+#include "ic/ic_8259a.h"
 #include <thread>
 #include <chrono>
 
@@ -59,6 +60,14 @@ int main() {
     u26_ic->install(mb.u26);
     u26_ic->power_on();
     mb.u26.insert(std::move(u26_ic));
+
+    // --- Insert 8259A PIC into socket U2 ---
+    spdlog::info("--- Inserting 8259A PIC ---");
+    auto pic = std::make_unique<bench::IC_8259A>();
+    pic->install(mb.u2);
+    pic->power_on();
+    mb.u2.insert(std::move(pic));
+    spdlog::info("  PIC:     {} [{}] -- {}", mb.u2.ref(), mb.u2.label(), mb.u2.occupied() ? "occupied" : "empty");
 
     // --- Insert 8253 PIT into socket U34 ---
     spdlog::info("--- Inserting 8253 PIT ---");
@@ -134,6 +143,20 @@ int main() {
     if (pit_clk0)  spdlog::info("  CLK0  (U34.9):  {} -- {}", pit_clk0->name(), level_str(pit_clk0));
     if (pit_gate0) spdlog::info("  GATE0 (U34.11): {} -- {}", pit_gate0->name(), level_str(pit_gate0));
     if (pit_gate2) spdlog::info("  GATE2 (U34.16): {} -- {}", pit_gate2->name(), level_str(pit_gate2));
+
+    // --- 8259A PIC signal check ---
+    spdlog::info("--- 8259A PIC signals ---");
+    auto pic_int_sig  = dmm.probe("U2", 17);
+    auto pic_inta_sig = dmm.probe("U2", 26);
+    auto pic_cs_sig   = dmm.probe("U2", 1);
+    auto pic_ir0_sig  = dmm.probe("U2", 18);
+    auto pic_ir1_sig  = dmm.probe("U2", 19);
+
+    if (pic_int_sig)  spdlog::info("  INT   (U2.17):  {} -- {}", pic_int_sig->name(), level_str(pic_int_sig));
+    if (pic_inta_sig) spdlog::info("  ~INTA (U2.26):  {} -- {}", pic_inta_sig->name(), level_str(pic_inta_sig));
+    if (pic_cs_sig)   spdlog::info("  ~CS   (U2.1):   {} -- {}", pic_cs_sig->name(), level_str(pic_cs_sig));
+    if (pic_ir0_sig)  spdlog::info("  IR0   (U2.18):  {} -- {}", pic_ir0_sig->name(), level_str(pic_ir0_sig));
+    if (pic_ir1_sig)  spdlog::info("  IR1   (U2.19):  {} -- {}", pic_ir1_sig->name(), level_str(pic_ir1_sig));
 
     spdlog::info("PSU POWER_GOOD: {}", mb.psu.power_good.level() == bench::Level::High ? "YES" : "NO");
 
