@@ -34,11 +34,17 @@ Motherboard::Motherboard() {
 void Motherboard::power_on() {
     psu.switch_on();
 
-    // Passives derive pull behavior from their own wiring.
+    // Passives derive their behavior from their own wiring.
     for (auto& [ref, r] : resistors_)
         r->apply(&psu.vcc, &psu.gnd);
     for (auto& [ref, rn] : resistor_networks_)
         rn->apply(&psu.vcc, &psu.gnd);
+    for (auto& [ref, c] : capacitors_)
+        c->apply(&psu.vcc, &psu.gnd);
+    for (auto& c : bypass_caps)
+        c.apply(&psu.vcc, &psu.gnd);
+    for (auto& [ref, d] : diodes_)
+        d->apply(&psu.vcc, &psu.gnd);
 
     sw1.apply();
     sw2.apply();
@@ -549,9 +555,14 @@ void Motherboard::wire_from_brd() {
                 if (!sig) continue;
                 int pin_num = 0;
                 try { pin_num = std::stoi(pad.pin); } catch (...) { continue; }
-                if (pin_num == 1)      k->coil_a = sig;
+                if (pin_num == 1)       k->coil_a = sig;
                 else if (pin_num == 16) k->coil_b = sig;
-                // Other relay pins are contact signals -- not modeled yet.
+                else {
+                    // Contact pins -- store for wiring visibility.
+                    if (static_cast<int>(k->contacts.size()) < pin_num)
+                        k->contacts.resize(pin_num, nullptr);
+                    k->contacts[pin_num - 1] = sig;
+                }
             }
             continue;
         }

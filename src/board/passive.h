@@ -54,13 +54,33 @@ struct ResistorNetwork {
     }
 };
 
+// Capacitor role, derived from wiring at apply() time.
+enum class CapRole {
+    Unknown,    // not yet classified
+    Bypass,     // VCC-to-GND decoupling (no behavioral effect)
+    Filter,     // signal-to-GND (low-pass filter / timing element)
+    Coupling,   // signal-to-signal (AC coupling / timing element)
+};
+
 // A discrete capacitor on the motherboard.
-// Bypass caps connect VCC to GND; coupling caps connect two signals.
+// Role is determined from wiring: bypass (VCC-GND), filter (signal-GND),
+// or coupling (signal-signal).
 struct Capacitor {
     std::string ref;        // e.g. "C9"
     std::string value;      // e.g. ".01uF", ".047uF"
     Signal* signal_a = nullptr;
     Signal* signal_b = nullptr;
+    CapRole role = CapRole::Unknown;
+
+    // Classify this capacitor from its wiring.
+    void apply(Signal* vcc, Signal* gnd) {
+        if (!signal_a || !signal_b) return;
+        bool a_power = (signal_a == vcc || signal_a == gnd);
+        bool b_power = (signal_b == vcc || signal_b == gnd);
+        if (a_power && b_power)       role = CapRole::Bypass;
+        else if (a_power || b_power)  role = CapRole::Filter;
+        else                          role = CapRole::Coupling;
+    }
 };
 
 // A crystal oscillator.
@@ -71,24 +91,54 @@ struct Crystal {
     Signal* osc_out = nullptr;
 };
 
+// Diode role, derived from wiring at apply() time.
+enum class DiodeRole {
+    Unknown,    // not yet classified
+    Clamp,      // signal-to-power-rail (voltage clamp / protection)
+    Signal,     // signal-to-signal (rectification / switching)
+};
+
 // A discrete diode.
+// D1 on the 5150: clamp diode on cassette data input.
+//   Anode = GND, cathode = CASS_DATA_IN (U36/8255A pin 13, R1 pin 1).
+//   Prevents cassette input from going below ground.
 struct Diode {
     std::string ref;        // e.g. "D1"
     std::string value;      // e.g. "TYPE_FC"
     Signal* anode = nullptr;
     Signal* cathode = nullptr;
+    DiodeRole role = DiodeRole::Unknown;
+
+    // Classify this diode from its wiring.
+    void apply(Signal* vcc, Signal* gnd) {
+        if (!anode || !cathode) return;
+        bool a_power = (anode == vcc || anode == gnd);
+        bool b_power = (cathode == vcc || cathode == gnd);
+        if (a_power || b_power)  role = DiodeRole::Clamp;
+        else                     role = DiodeRole::Signal;
+    }
 };
 
 // A relay (DPDT in the 5150 -- cassette motor control).
+// K1 on the 5150: G5V-2 DPDT relay controlling the cassette port.
+//   Pin 1:  +5V (coil power)
+//   Pin 16: N-000332 (coil drive from U95/75477 pin 3)
+//   Pin 4:  N-000321 (from C8/R5 RC timing network)
+//   Pins 6,8,9,13: contact pins switching J6 (cassette DIN connector)
+//   Coil energized by PPI PB3 via U95 speaker/motor driver.
 struct Relay {
     std::string ref;        // e.g. "K1"
     std::string value;      // e.g. "G5V-2"
-    Signal* coil_a = nullptr;
-    Signal* coil_b = nullptr;
-    // Contact signals can be added as needed
+    Signal* coil_a = nullptr;   // Pin 1: power (+5V)
+    Signal* coil_b = nullptr;   // Pin 16: drive (from U95)
+    std::vector<Signal*> contacts;  // Contact pins (switching signals)
 };
 
 // A trimmer capacitor / variable capacitor.
+// VC1 on the 5150: crystal oscillator tuning trimmer (5-30pF).
+//   Pin 1: N-000212 (U11/8284A pin 17 = TANK, R25 pin 2)
+//   Pin 2: N-000169 (Y1/crystal pin 1 = oscillator input)
+//   Adjusts the 14.31818 MHz crystal frequency.
 struct Trimmer {
     std::string ref;        // e.g. "VC1"
     std::string value;      // e.g. "5-30pF"

@@ -447,12 +447,27 @@ public:
 
     // =====================================================================
     // CAPACITORS (from BRD: C1-C48, bypass and coupling caps)
+    // Role is classified at power-on from wiring (bypass/filter/coupling).
     // =====================================================================
-    // Named/valued capacitors
+
+    // --- Signal capacitors (filter / coupling / timing) ---
+    // C1: VCC-GND bypass (3-pad footprint, all pads on power rails)
     Capacitor c1  {"C1",  ".047uF"};
+    // C3: VCC-GND bypass (3-pad footprint, all pads on power rails)
     Capacitor c3  {"C3",  ".047uF"};
+    // C5: Speaker filter -- N-000338 to GND
+    //     Connects to U5 (74LS30, composite ready NAND) pin 5
+    //     and P4 (speaker connector) pins 2/4.
+    //     Forms low-pass filter on speaker output path.
     Capacitor c5  {"C5",  ".01uF"};
+    // C8: Cassette motor relay RC timing -- N-000322 to N-000321
+    //     Pin 1 (N-000322): connects to R5 (18K resistor) pin 2
+    //     Pin 2 (N-000321): connects to K1 (cassette relay) pin 4
+    //     Forms RC delay with R5 for relay de-bounce/timing.
     Capacitor c8  {"C8",  ".047uF"};
+    // C9: Speaker driver filter -- N-000320 to GND
+    //     Connects to R10 (33 ohm) pin 2 and U95 (75477 driver) pin 6.
+    //     Forms RC filter on speaker driver output stage.
     Capacitor c9  {"C9",  ".01uF"};
     // Bypass caps (VCC-GND decoupling)
     Capacitor c22 {"C22", ".047uF"};
@@ -490,21 +505,42 @@ public:
     // =====================================================================
     // CRYSTAL
     // =====================================================================
+    // Y1: 14.31818 MHz crystal for 8284A clock generator.
+    //     Pin 1 (osc_in):  N-000169 (to VC1 pin 2, trimmer)
+    //     Pin 2 (osc_out): N-000211 (to U11 pin 16 = 8284A X1)
+    //     Pins 3,4: GND (case ground)
     Crystal y1{"Y1", "14.31818MHz"};
 
     // =====================================================================
     // DIODE
     // =====================================================================
+    // D1: Clamp diode on cassette data input.
+    //     Anode = GND, cathode = CASS_DATA_IN (U36/8255A pin 13, R1 pin 1).
+    //     Prevents cassette input voltage from going below ground.
+    //     Role classified at power-on from wiring.
     Diode d1{"D1", "TYPE_FC"};
 
     // =====================================================================
     // RELAY (cassette motor control)
     // =====================================================================
+    // K1: G5V-2 DPDT relay for cassette port motor and data switching.
+    //     Pin 1:  +5V (coil power)
+    //     Pin 16: N-000332 (coil drive from U95/75477 pin 3)
+    //     Pin 4:  N-000321 (RC timing from C8/R5)
+    //     Pin 6:  N-000335 (to R7, P4/speaker, R8)
+    //     Pin 8:  N-000334 (to J6/cassette pin 4)
+    //     Pin 9:  N-000333 (to J6/cassette pin 3)
+    //     Pin 13: N-000331 (to J6/cassette pin 1)
+    //     Coil energized by PPI PB3 via U95 driver.
     Relay k1{"K1", "G5V-2"};
 
     // =====================================================================
     // TRIMMER CAPACITOR
     // =====================================================================
+    // VC1: Crystal oscillator tuning trimmer (5-30pF).
+    //     Pin 1: N-000212 (U11/8284A pin 17 = TANK, R25 pin 2)
+    //     Pin 2: N-000169 (Y1/crystal pin 1)
+    //     Fine-tunes the 14.31818 MHz oscillator frequency.
     Trimmer vc1{"VC1", "5-30pF"};
 
     // =====================================================================
