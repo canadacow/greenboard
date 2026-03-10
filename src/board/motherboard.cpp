@@ -27,33 +27,21 @@ Motherboard::Motherboard() {
     sw1.set(7, false);  // 1 floppy drive (bits 7,8 = 00)
     sw1.set(8, false);
 
-    // Pull-up resistors on key signal lines.
-    // Data bus pull-ups (active when no driver)
-    for (int i = 0; i < 8; ++i)
-        pullups.push_back(PullResistor{"RP_SD" + std::to_string(i), &sd[i], Level::High});
-    // IRQ pull-downs (active low when no device asserts)
-    Signal* irqs[] = {&irq0, &irq1, &irq2, &irq3, &irq4, &irq5, &irq6, &irq7};
-    for (int i = 0; i < 8; ++i)
-        pullups.push_back(PullResistor{"RP_IRQ" + std::to_string(i), irqs[i], Level::Low});
-    // DMA request pull-downs
-    Signal* dreqs[] = {&dreq0, &dreq1, &dreq2, &dreq3};
-    for (int i = 0; i < 4; ++i)
-        pullups.push_back(PullResistor{"RP_DREQ" + std::to_string(i), dreqs[i], Level::Low});
-    // I/O channel ready pull-up
-    pullups.push_back(PullResistor{"RP_IOCHRDY", &rdy_wait, Level::High});
-    // PIT gate0/gate1 tied high
-    pullups.push_back(PullResistor{"RP_GATE0", &pit_gate0, Level::High});
-    pullups.push_back(PullResistor{"RP_GATE1", &pit_gate1, Level::High});
-
     spdlog::info("5150 motherboard wired from BRD: {} address lines, {} data lines, 5 ISA slots",
                  sa.width(), sd.width());
 }
 
 void Motherboard::power_on() {
     psu.switch_on();
+
+    // Passives derive pull behavior from their own wiring.
+    for (auto& [ref, r] : resistors_)
+        r->apply(&psu.vcc, &psu.gnd);
+    for (auto& [ref, rn] : resistor_networks_)
+        rn->apply(&psu.vcc, &psu.gnd);
+
     sw1.apply();
     sw2.apply();
-    for (auto& p : pullups) p.apply();
     for (auto& j : jumpers) j.apply();
     spdlog::info("5150 powered on");
 }

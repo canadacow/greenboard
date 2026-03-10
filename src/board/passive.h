@@ -5,37 +5,53 @@
 
 namespace bench {
 
-// A pull-up or pull-down resistor on a signal line.
-// Sets the signal's pull level so it settles there when all drivers release.
-struct PullResistor {
-    std::string ref;    // e.g. "R33"
-    Signal* signal = nullptr;
-    Level pull = Level::High;
-
-    void apply() {
-        if (signal) signal->set_pull(pull);
-    }
-};
-
 // A discrete resistor on the motherboard.
 // Two-terminal passive: connects signal_a to signal_b.
-// In behavioral emulation, resistors primarily serve as pull-ups/pull-downs
-// or current limiters. The value is recorded for documentation.
+// If one pin is on a power rail (VCC or GND), the resistor acts as a
+// pull-up or pull-down on the other pin. The value is recorded for documentation.
 struct Resistor {
     std::string ref;        // e.g. "R1"
     std::string value;      // e.g. "18K", "27", "510"
     Signal* signal_a = nullptr;
     Signal* signal_b = nullptr;
+
+    // Derive pull behavior from wiring.
+    // If one pin is VCC, pull the other High. If GND, pull it Low.
+    void apply(Signal* vcc, Signal* gnd) {
+        if (!signal_a || !signal_b) return;
+        if (signal_a == vcc)       signal_b->set_pull(Level::High);
+        else if (signal_b == vcc)  signal_a->set_pull(Level::High);
+        else if (signal_a == gnd)  signal_b->set_pull(Level::Low);
+        else if (signal_b == gnd)  signal_a->set_pull(Level::Low);
+    }
 };
 
 // A resistor network (SIP/DIP package with multiple resistors).
-// Common-pin networks: pin 1 is common, pins 2..N are individual.
+// One pin is the common rail (typically VCC or GND). On 16-pin DIP
+// packages this is pin 16 (top of package), not pin 1.
+// The common pin is identified at apply() time by checking which pin
+// is on a power rail, then pulling all other signal pins accordingly.
 struct ResistorNetwork {
     std::string ref;        // e.g. "RN1"
     std::string value;      // e.g. "4.7K"
     int pin_count = 0;
-    Signal* common = nullptr;           // Pin 1 (typically VCC)
-    std::vector<Signal*> pins;          // Pins 2..N
+    std::vector<Signal*> pins;          // All pins (0-indexed: pins[0] = pin 1)
+
+    // Derive pull behavior from wiring.
+    // Find the common pin (whichever pin is VCC or GND), then pull
+    // all other signal pins accordingly.
+    void apply(Signal* vcc, Signal* gnd) {
+        Level pull = Level::HiZ;
+        for (auto* pin : pins) {
+            if (pin == vcc)  { pull = Level::High; break; }
+            if (pin == gnd)  { pull = Level::Low;  break; }
+        }
+        if (pull == Level::HiZ) return;
+        for (auto* pin : pins) {
+            if (pin && pin != vcc && pin != gnd)
+                pin->set_pull(pull);
+        }
+    }
 };
 
 // A discrete capacitor on the motherboard.
