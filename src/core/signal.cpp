@@ -5,6 +5,8 @@ namespace bench {
 
 // --- Signal ---
 
+std::atomic<int> Signal::pending{0};
+
 Signal::Signal(std::string name) : name_(std::move(name)) {}
 
 void Signal::drive(Level lvl) {
@@ -14,6 +16,7 @@ void Signal::drive(Level lvl) {
     level_.store(lvl, std::memory_order_release);
 
     for (auto* mb : subscribers_) {
+        pending.fetch_add(1, std::memory_order_release);
         mb->wake();
     }
 }

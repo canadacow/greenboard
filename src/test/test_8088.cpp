@@ -176,15 +176,13 @@ struct BusGlue {
 // =========================================================================
 class TestClock : public Component {
 public:
-    TestClock(Signal& clk, BusGlue& bus, Mailbox* cpu_mb)
-        : Component("TestClock"), clk_(clk), bus_(bus), cpu_mb_(cpu_mb) {}
+    TestClock(Signal& clk, BusGlue& bus)
+        : Component("TestClock"), clk_(clk), bus_(bus) {}
 
     void run(std::stop_token stop) override {
         int tick = 0;
         while (!stop.stop_requested()) {
-            // Wait for CPU to be sleeping before each edge.
-            // This guarantees wake() fires and the CPU sees every transition.
-            wait_cpu(stop);
+            Signal::wait_quiescent(stop);
             if (stop.stop_requested()) break;
 
             spdlog::debug("[CLK] ---- tick {} ---- PRE-RISE", tick);
@@ -192,7 +190,7 @@ public:
             spdlog::debug("[CLK] ---- tick {} ---- DRIVE HIGH", tick);
             clk_.drive(Level::High);
 
-            wait_cpu(stop);
+            Signal::wait_quiescent(stop);
             if (stop.stop_requested()) break;
 
             spdlog::debug("[CLK] ---- tick {} ---- PRE-FALL", tick);
@@ -204,14 +202,8 @@ public:
     }
     void on_signal_change() override {}
 private:
-    void wait_cpu(std::stop_token& stop) {
-        while (!cpu_mb_->sleeping.load(std::memory_order_acquire)
-               && !stop.stop_requested())
-            ;
-    }
     Signal& clk_;
     BusGlue& bus_;
-    Mailbox* cpu_mb_;
 };
 
 int main() {
@@ -269,7 +261,7 @@ int main() {
     std::memcpy(bus.mem + 0xF0123, code, sizeof(code));
 
     // Clock (calls BusGlue synchronously)
-    auto clk_ic = std::make_unique<TestClock>(clk, bus, cpu->mailbox());
+    auto clk_ic = std::make_unique<TestClock>(clk, bus);
 
     // Power on
     vcc.drive(Level::High);

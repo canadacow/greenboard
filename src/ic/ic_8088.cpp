@@ -106,6 +106,7 @@ void IC_8088::run(std::stop_token stop) {
     while (!stop.stop_requested()) {
         wait_mailbox(stop);
         if (stop.stop_requested()) return;
+        Signal::ack();
         if (pin_vcc_ && pin_vcc_->level() == Level::High) break;
     }
     spdlog::info("[8088] VCC detected, waiting for RESET");
@@ -121,6 +122,7 @@ void IC_8088::run(std::stop_token stop) {
         while (!stop.stop_requested()) {
             wait_mailbox(stop);
             if (stop.stop_requested()) return;
+            Signal::ack();
             if (pin_reset_->level() != Level::High) break;
         }
     } else {
@@ -207,6 +209,7 @@ void IC_8088::wait_clk_rising() {
     while (!clk_rose_ && !stop_.stop_requested()) {
         wait_mailbox(stop_);
         on_signal_change();
+        Signal::ack();
     }
     clk_rose_ = false;
 }
@@ -215,6 +218,7 @@ void IC_8088::wait_clk_falling() {
     while (!clk_fell_ && !stop_.stop_requested()) {
         wait_mailbox(stop_);
         on_signal_change();
+        Signal::ack();
     }
     clk_fell_ = false;
 }

@@ -15,13 +15,11 @@ class Signal;
 // when any connected signal changes. Components poll signal levels
 // directly when woken.
 struct alignas(64) Mailbox {
-    alignas(64) std::atomic<bool> sleeping{false};
-    std::binary_semaphore         sem{0};
+    std::counting_semaphore<256>  sem{0};
 
-    // Wake the consumer (if sleeping). Called from any thread.
+    // Wake the consumer unconditionally. Called from any thread.
     void wake() {
-        if (sleeping.load(std::memory_order_acquire))
-            sem.release();
+        sem.release();
     }
 
     // Allocate a Mailbox from the static pool. Lives until program exit.

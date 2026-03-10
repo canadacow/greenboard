@@ -17,7 +17,7 @@ void Component::power_on() {
 void Component::power_off() {
     if (!thread_.joinable()) return;
     thread_.request_stop();
-    mailbox_->sem.release();  // wake consumer if blocking
+    mailbox_->wake();  // wake consumer if blocking
     thread_.join();
     spdlog::debug("[{}] powered off", name_);
 }
@@ -30,6 +30,7 @@ void Component::run(std::stop_token stop) {
         wait_mailbox(stop);
         if (stop.stop_requested()) break;
         on_signal_change();
+        Signal::ack();
     }
 
     on_power_off();
@@ -37,9 +38,7 @@ void Component::run(std::stop_token stop) {
 
 // Blocking: sleep until any connected signal changes.
 void Component::wait_mailbox(std::stop_token& stop) {
-    mailbox_->sleeping.store(true, std::memory_order_release);
     mailbox_->sem.acquire();
-    mailbox_->sleeping.store(false, std::memory_order_relaxed);
 }
 
 bool Component::stop_requested() const {

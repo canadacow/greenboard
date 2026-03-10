@@ -44,6 +44,20 @@ public:
     void connect(Component* c);
     void disconnect(Component* c);
 
+    // Global pending-signal counter. Incremented by drive() per subscriber,
+    // decremented by ack(). Clock must not advance until quiescent.
+    static std::atomic<int> pending;
+    static void ack() { pending.fetch_sub(1, std::memory_order_release); }
+    static void wait_quiescent() {
+        while (pending.load(std::memory_order_acquire) > 0)
+            ;
+    }
+    static void wait_quiescent(std::stop_token& stop) {
+        while (pending.load(std::memory_order_acquire) > 0
+               && !stop.stop_requested())
+            ;
+    }
+
 private:
     std::string name_;
     std::atomic<Level> level_{Level::HiZ};
