@@ -14,17 +14,23 @@ void Component::power_on() {
 void Component::power_off() {
     if (!thread_.joinable()) return;
     thread_.request_stop();
-    cv_.notify_all();
+    sem_.release();  // wake consumer if blocking
     thread_.join();
     spdlog::debug("[{}] powered off", name_);
 }
 
 void Component::post(const SignalEvent& event) {
-    {
-        std::lock_guard lock(mtx_);
-        mailbox_.push(event);
+    // Claim a slot (lock-free, multiple producers).
+    uint32_t slot = tail_.fetch_add(1, std::memory_order_acq_rel);
+    ring_[slot & (kCapacity - 1)] = event;
+
+    // Signal that one more slot is ready to read.
+    committed_.fetch_add(1, std::memory_order_release);
+
+    // Only wake if consumer is actually sleeping (avoids syscall).
+    if (sleeping_.load(std::memory_order_acquire)) {
+        sem_.release();
     }
-    cv_.notify_one();
 }
 
 // Default run loop for reactive components: block on mailbox, dispatch events.
@@ -40,31 +46,34 @@ void Component::run(std::stop_token stop) {
 
 // Non-blocking: process all pending mailbox events right now.
 void Component::drain_mailbox() {
-    std::queue<SignalEvent> batch;
-    {
-        std::lock_guard lock(mtx_);
-        batch.swap(mailbox_);
+    // Grab how many events are ready.
+    uint32_t ready = committed_.load(std::memory_order_acquire);
+    uint32_t to_read = ready - head_;
+    if (to_read == 0 || to_read > kCapacity) return;
+
+    for (uint32_t i = 0; i < to_read; ++i) {
+        uint32_t idx = (head_ + i) & (kCapacity - 1);
+        auto& e = ring_[idx];
+        on_signal_change(*e.signal, e.old_level, e.new_level);
     }
-    while (!batch.empty()) {
-        auto& event = batch.front();
-        on_signal_change(*event.signal, event.old_level, event.new_level);
-        batch.pop();
-    }
+    head_ = ready;
 }
 
 // Blocking: wait for at least one event, then drain all pending.
 void Component::wait_mailbox(std::stop_token& stop) {
-    SignalEvent event;
-    {
-        std::unique_lock lock(mtx_);
-        cv_.wait(lock, stop, [this] { return !mailbox_.empty(); });
-        if (stop.stop_requested()) return;
-        event = mailbox_.front();
-        mailbox_.pop();
-    }
-    on_signal_change(*event.signal, event.old_level, event.new_level);
+    // Mark ourselves as sleeping so producers know to wake us.
+    sleeping_.store(true, std::memory_order_release);
 
-    // Drain any remaining events that arrived while we were processing.
+    // Check if events arrived between last drain and setting the flag.
+    if (committed_.load(std::memory_order_acquire) != head_) {
+        sleeping_.store(false, std::memory_order_relaxed);
+        drain_mailbox();
+        return;
+    }
+
+    sem_.acquire();
+    sleeping_.store(false, std::memory_order_relaxed);
+    if (stop.stop_requested()) return;
     drain_mailbox();
 }
 

@@ -3,6 +3,8 @@
 #include "tools/multimeter.h"
 #include "ic/ic_8284a.h"
 #include "ic/ic_8288.h"
+#include "ic/ic_8253.h"
+#include "ic/ic_74s175.h"
 #include <thread>
 #include <chrono>
 
@@ -50,13 +52,29 @@ int main() {
     mb.u6.insert(std::move(bus_ctrl));
     spdlog::info("  BusCtrl: {} [{}] -- {}", mb.u6.ref(), mb.u6.label(), mb.u6.occupied() ? "occupied" : "empty");
 
+    // --- Insert 74S175 quad D flip-flop into socket U26 ---
+    // (PCLK / 2 divider -> PIT clock, keyboard data synchronizer)
+    spdlog::info("--- Inserting 74S175 (PCLK divider) ---");
+    auto u26_ic = std::make_unique<bench::IC_74S175>();
+    u26_ic->install(mb.u26);
+    u26_ic->power_on();
+    mb.u26.insert(std::move(u26_ic));
+
+    // --- Insert 8253 PIT into socket U34 ---
+    spdlog::info("--- Inserting 8253 PIT ---");
+    auto pit = std::make_unique<bench::IC_8253>();
+    pit->install(mb.u34);
+    pit->power_on();
+    mb.u34.insert(std::move(pit));
+    spdlog::info("  PIT:     {} [{}] -- {}", mb.u34.ref(), mb.u34.label(), mb.u34.occupied() ? "occupied" : "empty");
+
     // --- Power on: VCC goes High, 8284A starts oscillating ---
     spdlog::info("--- Power on ---");
     mb.power_on();
 
     // Let the oscillator spin for a moment.
-    spdlog::info("Letting oscillator run for 100ms...");
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    spdlog::info("Letting oscillator run for 2s...");
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
     // Probe clock signals with the multimeter.
     spdlog::info("--- Clock signal check ---");
@@ -100,6 +118,22 @@ int main() {
     if (ior_sig)  spdlog::info("  ~IOR  (U6.13): {} -- {}", ior_sig->name(), level_str(ior_sig));
     if (iow_sig)  spdlog::info("  ~IOW  (U6.12): {} -- {}", iow_sig->name(), level_str(iow_sig));
     if (inta_sig) spdlog::info("  ~INTA (U6.14): {} -- {}", inta_sig->name(), level_str(inta_sig));
+
+    // --- 8253 PIT signal check ---
+    spdlog::info("--- 8253 PIT signals ---");
+    auto pit_out0 = dmm.probe("U34", 10);
+    auto pit_out1 = dmm.probe("U34", 13);
+    auto pit_out2 = dmm.probe("U34", 17);
+    auto pit_clk0 = dmm.probe("U34", 9);
+    auto pit_gate0 = dmm.probe("U34", 11);
+    auto pit_gate2 = dmm.probe("U34", 16);
+
+    if (pit_out0)  spdlog::info("  OUT0  (U34.10): {} -- {}", pit_out0->name(), level_str(pit_out0));
+    if (pit_out1)  spdlog::info("  OUT1  (U34.13): {} -- {}", pit_out1->name(), level_str(pit_out1));
+    if (pit_out2)  spdlog::info("  OUT2  (U34.17): {} -- {}", pit_out2->name(), level_str(pit_out2));
+    if (pit_clk0)  spdlog::info("  CLK0  (U34.9):  {} -- {}", pit_clk0->name(), level_str(pit_clk0));
+    if (pit_gate0) spdlog::info("  GATE0 (U34.11): {} -- {}", pit_gate0->name(), level_str(pit_gate0));
+    if (pit_gate2) spdlog::info("  GATE2 (U34.16): {} -- {}", pit_gate2->name(), level_str(pit_gate2));
 
     spdlog::info("PSU POWER_GOOD: {}", mb.psu.power_good.level() == bench::Level::High ? "YES" : "NO");
 

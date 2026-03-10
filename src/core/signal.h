@@ -55,7 +55,7 @@ private:
     Level pull_ = Level::HiZ;  // default: no pull, floats
 
     std::vector<Component*> subscribers_;
-    std::mutex sub_mutex_;
+    std::mutex sub_mutex_;  // only used by connect/disconnect (setup time)
 };
 
 // A bundle of N named signal lines (e.g. address bus SA0..SA19).

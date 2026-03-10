@@ -114,10 +114,27 @@ void Motherboard::build_net_map() {
     net_map_["RESET"] = &cpu_reset;
     net_map_["NMI"]   = &nmi;
 
+    // --- Series termination resistor bridges ---
+    // 27-ohm resistors on the 5150 act as series terminators between IC
+    // outputs and system bus signals. Map both sides to the same Signal.
+    // 8284A outputs (through R13, R15, R20, R21):
+    net_map_["N-000217"] = &clk88;     // R13: U11.8 (CLK out) -> CLK88
+    net_map_["N-000213"] = &pclk;      // R15: U11.2 (PCLK out) -> PCLK
+    net_map_["N-000289"] = &clk;       // R20: -> CLK
+    net_map_["N-000216"] = &osc;       // R21: U11.12 (OSC out) -> OSC
+    // 8288 outputs (through R14, R16, R17, R18, R19):
+    net_map_["N-000192"] = &memr;      // R18: U6.7 (~MEMR out) -> ~MEMR
+    net_map_["N-000193"] = &memw;      // R14: U6.8 (~MEMW out) -> ~MEMW
+    net_map_["N-000197"] = &ior;       // R16: U6.13 (~IOR out) -> ~IOR
+    net_map_["N-000196"] = &iow;       // R17: U6.12 (~IOW out) -> ~IOW
+    net_map_["N-000219"] = &ale;       // R19: U6.5 (ALE out) -> AEN_BRD
+    // 8288 direct outputs (no resistor, straight to other ICs):
+    net_map_["N-000190"] = &den;       // U6.4 (~DEN) -> U8.1 (74S245)
+    net_map_["N-000214"] = &dt_r;      // U6.16 (DT/~R) -> U84.13 (74S10)
+    net_map_["N-000165"] = &inta;      // U6.14 (~INTA) -> U2.26 (8259A)
+
     // --- 8288 bus controller outputs (active on system bus) ---
     net_map_["AEN_BRD"]  = &ale;       // ALE on the ISA bus (directly from AEN_BRD net)
-    // Note: 8288 internal outputs have anonymous net names (N-000xxx).
-    // These get auto-created as dynamic signals and still wire correctly.
 
     // --- System bus (after latches/transceivers) ---
     for (int i = 0; i < 20; ++i)

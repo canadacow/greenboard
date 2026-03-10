@@ -12,8 +12,7 @@ void Signal::drive(Level lvl) {
     if (lvl == old) return;
     level_.store(lvl, std::memory_order_release);
 
-    // Notify all subscribers -- post to their mailboxes.
-    std::lock_guard<std::mutex> lock(sub_mutex_);
+    // Subscriber list is immutable after construction -- no lock needed.
     for (auto* c : subscribers_) {
         c->post(SignalEvent{this, old, lvl});
     }
