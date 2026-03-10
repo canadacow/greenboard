@@ -99,7 +99,7 @@ struct BusGlue {
     // on_clk_rising: runs BEFORE CLK goes high.
     void on_clk_rising() {
         uint8_t status = decode_status();
-        spdlog::debug("[BusGlue] CLK_RISE  state={} status={} bus_addr=0x{:05X} ad=0x{:02X}",
+        spdlog::trace("[BusGlue] CLK_RISE  state={} status={} bus_addr=0x{:05X} ad=0x{:02X}",
             tstate_name(), status, read_address(), read_ad());
 
         switch (t_state) {
@@ -107,7 +107,7 @@ struct BusGlue {
             if (status != 7) {
                 t_state = TState::T1;
                 cycle_type = status;
-                spdlog::debug("[BusGlue]   -> T1 NEW CYCLE type={}", cycle_type);
+                spdlog::trace("[BusGlue]   -> T1 NEW CYCLE type={}", cycle_type);
             }
             break;
 
@@ -115,10 +115,10 @@ struct BusGlue {
             t_state = TState::T2;
             if (is_read_cycle()) {
                 uint8_t val = mem[cycle_addr & 0xFFFFF];
-                spdlog::debug("[BusGlue]   -> T2 READ drive mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
+                spdlog::trace("[BusGlue]   -> T2 READ drive mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
                 drive_ad(val);
             } else {
-                spdlog::debug("[BusGlue]   -> T2");
+                spdlog::trace("[BusGlue]   -> T2");
             }
             break;
 
@@ -126,19 +126,19 @@ struct BusGlue {
             t_state = TState::T3;
             if (is_write_cycle()) {
                 uint8_t val = read_ad();
-                spdlog::debug("[BusGlue]   -> T3 WRITE mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
+                spdlog::trace("[BusGlue]   -> T3 WRITE mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
                 mem[cycle_addr & 0xFFFFF] = val;
             } else {
-                spdlog::debug("[BusGlue]   -> T3");
+                spdlog::trace("[BusGlue]   -> T3");
             }
             break;
 
         case TState::T3:
             if (status == 7) {
                 t_state = TState::T4;
-                spdlog::debug("[BusGlue]   -> T4 (status passive)");
+                spdlog::trace("[BusGlue]   -> T4 (status passive)");
             } else {
-                spdlog::debug("[BusGlue]   Tw (status={}, waiting)", status);
+                spdlog::trace("[BusGlue]   Tw (status={}, waiting)", status);
             }
             break;
 
@@ -150,13 +150,13 @@ struct BusGlue {
                 // Do NOT release_ad() -- it would clobber the new address.
                 t_state = TState::T1;
                 cycle_type = status;
-                spdlog::debug("[BusGlue]   -> T1 NEW CYCLE (overlapped T4) type={}", cycle_type);
+                spdlog::trace("[BusGlue]   -> T1 NEW CYCLE (overlapped T4) type={}", cycle_type);
             } else {
                 if (is_read_cycle()) {
                     release_ad();
                 }
                 t_state = TState::IDLE;
-                spdlog::debug("[BusGlue]   -> IDLE");
+                spdlog::trace("[BusGlue]   -> IDLE");
             }
             break;
         }
@@ -164,11 +164,11 @@ struct BusGlue {
 
     // on_clk_falling: runs BEFORE CLK goes low.
     void on_clk_falling() {
-        spdlog::debug("[BusGlue] CLK_FALL  state={} bus_addr=0x{:05X} ad=0x{:02X}",
+        spdlog::trace("[BusGlue] CLK_FALL  state={} bus_addr=0x{:05X} ad=0x{:02X}",
             tstate_name(), read_address(), read_ad());
         if (t_state == TState::T1) {
             cycle_addr = read_address();
-            spdlog::debug("[BusGlue]   ALE latch addr=0x{:05X}", cycle_addr);
+            spdlog::trace("[BusGlue]   ALE latch addr=0x{:05X}", cycle_addr);
         }
     }
 };
@@ -187,17 +187,17 @@ public:
             Signal::wait_quiescent(stop);
             if (stop.stop_requested()) break;
 
-            spdlog::debug("[CLK] ---- tick {} ---- PRE-RISE", tick);
+            spdlog::trace("[CLK] ---- tick {} ---- PRE-RISE", tick);
             bus_.on_clk_rising();
-            spdlog::debug("[CLK] ---- tick {} ---- DRIVE HIGH", tick);
+            spdlog::trace("[CLK] ---- tick {} ---- DRIVE HIGH", tick);
             clk_.drive(Level::High);
 
             Signal::wait_quiescent(stop);
             if (stop.stop_requested()) break;
 
-            spdlog::debug("[CLK] ---- tick {} ---- PRE-FALL", tick);
+            spdlog::trace("[CLK] ---- tick {} ---- PRE-FALL", tick);
             bus_.on_clk_falling();
-            spdlog::debug("[CLK] ---- tick {} ---- DRIVE LOW", tick);
+            spdlog::trace("[CLK] ---- tick {} ---- DRIVE LOW", tick);
             clk_.drive(Level::Low);
             tick++;
         }

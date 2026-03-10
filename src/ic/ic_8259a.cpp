@@ -128,7 +128,7 @@ void IC_8259A::on_bus_write() {
         // Deassert INT during initialization
         if (pin_int_) pin_int_->drive(Level::Low);
 
-        spdlog::debug("[8259A] ICW1={:#04x} edge={} single={} icw4={}",
+        spdlog::trace("[8259A] ICW1={:#04x} edge={} single={} icw4={}",
                       data, edge_triggered_, single_mode_, icw4_needed_);
         return;
     }
@@ -136,7 +136,7 @@ void IC_8259A::on_bus_write() {
     // Initialization sequence
     if (init_state_ == InitState::WaitICW2 && a0) {
         vector_base_ = data & 0xF8;  // upper 5 bits = base vector
-        spdlog::debug("[8259A] ICW2={:#04x} vector_base={:#04x}", data, vector_base_);
+        spdlog::trace("[8259A] ICW2={:#04x} vector_base={:#04x}", data, vector_base_);
         if (!single_mode_)
             init_state_ = InitState::WaitICW3;
         else if (icw4_needed_)
@@ -144,7 +144,7 @@ void IC_8259A::on_bus_write() {
         else {
             init_state_ = InitState::Ready;
             initialized_ = true;
-            spdlog::debug("[8259A] initialized (no ICW3/ICW4)");
+            spdlog::trace("[8259A] initialized (no ICW3/ICW4)");
             evaluate_int();
         }
         return;
@@ -152,7 +152,7 @@ void IC_8259A::on_bus_write() {
 
     if (init_state_ == InitState::WaitICW3 && a0) {
         // ICW3: cascade info -- ignored on 5150 (single mode)
-        spdlog::debug("[8259A] ICW3={:#04x} (ignored, single mode)", data);
+        spdlog::trace("[8259A] ICW3={:#04x} (ignored, single mode)", data);
         if (icw4_needed_)
             init_state_ = InitState::WaitICW4;
         else {
@@ -166,7 +166,7 @@ void IC_8259A::on_bus_write() {
     if (init_state_ == InitState::WaitICW4 && a0) {
         mode_8086_ = (data & 0x01);    // uPM: 1=8086, 0=8080
         auto_eoi_  = (data & 0x02);    // AEOI: 1=auto EOI
-        spdlog::debug("[8259A] ICW4={:#04x} mode_8086={} auto_eoi={}", data, mode_8086_, auto_eoi_);
+        spdlog::trace("[8259A] ICW4={:#04x} mode_8086={} auto_eoi={}", data, mode_8086_, auto_eoi_);
         init_state_ = InitState::Ready;
         initialized_ = true;
 
@@ -191,7 +191,7 @@ void IC_8259A::on_bus_write() {
     if (a0) {
         // OCW1: A0=1, write IMR
         imr_ = data;
-        spdlog::debug("[8259A] OCW1 IMR={:#04x}", imr_);
+        spdlog::trace("[8259A] OCW1 IMR={:#04x}", imr_);
         evaluate_int();
         return;
     }
@@ -206,7 +206,7 @@ void IC_8259A::on_bus_write() {
                 int lvl = highest_priority_irq(isr_);
                 if (lvl >= 0) {
                     isr_ &= ~(1 << lvl);
-                    spdlog::debug("[8259A] non-specific EOI, cleared ISR bit {}", lvl);
+                    spdlog::trace("[8259A] non-specific EOI, cleared ISR bit {}", lvl);
                 }
                 break;
             }
@@ -214,7 +214,7 @@ void IC_8259A::on_bus_write() {
                 // Specific EOI: clear ISR bit specified in L2-L0
                 int lvl = data & 0x07;
                 isr_ &= ~(1 << lvl);
-                spdlog::debug("[8259A] specific EOI, cleared ISR bit {}", lvl);
+                spdlog::trace("[8259A] specific EOI, cleared ISR bit {}", lvl);
                 break;
             }
             case 0x05: {

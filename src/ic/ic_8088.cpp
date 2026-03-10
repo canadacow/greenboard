@@ -160,7 +160,7 @@ void IC_8088::drive_address(uint32_t address) {
     for (int i = 0; i < 12; ++i)
         if (pin_a_upper_[i])
             pin_a_upper_[i]->drive((address >> (i + 8)) & 1 ? Level::High : Level::Low);
-    spdlog::debug("[8088] drive_address 0x{:05X} ad[0]@{} level={}", address,
+    spdlog::trace("[8088] drive_address 0x{:05X} ad[0]@{} level={}", address,
         (void*)pin_ad_[0], pin_ad_[0] ? (int)pin_ad_[0]->level() : -1);
 }
 
@@ -175,7 +175,7 @@ uint8_t IC_8088::read_data() {
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i] && pin_ad_[i]->level() == Level::High)
             val |= (1 << i);
-    spdlog::debug("[8088] read_data -> 0x{:02X} (AD levels: {}{}{}{}{}{}{}{})",
+    spdlog::trace("[8088] read_data -> 0x{:02X} (AD levels: {}{}{}{}{}{}{}{})",
         val,
         pin_ad_[7] ? (int)pin_ad_[7]->level() : -1,
         pin_ad_[6] ? (int)pin_ad_[6]->level() : -1,
@@ -227,73 +227,73 @@ void IC_8088::wait_clk_falling() {
 
 uint8_t IC_8088::bus_read_byte(uint32_t address) {
     if (stop_.stop_requested()) return 0;
-    spdlog::debug("[8088] bus_read_byte(0x{:05X}) -- drive status MEMR", address & 0xFFFFF);
+    spdlog::trace("[8088] bus_read_byte(0x{:05X}) -- drive status MEMR", address & 0xFFFFF);
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
     drive_address(address & 0xFFFFF);
-    spdlog::debug("[8088]   wait T1 rise...");
+    spdlog::trace("[8088]   wait T1 rise...");
     wait_clk_rising();
-    spdlog::debug("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
-    spdlog::debug("[8088]   wait T1 fall (ALE)...");
+    spdlog::trace("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
+    spdlog::trace("[8088]   wait T1 fall (ALE)...");
     wait_clk_falling();
-    spdlog::debug("[8088]   T1 fall -- release AD");
+    spdlog::trace("[8088]   T1 fall -- release AD");
     release_data();
-    spdlog::debug("[8088]   wait T2 rise...");
+    spdlog::trace("[8088]   wait T2 rise...");
     wait_clk_rising();
-    spdlog::debug("[8088]   T2 rise");
+    spdlog::trace("[8088]   T2 rise");
     wait_clk_falling();
-    spdlog::debug("[8088]   T2 fall");
-    spdlog::debug("[8088]   wait T3 rise...");
+    spdlog::trace("[8088]   T2 fall");
+    spdlog::trace("[8088]   wait T3 rise...");
     wait_clk_rising();
-    spdlog::debug("[8088]   T3 rise -- drive status passive");
+    spdlog::trace("[8088]   T3 rise -- drive status passive");
     drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
            && !stop_.stop_requested()) {
-        spdlog::debug("[8088]   Tw (READY not high)");
+        spdlog::trace("[8088]   Tw (READY not high)");
         wait_clk_falling(); wait_clk_rising();
     }
-    spdlog::debug("[8088]   wait T3 fall (sample data)...");
+    spdlog::trace("[8088]   wait T3 fall (sample data)...");
     wait_clk_falling();
     uint8_t data = read_data();
-    spdlog::debug("[8088]   T3 fall -- READ 0x{:05X} -> 0x{:02X}", address & 0xFFFFF, data);
-    spdlog::debug("[8088]   wait T4...");
+    spdlog::trace("[8088]   T3 fall -- READ 0x{:05X} -> 0x{:02X}", address & 0xFFFFF, data);
+    spdlog::trace("[8088]   wait T4...");
     wait_clk_rising(); wait_clk_falling();
-    spdlog::debug("[8088]   T4 done");
+    spdlog::trace("[8088]   T4 done");
     return data;
 }
 
 void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     if (stop_.stop_requested()) return;
-    spdlog::debug("[8088] bus_write_byte(0x{:05X}, 0x{:02X}) -- drive status MEMW", address & 0xFFFFF, value);
+    spdlog::trace("[8088] bus_write_byte(0x{:05X}, 0x{:02X}) -- drive status MEMW", address & 0xFFFFF, value);
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
     drive_address(address & 0xFFFFF);
-    spdlog::debug("[8088]   wait T1 rise...");
+    spdlog::trace("[8088]   wait T1 rise...");
     wait_clk_rising();
-    spdlog::debug("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
-    spdlog::debug("[8088]   wait T1 fall (ALE)...");
+    spdlog::trace("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
+    spdlog::trace("[8088]   wait T1 fall (ALE)...");
     wait_clk_falling();
-    spdlog::debug("[8088]   T1 fall -- drive write data 0x{:02X}", value);
+    spdlog::trace("[8088]   T1 fall -- drive write data 0x{:02X}", value);
     drive_data(value);
-    spdlog::debug("[8088]   wait T2 rise...");
+    spdlog::trace("[8088]   wait T2 rise...");
     wait_clk_rising();
-    spdlog::debug("[8088]   T2 rise");
+    spdlog::trace("[8088]   T2 rise");
     wait_clk_falling();
-    spdlog::debug("[8088]   T2 fall");
-    spdlog::debug("[8088]   wait T3 rise...");
+    spdlog::trace("[8088]   T2 fall");
+    spdlog::trace("[8088]   wait T3 rise...");
     wait_clk_rising();
-    spdlog::debug("[8088]   T3 rise -- drive status passive");
+    spdlog::trace("[8088]   T3 rise -- drive status passive");
     drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
            && !stop_.stop_requested()) {
-        spdlog::debug("[8088]   Tw (READY not high)");
+        spdlog::trace("[8088]   Tw (READY not high)");
         wait_clk_falling(); wait_clk_rising();
     }
-    spdlog::debug("[8088]   wait T3 fall...");
+    spdlog::trace("[8088]   wait T3 fall...");
     wait_clk_falling();
-    spdlog::debug("[8088]   T3 fall -- WRITE 0x{:05X} <- 0x{:02X}", address & 0xFFFFF, value);
+    spdlog::trace("[8088]   T3 fall -- WRITE 0x{:05X} <- 0x{:02X}", address & 0xFFFFF, value);
     release_data();
-    spdlog::debug("[8088]   wait T4...");
+    spdlog::trace("[8088]   wait T4...");
     wait_clk_rising(); wait_clk_falling();
-    spdlog::debug("[8088]   T4 done");
+    spdlog::trace("[8088]   T4 done");
 }
 
 uint16_t IC_8088::bus_read_word(uint32_t address) {
