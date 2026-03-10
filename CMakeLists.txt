@@ -25,6 +25,9 @@ add_executable(bench
     src/ic/ic_8255a.cpp
     src/ic/ic_8237a.cpp
     src/ic/ic_8088.cpp
+    src/ic/ic_rom_8k.cpp
+    src/ic/ic_74s373.cpp
+    src/ic/ic_74s245.cpp
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)

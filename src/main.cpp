@@ -8,6 +8,10 @@
 #include "ic/ic_8259a.h"
 #include "ic/ic_8255a.h"
 #include "ic/ic_8237a.h"
+#include "ic/ic_8088.h"
+#include "ic/ic_rom_8k.h"
+#include "ic/ic_74s373.h"
+#include "ic/ic_74s245.h"
 #include <thread>
 #include <chrono>
 
@@ -37,6 +41,14 @@ int main() {
     bench::Multimeter dmm(mb);
     int failures = dmm.audit("assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd");
     spdlog::info("Audit result: {}", failures == 0 ? "ALL NETS OK" : "FAILURES DETECTED");
+
+    // --- Insert 8088 CPU into socket U3 ---
+    spdlog::info("--- Inserting 8088 CPU ---");
+    auto cpu = std::make_unique<bench::IC_8088>();
+    cpu->install(mb.u3);
+    cpu->power_on();
+    mb.u3.insert(std::move(cpu));
+    spdlog::info("  CPU:     {} [{}] -- {}", mb.u3.ref(), mb.u3.label(), mb.u3.occupied() ? "occupied" : "empty");
 
     // --- Insert 8284A clock generator into socket U11 ---
     spdlog::info("--- Inserting 8284A clock generator ---");
@@ -94,6 +106,73 @@ int main() {
     pit->power_on();
     mb.u34.insert(std::move(pit));
     spdlog::info("  PIT:     {} [{}] -- {}", mb.u34.ref(), mb.u34.label(), mb.u34.occupied() ? "occupied" : "empty");
+
+    // --- Insert 74S373 address latches (U7, U9, U10) ---
+    spdlog::info("--- Inserting address latches ---");
+    auto u7_ic = std::make_unique<bench::IC_74S373>();
+    u7_ic->install(mb.u7);
+    u7_ic->power_on();
+    mb.u7.insert(std::move(u7_ic));
+
+    auto u9_ic = std::make_unique<bench::IC_74S373>();
+    u9_ic->install(mb.u9);
+    u9_ic->power_on();
+    mb.u9.insert(std::move(u9_ic));
+
+    auto u10_ic = std::make_unique<bench::IC_74S373>();
+    u10_ic->install(mb.u10);
+    u10_ic->power_on();
+    mb.u10.insert(std::move(u10_ic));
+    spdlog::info("  U7:  {} [{}] -- {}", mb.u7.ref(), mb.u7.label(), mb.u7.occupied() ? "occupied" : "empty");
+    spdlog::info("  U9:  {} [{}] -- {}", mb.u9.ref(), mb.u9.label(), mb.u9.occupied() ? "occupied" : "empty");
+    spdlog::info("  U10: {} [{}] -- {}", mb.u10.ref(), mb.u10.label(), mb.u10.occupied() ? "occupied" : "empty");
+
+    // --- Insert 74S245 data bus transceiver (U8) ---
+    spdlog::info("--- Inserting data bus transceiver ---");
+    auto u8_ic = std::make_unique<bench::IC_74S245>();
+    u8_ic->install(mb.u8);
+    u8_ic->power_on();
+    mb.u8.insert(std::move(u8_ic));
+    spdlog::info("  U8:  {} [{}] -- {}", mb.u8.ref(), mb.u8.label(), mb.u8.occupied() ? "occupied" : "empty");
+
+    // --- Insert ROMs ---
+    spdlog::info("--- Inserting ROMs ---");
+
+    auto rom_u29 = std::make_unique<bench::IC_ROM_8K>("BASIC_C1");
+    rom_u29->load("assets/IBM 5150 - Cassette BASIC version C1.10 - U29 - 5000019.bin");
+    rom_u29->install(mb.u29);
+    rom_u29->power_on();
+    mb.u29.insert(std::move(rom_u29));
+
+    auto rom_u30 = std::make_unique<bench::IC_ROM_8K>("BASIC_C2");
+    rom_u30->load("assets/IBM 5150 - Cassette BASIC version C1.10 - U30 - 5000021.bin");
+    rom_u30->install(mb.u30);
+    rom_u30->power_on();
+    mb.u30.insert(std::move(rom_u30));
+
+    auto rom_u31 = std::make_unique<bench::IC_ROM_8K>("BASIC_C3");
+    rom_u31->load("assets/IBM 5150 - Cassette BASIC version C1.10 - U31 - 5000022.bin");
+    rom_u31->install(mb.u31);
+    rom_u31->power_on();
+    mb.u31.insert(std::move(rom_u31));
+
+    auto rom_u32 = std::make_unique<bench::IC_ROM_8K>("BASIC_C4");
+    rom_u32->load("assets/IBM 5150 - Cassette BASIC version C1.10 - U32 - 5000023.bin");
+    rom_u32->install(mb.u32);
+    rom_u32->power_on();
+    mb.u32.insert(std::move(rom_u32));
+
+    auto bios_rom = std::make_unique<bench::IC_ROM_8K>("BIOS");
+    bios_rom->load("assets/BIOS_IBM5150_27OCT82_1501476_U33.BIN");
+    bios_rom->install(mb.u33);
+    bios_rom->power_on();
+    mb.u33.insert(std::move(bios_rom));
+
+    spdlog::info("  U29: {} [{}] -- {}", mb.u29.ref(), mb.u29.label(), mb.u29.occupied() ? "occupied" : "empty");
+    spdlog::info("  U30: {} [{}] -- {}", mb.u30.ref(), mb.u30.label(), mb.u30.occupied() ? "occupied" : "empty");
+    spdlog::info("  U31: {} [{}] -- {}", mb.u31.ref(), mb.u31.label(), mb.u31.occupied() ? "occupied" : "empty");
+    spdlog::info("  U32: {} [{}] -- {}", mb.u32.ref(), mb.u32.label(), mb.u32.occupied() ? "occupied" : "empty");
+    spdlog::info("  U33: {} [{}] -- {}", mb.u33.ref(), mb.u33.label(), mb.u33.occupied() ? "occupied" : "empty");
 
     // --- Power on: VCC goes High, 8284A starts oscillating ---
     spdlog::info("--- Power on ---");

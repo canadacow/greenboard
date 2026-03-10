@@ -1,0 +1,98 @@
+#include "ic/ic_74s245.h"
+#include <spdlog/spdlog.h>
+
+namespace bench {
+
+IC_74S245::IC_74S245() : Component("74S245") {}
+
+void IC_74S245::install(Socket& socket) {
+    // A side: A1=pin2 .. A8=pin9
+    for (int i = 0; i < 8; ++i)
+        pin_a_[i] = socket.pin_signal(2 + i);
+
+    // B side: B1=pin18, B2=pin17, ..., B8=pin11 (reversed)
+    for (int i = 0; i < 8; ++i)
+        pin_b_[i] = socket.pin_signal(18 - i);
+
+    // Control
+    pin_g_   = socket.pin_signal(1);   // ~G
+    pin_dir_ = socket.pin_signal(19);  // DIR
+    pin_vcc_ = socket.pin_signal(20);  // VCC
+
+    // Subscribe to control signals
+    if (pin_g_)   pin_g_->connect(this);
+    if (pin_dir_) pin_dir_->connect(this);
+    if (pin_vcc_) pin_vcc_->connect(this);
+
+    // Subscribe to all data pins (both sides)
+    for (int i = 0; i < 8; ++i) {
+        if (pin_a_[i]) pin_a_[i]->connect(this);
+        if (pin_b_[i]) pin_b_[i]->connect(this);
+    }
+
+    spdlog::debug("[74S245] installed into socket {}", socket.ref());
+}
+
+void IC_74S245::on_signal_change(Signal& signal, Level /*old_level*/, Level new_level) {
+    bool enabled = pin_g_ && pin_g_->level() == Level::Low;
+
+    // If disabled, release all outputs
+    if (!enabled) {
+        if (&signal == pin_g_) release_all();
+        return;
+    }
+
+    // Control change: full update
+    if (&signal == pin_g_ || &signal == pin_dir_) {
+        update_outputs();
+        return;
+    }
+
+    bool a_to_b = pin_dir_ && pin_dir_->level() == Level::High;
+
+    // Only propagate from input side to output side
+    if (a_to_b) {
+        // A -> B: propagate A-side changes to B
+        for (int i = 0; i < 8; ++i) {
+            if (&signal == pin_a_[i] && pin_b_[i]) {
+                pin_b_[i]->drive(new_level);
+                return;
+            }
+        }
+    } else {
+        // B -> A: propagate B-side changes to A
+        for (int i = 0; i < 8; ++i) {
+            if (&signal == pin_b_[i] && pin_a_[i]) {
+                pin_a_[i]->drive(new_level);
+                return;
+            }
+        }
+    }
+}
+
+void IC_74S245::update_outputs() {
+    bool a_to_b = pin_dir_ && pin_dir_->level() == Level::High;
+
+    if (a_to_b) {
+        // Drive B from A, release A
+        for (int i = 0; i < 8; ++i) {
+            if (pin_b_[i])
+                pin_b_[i]->drive(pin_a_[i] ? pin_a_[i]->level() : Level::HiZ);
+        }
+    } else {
+        // Drive A from B, release B
+        for (int i = 0; i < 8; ++i) {
+            if (pin_a_[i])
+                pin_a_[i]->drive(pin_b_[i] ? pin_b_[i]->level() : Level::HiZ);
+        }
+    }
+}
+
+void IC_74S245::release_all() {
+    for (int i = 0; i < 8; ++i) {
+        if (pin_a_[i]) pin_a_[i]->release();
+        if (pin_b_[i]) pin_b_[i]->release();
+    }
+}
+
+} // namespace bench
