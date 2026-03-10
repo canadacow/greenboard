@@ -57,6 +57,7 @@ private:
     std::string name_;
     std::jthread thread_;
     Mailbox* mailbox_;  // from static pool, outlives this Component
+    bool pending_ack_ = false;  // deferred ack from previous wait_mailbox
 };
 
 } // namespace bench

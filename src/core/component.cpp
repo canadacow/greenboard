@@ -30,15 +30,21 @@ void Component::run(std::stop_token stop) {
         wait_mailbox(stop);
         if (stop.stop_requested()) break;
         on_signal_change();
-        Signal::ack();
     }
 
     on_power_off();
 }
 
-// Blocking: sleep until any connected signal changes.
+// Blocking: ack previous wake (deferred), then sleep until next signal change.
+// Deferred ack keeps pending > 0 during all processing, so the clock
+// cannot advance until this component is truly blocked and ready.
 void Component::wait_mailbox(std::stop_token& stop) {
+    if (pending_ack_) {
+        Signal::ack();
+        pending_ack_ = false;
+    }
     mailbox_->sem.acquire();
+    pending_ack_ = true;
 }
 
 bool Component::stop_requested() const {

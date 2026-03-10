@@ -34,7 +34,6 @@ void IC_8284A::run(std::stop_token stop) {
         if (pin_vcc_ && pin_vcc_->level() == Level::High)
             break;
         wait_mailbox(stop);
-        Signal::ack();
     }
 
     if (stop.stop_requested()) return;
