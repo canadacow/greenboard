@@ -33,7 +33,7 @@ namespace bench {
 //   Pin 35-39: A19-A15 (address bus)
 //   Pin 40: VCC (+5V)
 //
-// Bus cycle status encoding (active low, accent on ~S2/~S1/~S0):
+// Bus cycle status encoding (active low, ~S2/~S1/~S0):
 //   0,0,0 = INTA       0,0,1 = IOR
 //   0,1,0 = IOW        0,1,1 = Halt
 //   1,0,0 = Opcode fetch  1,0,1 = Memory read
@@ -53,7 +53,7 @@ protected:
     void on_signal_change(Signal& signal, Level old_level, Level new_level) override;
 
 private:
-    // --- Bus operations (accent: every mem[] access goes through these) ---
+    // --- Bus operations ---
     uint8_t bus_read_byte(uint32_t address);
     void bus_write_byte(uint32_t address, uint8_t value);
     uint16_t bus_read_word(uint32_t address);
@@ -61,26 +61,33 @@ private:
     uint8_t io_read_byte(uint16_t port);
     void io_write_byte(uint16_t port, uint8_t value);
 
-    // Drive the 20-bit address onto A0-A19 (pins 2-8, 9-16 low byte, 35-39)
     void drive_address(uint32_t address);
-    // Drive 8-bit data onto AD0-AD7
     void drive_data(uint8_t value);
-    // Read 8-bit data from AD0-AD7
     uint8_t read_data();
-    // Release AD0-AD7 (tri-state)
     void release_data();
-    // Drive S0/S1/S2 bus cycle status
     void drive_status(uint8_t s2, uint8_t s1, uint8_t s0);
-    // Set passive (no bus cycle) on status lines
     void drive_status_passive();
-
-    // Wait for CLK edge
     void wait_clk_rising();
     void wait_clk_falling();
 
+    // --- Memory routing (register file or bus) ---
+    static constexpr uint32_t REGS_BASE = 0xF0000;
+
+    uint8_t rmem8(uint32_t addr);
+    uint16_t rmem16(uint32_t addr);
+    void wmem8(uint32_t addr, uint8_t val);
+    void wmem16(uint32_t addr, uint16_t val);
+    uint32_t rmem(uint32_t addr);   // byte or word based on i_w_
+    void wmem(uint32_t addr, uint32_t val);
+
+    // --- Stack ---
+    void push16(uint16_t val);
+    uint16_t pop16();
+
     // --- CPU core (ported from 8086tiny) ---
     void cpu_reset();
-    void execute();                     // single instruction
+    void load_bios_tables();
+    void execute();
     void set_opcode(uint8_t opcode);
     void pc_interrupt(uint8_t interrupt_num);
     void make_flags();
@@ -90,6 +97,19 @@ private:
     int  set_CF(int new_CF);
     int  set_AF(int new_AF);
     int  set_OF(int new_OF);
+
+    // --- Decode helpers ---
+    void decode_rm_reg();
+    uint32_t get_reg_addr(int reg_id);
+    int top_bit();
+    int sign_of(int val);
+    void index_inc(int reg_id);
+
+    // Instruction fetch
+    uint8_t fetch_byte(int offset);
+    uint8_t prefetch_[8] = {};
+    int prefetch_len_ = 0;
+    uint32_t prefetch_base_ = 0;
 
     // --- Pin pointers ---
 
@@ -123,13 +143,10 @@ private:
 
     // --- CPU state (from 8086tiny, adapted) ---
 
-    // Registers stored as an array, accessed via regs16/regs8 indices.
-    // 8086tiny stores 16-bit regs at byte offsets 0-31 (16 regs x 2 bytes),
-    // and individual flag bytes at offsets 40-48 (FLAG_CF..FLAG_OF).
-    // Sized to 64 bytes to cover all indices.
+    // Registers: 16-bit regs at byte offsets 0-27 (14 regs x 2 bytes),
+    // individual flag bytes at offsets 40-48 (FLAG_CF..FLAG_OF).
     uint8_t regs_[64] = {};
 
-    // Convenience pointers into regs_[]
     uint16_t* regs16() { return reinterpret_cast<uint16_t*>(regs_); }
     uint8_t*  regs8()  { return regs_; }
 
@@ -157,12 +174,10 @@ private:
 
     // Interrupt state
     bool nmi_pending_ = false;
-    bool nmi_prev_ = false;   // for edge detection
 
     // CLK tracking for bus cycle timing
     volatile bool clk_level_ = false;
     std::binary_semaphore clk_sem_{0};
-    bool clk_waited_rising_ = false;
 };
 
 } // namespace bench
