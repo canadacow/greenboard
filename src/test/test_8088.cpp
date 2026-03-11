@@ -46,6 +46,8 @@ struct PIC {
     uint8_t isr = 0;          // in-service register
     bool read_isr = false;    // OCW3: read ISR instead of IRR
     Signal* intr = nullptr;   // INTR output to CPU
+    bool inta_pending = false;   // true after first INTA pulse (vector latched)
+    uint8_t latched_vector = 0;  // vector latched on first INTA pulse
 
     void write(uint16_t port, uint8_t val) {
         if (port == 0x20) {
@@ -121,18 +123,28 @@ struct PIC {
         update_intr();
     }
 
-    // INTA: acknowledge highest-priority pending interrupt
+    // INTA: two-pulse acknowledge sequence.
+    // First INTA bus cycle: freeze priority, latch vector, set ISR, clear IRR.
+    // Second INTA bus cycle: return latched vector.
     uint8_t ack() {
+        if (inta_pending) {
+            // Second INTA pulse: return previously latched vector
+            inta_pending = false;
+            spdlog::trace("[PIC] INTA pulse 2 -> vector {}", latched_vector);
+            return latched_vector;
+        }
+        // First INTA pulse: acknowledge highest-priority pending interrupt
         int irq = highest_priority();
-        if (irq < 0) return vector_base; // shouldn't happen
+        if (irq < 0) { inta_pending = true; latched_vector = vector_base; return vector_base; }
         irr &= ~(1 << irq);
         isr |= (1 << irq);
-        uint8_t vec = vector_base + irq;
-        spdlog::trace("[PIC] INTA -> vector {} (IRQ{}), ISR=0x{:02X}", vec, irq, isr);
+        latched_vector = vector_base + irq;
+        inta_pending = true;
+        spdlog::trace("[PIC] INTA pulse 1 -> vector {} (IRQ{}), ISR=0x{:02X}", latched_vector, irq, isr);
         // Auto-EOI: clear ISR immediately
         if (icw4 & 0x02) isr &= ~(1 << irq);
         update_intr();
-        return vec;
+        return latched_vector;
     }
 
     int highest_priority() {
@@ -157,6 +169,7 @@ struct PIC {
         icw1 = 0; vector_base = 0; icw4 = 0;
         imr = 0xFF; irr = 0; isr = 0;
         read_isr = false;
+        inta_pending = false; latched_vector = 0;
     }
 };
 
@@ -525,6 +538,24 @@ int main() {
             {0x050A, 0xFFFF, "IDIV byte rem"},
             {0x050C, 0x0001, "DIV by zero"},
             {0x050E, 0x0001, "DIV overflow"},
+        }},
+        {"IRQ (advanced)", "test_irq.bin", {
+            {0x0500, 0x0001, "IRQ1 fires (INT 9)"},
+            {0x0502, 0x0001, "Priority: IRQ0 first"},
+            {0x0504, 0x0001, "Priority: IRQ1 second"},
+            {0x0506, 0x0001, "Masked IRQ blocked"},
+            {0x0508, 0x0001, "Specific EOI"},
+            {0x050A, 0x0001, "Auto-EOI"},
+            {0x050C, 0x0002, "Nested HW interrupts"},
+        }},
+        {"DOS INT 21h", "test_dos.bin", {
+            {0x0500, 0x0005, "AH=02 char count"},
+            {0x0502, 0x0048, "AH=02 first char 'H'"},
+            {0x0504, 0x006F, "AH=02 last char 'o'"},
+            {0x0506, 0x000D, "AH=09 string length"},
+            {0x0508, 0x0048, "AH=09 first char 'H'"},
+            {0x050A, 0x0021, "AH=09 last char '!'"},
+            {0x050C, 0x002A, "AH=4C exit code 42"},
         }},
     };
 
