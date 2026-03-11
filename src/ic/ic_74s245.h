@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/inline_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -28,8 +28,8 @@ namespace bench {
 //   ~G = ~DEN from 8288
 //   DIR = DT/~R from 8288 (via gating logic)
 //
-// Threading: Reactive IC. Default run() -- blocks on mailbox.
-class IC_74S245 : public Component {
+// Threading: InlineComponent -- combinational, no thread.
+class IC_74S245 : public InlineComponent {
 public:
     IC_74S245();
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/threaded_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -28,7 +28,7 @@ namespace bench {
 // BIOS init: ICW1=0x13, ICW2=0x08 (IRQ0=INT 08h), ICW4=0x09 (8086 mode).
 //
 // Threading: Reactive IC. Uses default run() -- blocks on mailbox.
-class IC_8259A : public Component {
+class IC_8259A : public ThreadedComponent {
 public:
     IC_8259A();
 

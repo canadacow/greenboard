@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S175::IC_74S175() : Component("74S175") {}
+IC_74S175::IC_74S175() : ThreadedComponent("74S175") {}
 
 void IC_74S175::install(Socket& socket) {
     pin_clr_ = socket.pin_signal(1);    // ~CLR

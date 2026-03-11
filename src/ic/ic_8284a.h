@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/threaded_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -32,7 +32,7 @@ namespace bench {
 //   The IC's thread IS the oscillator. When VCC goes High, it enters a
 //   spin loop toggling OSC/CLK/PCLK. RDY/RES pins are polled directly
 //   each tick. When VCC drops, it stops.
-class IC_8284A : public Component {
+class IC_8284A : public ThreadedComponent {
 public:
     IC_8284A();
 

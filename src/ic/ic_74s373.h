@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/inline_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -27,8 +27,8 @@ namespace bench {
 //   LE Low  + ~OE Low  -> latched: Q holds last value, outputs driven
 //   ~OE High           -> outputs tri-stated regardless of LE
 //
-// Threading: Reactive IC. Default run() -- blocks on mailbox.
-class IC_74S373 : public Component {
+// Threading: InlineComponent -- combinational, no thread.
+class IC_74S373 : public InlineComponent {
 public:
     IC_74S373();
 

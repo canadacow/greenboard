@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S373::IC_74S373() : Component("74S373") {}
+IC_74S373::IC_74S373() : InlineComponent("74S373") {}
 
 void IC_74S373::install(Socket& socket) {
     // D inputs

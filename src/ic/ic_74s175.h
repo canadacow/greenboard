@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/threaded_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -34,7 +34,7 @@ namespace bench {
 //
 // Threading: Reactive IC. Uses default run() -- blocks on mailbox,
 // dispatches on_signal_change() for CLK rising edges and ~CLR.
-class IC_74S175 : public Component {
+class IC_74S175 : public ThreadedComponent {
 public:
     IC_74S175();
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/threaded_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -42,7 +42,7 @@ namespace bench {
 // Threading: Active IC. Overrides run() with instruction execution loop.
 //            Blocks on wait_mailbox() until VCC goes High.
 //            Each instruction step drives bus signals for memory/IO access.
-class IC_8088 : public Component {
+class IC_8088 : public ThreadedComponent {
 public:
     IC_8088(uint16_t start_cs = 0xF000, uint16_t start_ip = 0x0100);
 

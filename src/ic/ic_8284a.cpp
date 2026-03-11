@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8284A::IC_8284A() : Component("8284A") {}
+IC_8284A::IC_8284A() : ThreadedComponent("8284A") {}
 
 void IC_8284A::install(Socket& socket) {
     // Bind to socket pin signals (already wired by BRD parser).

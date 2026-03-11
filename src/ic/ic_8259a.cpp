@@ -1,9 +1,10 @@
 #include "ic/ic_8259a.h"
+#include "core/inline_component.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
 
-IC_8259A::IC_8259A() : Component("8259A") {}
+IC_8259A::IC_8259A() : ThreadedComponent("8259A") {}
 
 void IC_8259A::install(Socket& socket) {
     // Data bus: D7=pin4, D6=pin5, ..., D0=pin11
@@ -350,17 +351,23 @@ void IC_8259A::evaluate_int() {
 }
 
 void IC_8259A::drive_data(uint8_t value) {
+    auto& ic = pin_d_[0]->get_inline();
+    ic.begin_transaction();
     for (int i = 0; i < 8; ++i) {
         if (pin_d_[i])
             pin_d_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
     }
+    ic.commit_transaction();
 }
 
 void IC_8259A::release_data() {
+    auto& ic = pin_d_[0]->get_inline();
+    ic.begin_transaction();
     for (int i = 0; i < 8; ++i) {
         if (pin_d_[i])
             pin_d_[i]->release();
     }
+    ic.commit_transaction();
 }
 
 uint8_t IC_8259A::read_data() const {

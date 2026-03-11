@@ -1,72 +1,53 @@
 #pragma once
 #include "core/types.h"
-#include "core/signal.h"
 #include <string>
 #include <vector>
-#include <thread>
-#include <atomic>
-#include <semaphore>
 
 namespace bench {
 
 class Signal;
 
-// Base class for any IC or active component on the motherboard.
+// Base class for anything that sits in a socket on the motherboard.
 //
-// Each component runs on its own thread. When a signal it's subscribed
-// to changes, the component's mailbox semaphore is released. The
-// component wakes and calls on_signal_change() to poll pin levels.
+// Two concrete subclasses model the two kinds of IC:
 //
-// This mirrors real hardware: ICs react concurrently to signal changes
-// on their input pins. The wires (Signals) are the communication mechanism.
+//   ThreadedComponent -- sequential/clocked ICs (8088, 8284A, 8288, 8259A, ...).
+//     Has its own thread and mailbox. Woken asynchronously by signal changes.
 //
-// Reactive components (default): block on the mailbox, wake on signal
-// changes, call on_signal_change() to check pin levels.
-// Active components (e.g. oscillators): override run() with their own loop.
+//   InlineComponent -- combinational logic (74S373, 74S138, 74S245).
+//     No thread. Executes synchronously in the caller's context when an
+//     input signal changes. Must only be driven inside a Signal transaction.
+//
 class Component {
 public:
     explicit Component(std::string name);
-    virtual ~Component() { power_off(); }
+    virtual ~Component();
 
     const std::string& name() const { return name_; }
     void set_name(std::string name) { name_ = std::move(name); }
 
-    // Power control -- starts/stops the component's thread.
-    void power_on();
-    void power_off();
-    bool is_powered() const { return thread_.joinable(); }
-
-    // The mailbox for this component. Signals store this pointer.
-    Mailbox* mailbox() const { return mailbox_; }
+    // Power control. Subclass semantics differ:
+    //   ThreadedComponent: starts/stops the worker thread.
+    //   InlineComponent: resets internal state (no thread).
+    virtual void power_on() = 0;
+    virtual void power_off() = 0;
+    virtual bool is_powered() const = 0;
 
 protected:
-    // Called when woken from wait_mailbox. Check pin levels directly.
+    // Called when a connected signal changes.
     virtual void on_signal_change() {}
     virtual void on_power_on() {}
     virtual void on_power_off() {}
 
-    // Override for active components (oscillators, etc.) that need their own loop.
-    // Default implementation blocks on the mailbox waiting for signal events.
-    virtual void run(std::stop_token stop);
+    // Each subclass routes itself into the correct Signal subscriber list.
+    virtual void subscribe_to(Signal& sig) = 0;
 
-    // Block until a connected signal changes, then return.
-    void wait_mailbox(std::stop_token& stop);
+    std::vector<Signal*> connected_signals_;
 
-    // Ack the deferred pending from the last wait_mailbox wake.
-    // Call this when transitioning from wait_mailbox to a spin loop.
-    void flush_pending_ack();
-
-    // Check if stop has been requested on this component's thread.
-    bool stop_requested() const;
+    friend class Signal;
 
 private:
     std::string name_;
-    std::jthread thread_;
-    Mailbox* mailbox_;  // from static pool, outlives this Component
-    bool pending_ack_ = false;  // deferred ack from previous wait_mailbox
-    std::vector<Signal*> connected_signals_;  // for auto-disconnect on destroy
-
-    friend class Signal;  // Signal::connect registers here
 };
 
 } // namespace bench

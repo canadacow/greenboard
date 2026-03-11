@@ -10,17 +10,17 @@
 namespace bench {
 
 class Component;
+class InlineComponent;
 
 // A single named signal line -- a wire/trace on the motherboard.
 //
-// This is the fundamental communication primitive. In real hardware,
-// a copper trace connects multiple IC pins. When one IC drives the
-// trace, every other IC sees the voltage change instantly.
+// drive() updates the level and propagates to subscribers:
+//   1. Sync (InlineComponent): called inline, immediately, in the caller's thread.
+//   2. Async (ThreadedComponent): woken via mailbox semaphore.
 //
-// In our model, Signal is a mailbox. drive() updates the level and
-// posts a SignalEvent to every subscribed Mailbox. The Mailbox memory
-// lives in a static pool, so post() is safe even after the owning
-// Component is destroyed.
+// If sync subscribers exist, drive() asserts that a transaction is active.
+// This enforces that combinational propagation always completes before
+// any async subscriber wakes.
 class Signal {
 public:
     explicit Signal(std::string name);
@@ -43,8 +43,17 @@ public:
     void reset();
 
     // Subscribe/unsubscribe a component to signal change events.
+    // Routes through Component::subscribe_to() for type-safe dispatch.
     void connect(Component* c);
     void disconnect(Component* c);
+
+    // Type-specific subscriber registration (called by subscribe_to()).
+    void add_async(Mailbox* mb);
+    void add_sync(InlineComponent* ic);
+
+    // Returns the first InlineComponent subscriber.
+    // Asserts if none -- the caller must know the topology.
+    InlineComponent& get_inline() const;
 
     // Global pending-signal counter. Incremented by drive() per subscriber,
     // decremented by ack(). Clock must not advance until quiescent.
@@ -65,8 +74,12 @@ private:
     std::atomic<Level> level_{Level::HiZ};
     Level pull_ = Level::HiZ;  // default: no pull, floats
 
-    // Subscribers stored as Mailbox* (from static pool, always valid).
+    // Async subscribers: threaded ICs woken via mailbox.
     std::vector<Mailbox*> subscribers_;
+
+    // Sync subscribers: inline ICs called in caller's thread.
+    std::vector<InlineComponent*> sync_subscribers_;
+
     std::mutex sub_mutex_;  // only used by connect/disconnect (setup time)
 };
 

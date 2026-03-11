@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/threaded_component.h"
 #include "board/socket.h"
 #include <array>
 #include <string>
@@ -28,7 +28,7 @@ namespace bench {
 //           When ~CS is High, D0-D7 are tri-stated.
 //
 // Threading: Reactive IC. Default run() -- blocks on mailbox.
-class IC_ROM_8K : public Component {
+class IC_ROM_8K : public ThreadedComponent {
 public:
     explicit IC_ROM_8K(const std::string& label = "ROM",
                        const std::string& file_path = "");

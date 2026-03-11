@@ -1,4 +1,5 @@
 #include "ic/ic_8088.h"
+#include "core/inline_component.h"
 #include <spdlog/spdlog.h>
 #include <cstring>
 
@@ -48,7 +49,7 @@ static constexpr uint8_t BUS_MEMW    = 6;  // 1,1,0
 static constexpr uint8_t BUS_PASSIVE = 7;  // 1,1,1
 
 IC_8088::IC_8088(uint16_t start_cs, uint16_t start_ip)
-    : Component("8088"), start_cs_(start_cs), start_ip_(start_ip) {}
+    : ThreadedComponent("8088"), start_cs_(start_cs), start_ip_(start_ip) {}
 
 void IC_8088::install(Socket& socket) {
     for (int i = 0; i < 8; ++i)
@@ -142,8 +143,11 @@ void IC_8088::run(std::stop_token stop) {
 
     drive_status_passive();
     release_data();
+    auto& ic = pin_a_upper_[0]->get_inline();
+    ic.begin_transaction();
     for (int i = 0; i < 12; ++i)
         if (pin_a_upper_[i]) pin_a_upper_[i]->release();
+    ic.commit_transaction();
     if (pin_lock_) pin_lock_->release();
     if (pin_qs0_) pin_qs0_->release();
     if (pin_qs1_) pin_qs1_->release();
@@ -154,20 +158,26 @@ void IC_8088::run(std::stop_token stop) {
 // ========================================================================
 
 void IC_8088::drive_address(uint32_t address) {
+    auto& ic = pin_ad_[0]->get_inline();
+    ic.begin_transaction();
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i])
             pin_ad_[i]->drive((address >> i) & 1 ? Level::High : Level::Low);
     for (int i = 0; i < 12; ++i)
         if (pin_a_upper_[i])
             pin_a_upper_[i]->drive((address >> (i + 8)) & 1 ? Level::High : Level::Low);
+    ic.commit_transaction();
     spdlog::trace("[8088] drive_address 0x{:05X} ad[0]@{} level={}", address,
         (void*)pin_ad_[0], pin_ad_[0] ? (int)pin_ad_[0]->level() : -1);
 }
 
 void IC_8088::drive_data(uint8_t value) {
+    auto& ic = pin_ad_[0]->get_inline();
+    ic.begin_transaction();
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i])
             pin_ad_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
+    ic.commit_transaction();
 }
 
 uint8_t IC_8088::read_data() {
@@ -189,8 +199,11 @@ uint8_t IC_8088::read_data() {
 }
 
 void IC_8088::release_data() {
+    auto& ic = pin_ad_[0]->get_inline();
+    ic.begin_transaction();
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i]) pin_ad_[i]->release();
+    ic.commit_transaction();
 }
 
 void IC_8088::drive_status(uint8_t s2, uint8_t s1, uint8_t s0) {

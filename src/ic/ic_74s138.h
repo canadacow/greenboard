@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/inline_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -32,8 +32,8 @@ namespace bench {
 //   Otherwise:
 //     All outputs High (inactive).
 //
-// Threading: Reactive IC. Default run() -- blocks on mailbox.
-class IC_74S138 : public Component {
+// Threading: InlineComponent -- combinational, no thread.
+class IC_74S138 : public InlineComponent {
 public:
     IC_74S138();
 

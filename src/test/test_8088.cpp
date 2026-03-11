@@ -13,7 +13,8 @@
 // (physical 0xF0123). DS=SS=0 after reset. Results checked at 0x0200+.
 
 #include "core/signal.h"
-#include "core/component.h"
+#include "core/threaded_component.h"
+#include "core/inline_component.h"
 #include "board/socket.h"
 #include "ic/ic_8088.h"
 #include "ic/ic_8288.h"
@@ -38,9 +39,9 @@ using namespace bench;
 // Subscribes to CLK, detects edges, drives data/control for each T-state.
 // Handles memory and generic I/O. PIC chip-select comes from U66 (74S138).
 // =========================================================================
-class BusGlue : public Component {
+class BusGlue : public ThreadedComponent {
 public:
-    BusGlue() : Component("BusGlue") {}
+    BusGlue() : ThreadedComponent("BusGlue") {}
 
     Signal** xa = nullptr;       // XA0-XA19 (20 pointers) -- latched address from 74S373s
     Signal** d = nullptr;        // D0-D7 (8 pointers) -- system data bus
@@ -111,14 +112,20 @@ private:
     }
 
     void drive_d(uint8_t val) {
+        auto& ic = d[0]->get_inline();
+        ic.begin_transaction();
         for (int i = 0; i < 8; ++i)
             if (d[i])
                 d[i]->drive((val >> i) & 1 ? Level::High : Level::Low);
+        ic.commit_transaction();
     }
 
     void release_d() {
+        auto& ic = d[0]->get_inline();
+        ic.begin_transaction();
         for (int i = 0; i < 8; ++i)
             if (d[i]) d[i]->release();
+        ic.commit_transaction();
     }
 
     bool is_read_cycle()  { return cycle_type == 0 || cycle_type == 1 || cycle_type == 4 || cycle_type == 5; }

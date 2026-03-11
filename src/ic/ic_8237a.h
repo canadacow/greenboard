@@ -1,5 +1,5 @@
 #pragma once
-#include "core/component.h"
+#include "core/threaded_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -38,7 +38,7 @@ namespace bench {
 //   CH1-CH3: available for ISA peripherals
 //
 // Threading: Reactive IC. Uses default run() -- blocks on mailbox.
-class IC_8237A : public Component {
+class IC_8237A : public ThreadedComponent {
 public:
     IC_8237A();
 

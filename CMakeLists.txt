@@ -11,6 +11,8 @@ add_executable(bench
     src/main.cpp
     src/core/signal.cpp
     src/core/component.cpp
+    src/core/threaded_component.cpp
+    src/core/inline_component.cpp
     src/board/socket.cpp
     src/board/isa_slot.cpp
     src/board/passive.cpp
@@ -42,6 +44,8 @@ add_executable(test_8088
     src/test/test_8088.cpp
     src/core/signal.cpp
     src/core/component.cpp
+    src/core/threaded_component.cpp
+    src/core/inline_component.cpp
     src/board/socket.cpp
     src/ic/ic_8088.cpp
     src/ic/ic_8288.cpp

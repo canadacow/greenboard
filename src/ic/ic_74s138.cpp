@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S138::IC_74S138() : Component("74S138") {}
+IC_74S138::IC_74S138() : InlineComponent("74S138") {}
 
 void IC_74S138::install(Socket& socket) {
     // Select inputs
