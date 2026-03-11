@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S175::IC_74S175() : ThreadedComponent("74S175") {}
+IC_74S175::IC_74S175() : InlineComponent("74S175") {}
 
 void IC_74S175::install(Socket& socket) {
     pin_clr_ = socket.pin_signal(1);    // ~CLR
@@ -29,9 +29,9 @@ void IC_74S175::install(Socket& socket) {
     pin_nq_[3] = socket.pin_signal(13); // ~4Q
 
     // Subscribe to clock and clear.
-    if (pin_clk_) pin_clk_->connect(this);
-    if (pin_clr_) pin_clr_->connect(this);
-    if (pin_vcc_) pin_vcc_->connect(this);
+    if (pin_clk_) subscribe_to(*pin_clk_);
+    if (pin_clr_) subscribe_to(*pin_clr_);
+    if (pin_vcc_) subscribe_to(*pin_vcc_);
 
     spdlog::debug("[74S175] installed into socket {}", socket.ref());
 }

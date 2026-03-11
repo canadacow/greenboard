@@ -1,5 +1,5 @@
 #pragma once
-#include "core/threaded_component.h"
+#include "core/inline_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -32,9 +32,9 @@ namespace bench {
 //   FF2: PCLK / 2 divider (~3Q fed back to 3D, 3Q = 1.193 MHz PIT clock)
 //   FF3: unused
 //
-// Threading: Reactive IC. Uses default run() -- blocks on mailbox,
-// dispatches on_signal_change() for CLK rising edges and ~CLR.
-class IC_74S175 : public ThreadedComponent {
+// Threading: Inline IC. Executes synchronously in the driving thread.
+// CLK rising edge latches D inputs, ~CLR async clears all outputs.
+class IC_74S175 : public InlineComponent {
 public:
     IC_74S175();
 

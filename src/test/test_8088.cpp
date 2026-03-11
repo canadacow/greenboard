@@ -297,7 +297,7 @@ int main() {
 
     // Test table
     std::vector<TestCase> tests = {
-#if 0
+#if 1
         {"MOV/XCHG", "test_mov.bin", {
             {0x0500, 0x1234, "MOV imm16"},
             {0x0502, 0x5678, "MOV reg-reg"},
@@ -398,7 +398,7 @@ int main() {
             {0x050C, 0x0001, "EOI clears ISR"},
             {0x050E, 0x0001, "I/O doesn't touch memory"},
         }},
-#if 0
+#if 1
         {"DIV/IDIV", "test_div.bin", {
             {0x0500, 0x0003, "DIV byte quot"},
             {0x0502, 0x0001, "DIV byte rem"},
