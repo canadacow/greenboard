@@ -474,6 +474,7 @@ void IC_8088::cpu_reset() {
     clk_fell_ = false;
     prefetch_len_ = 0;
     prefetch_base_ = 0;
+    halted_.store(false, std::memory_order_release);
 }
 
 int IC_8088::set_CF(int new_CF) { return regs8()[FLAG_CF] = !!new_CF; }
@@ -532,7 +533,7 @@ int IC_8088::AAA_AAS(int which_operation) {
 
 void IC_8088::execute() {
     uint32_t cs_ip = 16u * regs16()[REG_CS] + reg_ip_;
-    if (cs_ip == 0) return; // CS:IP = 0:0 = halt convention
+    if (cs_ip == 0) { halted_.store(true, std::memory_order_release); return; }
 
     // Reset prefetch
     prefetch_base_ = cs_ip;
@@ -1178,6 +1179,9 @@ void IC_8088::execute() {
     }
     case 48: // 0F xx (emulator-specific, not used on real hardware)
         break;
+    case 53: // HLT
+        halted_.store(true, std::memory_order_release);
+        return;
 
     case 3: // PUSH regs16
         push16(regs16()[i_reg4bit_]);

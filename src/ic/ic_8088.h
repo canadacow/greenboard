@@ -280,6 +280,13 @@ private:
     // Cached stop token for CLK spin loops
     std::stop_token stop_;
 
+    // Halted flag -- set when CPU reaches HLT or CS:IP = 0:0
+    std::atomic<bool> halted_{false};
+public:
+    bool halted() const { return halted_.load(std::memory_order_acquire); }
+    void clear_halt() { halted_.store(false, std::memory_order_release); }
+private:
+
     // Start address (set via constructor, applied in cpu_reset)
     uint16_t start_cs_;
     uint16_t start_ip_;

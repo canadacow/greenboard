@@ -407,7 +407,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::trace);
+    spdlog::set_level(spdlog::level::debug);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -597,10 +597,18 @@ int main() {
         s1.drive(Level::High);
         s2.drive(Level::High);
         vcc.drive(Level::High);
+        cpu->clear_halt();
         clk_ic.power_on();
         cpu->power_on();
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        // Wait for CPU to halt, with 5s safety timeout
+        {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            if (!cpu->halted())
+                spdlog::warn("  timeout -- CPU did not halt within 5s");
+        }
 
         // Power off
         vcc.drive(Level::HiZ);
