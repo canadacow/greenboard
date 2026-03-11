@@ -27,7 +27,6 @@ public:
 
     const std::string& name() const { return name_; }
     Level level() const { return level_.load(std::memory_order_acquire); }
-    Level prev_level() const { return prev_level_; }
 
     // Drive the signal to a new level. Notifies all subscribers.
     void drive(Level lvl);
@@ -64,7 +63,6 @@ public:
 private:
     std::string name_;
     std::atomic<Level> level_{Level::HiZ};
-    Level prev_level_ = Level::HiZ;  // previous level (before last drive)
     Level pull_ = Level::HiZ;  // default: no pull, floats
 
     // Subscribers stored as Mailbox* (from static pool, always valid).

@@ -12,7 +12,6 @@ Signal::Signal(std::string name) : name_(std::move(name)) {}
 void Signal::drive(Level lvl) {
     Level old = level_.load(std::memory_order_acquire);
     if (lvl == old) return;
-    prev_level_ = old;
     level_.store(lvl, std::memory_order_release);
 
     for (auto* mb : subscribers_) {
@@ -28,7 +27,6 @@ void Signal::release() {
 
 void Signal::reset() {
     level_.store(Level::HiZ, std::memory_order_release);
-    prev_level_ = Level::HiZ;
     // Don't touch subscribers or pull -- wiring stays.
 }
 
