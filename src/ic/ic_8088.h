@@ -157,6 +157,7 @@ private:
     uint8_t raw_opcode_id_ = 0, xlat_opcode_id_ = 0, extra_ = 0;
     uint8_t rep_mode_ = 0, seg_override_en_ = 0, rep_override_en_ = 0;
     uint8_t trap_flag_ = 0;
+    bool div_error_ = false;
     uint16_t seg_override_ = 0;
 
     // Operand state

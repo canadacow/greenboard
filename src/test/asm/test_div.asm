@@ -97,6 +97,8 @@ hlt
 
 ; =====================================================================
 ; INT 0 handler: divide error
+; On 8088, INT 0 pushes the address of the NEXT instruction (not the
+; faulting one), so plain IRET resumes correctly.
 ; =====================================================================
 handler_div0:
     cmp word [0x050C], 0x0000

@@ -689,6 +689,7 @@ void IC_8088::execute() {
         }
         case 6: { // DIV
             uint32_t rm = rmem(rm_addr_);
+            bool div_err = false;
             if (i_w_) {
                 scratch_int_ = (int)(unsigned short)rm;
                 if (scratch_int_) {
@@ -697,8 +698,8 @@ void IC_8088::execute() {
                     if (scratch2_uint_ == (uint16_t)scratch2_uint_) {
                         regs16()[REG_DX] = scratch_uint_ - scratch_int_ * scratch2_uint_;
                         regs16()[REG_AX] = (uint16_t)scratch2_uint_;
-                    } else pc_interrupt(0);
-                } else pc_interrupt(0);
+                    } else div_err = true;
+                } else div_err = true;
             } else {
                 scratch_int_ = (int)(uint8_t)rm;
                 if (scratch_int_) {
@@ -707,13 +708,15 @@ void IC_8088::execute() {
                     if (scratch2_uint_ == (uint8_t)scratch2_uint_) {
                         regs8()[REG_AH] = scratch_uint_ - scratch_int_ * scratch2_uint_;
                         regs8()[REG_AL] = (uint8_t)scratch2_uint_;
-                    } else pc_interrupt(0);
-                } else pc_interrupt(0);
+                    } else div_err = true;
+                } else div_err = true;
             }
+            if (div_err) div_error_ = true;
             break;
         }
         case 7: { // IDIV
             uint32_t rm = rmem(rm_addr_);
+            bool div_err = false;
             if (i_w_) {
                 scratch_int_ = (short)(uint16_t)rm;
                 if (scratch_int_) {
@@ -722,8 +725,8 @@ void IC_8088::execute() {
                     if ((int)scratch2_uint_ == (short)scratch2_uint_) {
                         regs16()[REG_DX] = (int)scratch_uint_ - scratch_int_ * (int)scratch2_uint_;
                         regs16()[REG_AX] = (uint16_t)scratch2_uint_;
-                    } else pc_interrupt(0);
-                } else pc_interrupt(0);
+                    } else div_err = true;
+                } else div_err = true;
             } else {
                 scratch_int_ = (int8_t)(uint8_t)rm;
                 if (scratch_int_) {
@@ -732,9 +735,10 @@ void IC_8088::execute() {
                     if ((int)scratch2_uint_ == (int8_t)scratch2_uint_) {
                         regs8()[REG_AH] = (short)scratch_uint_ - scratch_int_ * (int)scratch2_uint_;
                         regs8()[REG_AL] = (uint8_t)scratch2_uint_;
-                    } else pc_interrupt(0);
-                } else pc_interrupt(0);
+                    } else div_err = true;
+                } else div_err = true;
             }
+            if (div_err) div_error_ = true;
             break;
         }
         default: break;
@@ -1197,6 +1201,13 @@ void IC_8088::execute() {
     reg_ip_ += (i_mod_ * (i_mod_ != 3) + 2 * (!i_mod_ && i_rm_ == 6)) * i_mod_size_
              + TABLE[TABLE_BASE_INST_SIZE][raw_opcode_id_]
              + TABLE[TABLE_I_W_SIZE][raw_opcode_id_] * (i_w_ + 1);
+
+    // Divide error: INT 0 fires after IP advance (8088 pushes next-instruction IP)
+    if (div_error_) {
+        div_error_ = false;
+        pc_interrupt(0);
+        return;
+    }
 
     // Update SZP flags
     if (set_flags_type_ & FLAGS_UPDATE_SZP) {
