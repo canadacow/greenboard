@@ -36,6 +36,7 @@ struct BusGlue {
     Signal* s1;
     Signal* s2;
     uint8_t mem[1 << 20];
+    uint8_t io[1 << 16];  // 64K I/O port space
 
     // T-state machine (mirrors 8288 bus controller)
     enum class TState { IDLE, T1, T2, T3, T4 };
@@ -81,8 +82,9 @@ struct BusGlue {
             if (ad[i]) ad[i]->release();
     }
 
-    bool is_read_cycle() { return cycle_type == 4 || cycle_type == 5; }
+    bool is_read_cycle()  { return cycle_type == 1 || cycle_type == 4 || cycle_type == 5; }
     bool is_write_cycle() { return cycle_type == 2 || cycle_type == 6; }
+    bool is_io_cycle()    { return cycle_type == 1 || cycle_type == 2; }
 
     const char* tstate_name() {
         switch (t_state) {
@@ -112,8 +114,14 @@ struct BusGlue {
         case TState::T1:
             t_state = TState::T2;
             if (is_read_cycle()) {
-                uint8_t val = mem[cycle_addr & 0xFFFFF];
-                spdlog::trace("[BusGlue] T2 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
+                uint8_t val;
+                if (is_io_cycle()) {
+                    val = io[cycle_addr & 0xFFFF];
+                    spdlog::trace("[BusGlue] T2 IO READ port=0x{:04X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
+                } else {
+                    val = mem[cycle_addr & 0xFFFFF];
+                    spdlog::trace("[BusGlue] T2 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
+                }
                 drive_ad(val);
             }
             break;
@@ -122,8 +130,13 @@ struct BusGlue {
             t_state = TState::T3;
             if (is_write_cycle()) {
                 uint8_t val = read_ad();
-                spdlog::trace("[BusGlue]   -> T3 WRITE mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
-                mem[cycle_addr & 0xFFFFF] = val;
+                if (is_io_cycle()) {
+                    spdlog::trace("[BusGlue]   -> T3 IO WRITE port[0x{:04X}]=0x{:02X}", cycle_addr, val);
+                    io[cycle_addr & 0xFFFF] = val;
+                } else {
+                    spdlog::trace("[BusGlue]   -> T3 WRITE mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
+                    mem[cycle_addr & 0xFFFFF] = val;
+                }
             } else {
                 spdlog::trace("[BusGlue]   -> T3");
             }
@@ -289,6 +302,58 @@ int main() {
             {0x0508, 0x0001, "IRET restores IF"},
             {0x050A, 0x0003, "nested INT"},
         }},
+        {"Strings", "test_string.bin", {
+            {0x0500, 0x0001, "REP MOVSB"},
+            {0x0502, 0x0001, "REP STOSB"},
+            {0x0504, 0x0044, "LODSB"},
+            {0x0506, 0x0001, "REPNE SCASB found"},
+            {0x0508, 0x0001, "SCASB position"},
+            {0x050A, 0x0001, "REPE CMPSB"},
+            {0x050C, 0x0001, "MOVSW"},
+            {0x050E, 0x0001, "STD reverse"},
+        }},
+        {"MUL/IMUL/Shifts", "test_mul.bin", {
+            {0x0500, 0x0048, "MUL byte"},
+            {0x0502, 0x0000, "MUL byte hi"},
+            {0x0504, 0x4000, "MUL word lo"},
+            {0x0506, 0x0000, "MUL word hi"},
+            {0x0508, 0xFFC8, "IMUL byte"},
+            {0x050A, 0x0100, "MUL overflow"},
+            {0x050C, 0x00A0, "SHL AL,CL"},
+            {0x050E, 0x0003, "SHR AX,CL"},
+            {0x0510, 0xFFFE, "SAR AX,1"},
+            {0x0512, 0x0030, "SHL AX,CL"},
+        }},
+        {"BCD/Exotic", "test_bcd.bin", {
+            {0x0500, 0x0042, "DAA"},
+            {0x0502, 0x0022, "DAS"},
+            {0x0504, 0x0105, "AAA"},
+            {0x0506, 0x0035, "AAD"},
+            {0x0508, 0x0305, "AAM"},
+            {0x050A, 0x00A0, "ROL"},
+            {0x050C, 0x0028, "ROR"},
+            {0x050E, 0x0001, "LAHF/SAHF"},
+            {0x0510, 0x0055, "XLAT"},
+            {0x0512, 0x0001, "STC/CLC/CMC"},
+            {0x0514, 0x1234, "LEA"},
+            {0x0516, 0x0001, "LDS"},
+        }},
+        {"FAR CALL", "test_farcall.bin", {
+            {0x0500, 0x0001, "CALL FAR imm"},
+            {0x0502, 0x0001, "RETF"},
+            {0x0504, 0x0001, "CALL FAR indirect"},
+            {0x0506, 0x0001, "RETF imm16"},
+            {0x0508, 0x0001, "JMP FAR imm"},
+            {0x050A, 0x2000, "CS after far call"},
+        }},
+        {"I/O (PIC ports)", "test_io.bin", {
+            {0x0500, 0x00AB, "OUT imm8, AL / IN AL, imm8"},
+            {0x0502, 0x00CD, "OUT DX, AL / IN AL, DX"},
+            {0x0504, 0xBEEF, "OUT imm8, AX / IN AX, imm8 (word)"},
+            {0x0506, 0x0001, "PIC ICW1 write/read"},
+            {0x0508, 0x0001, "PIC OCW1 mask write/read"},
+            {0x050A, 0x0001, "I/O doesn't touch memory"},
+        }},
         {"DIV/IDIV", "test_div.bin", {
             {0x0500, 0x0003, "DIV byte quot"},
             {0x0502, 0x0001, "DIV byte rem"},
@@ -353,8 +418,9 @@ int main() {
     for (auto& tc : tests) {
         spdlog::info("--- {} ---", tc.name);
 
-        // Reset memory and BusGlue state
+        // Reset memory, I/O space, and BusGlue state
         std::memset(bus.mem, 0xF4, sizeof(bus.mem));
+        std::memset(bus.io, 0xFF, sizeof(bus.io));
         bus.reset();
 
         // Load binary
