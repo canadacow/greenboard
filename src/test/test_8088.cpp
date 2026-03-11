@@ -14,6 +14,8 @@
 #include "core/component.h"
 #include "board/socket.h"
 #include "ic/ic_8088.h"
+#include "ic/ic_8288.h"
+#include "ic/ic_74s245.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <cstring>
@@ -159,8 +161,9 @@ struct PIC {
 };
 
 struct BusGlue {
-    Signal** ad;           // AD0-AD7 (8 pointers)
+    Signal** ad;           // AD0-AD7 (8 pointers) -- address read only
     Signal** a_upper;      // A8-A19 (12 pointers)
+    Signal** d;            // D0-D7 (8 pointers) -- system data bus (B side of 74S245)
     Signal* s0;
     Signal* s1;
     Signal* s2;
@@ -193,23 +196,23 @@ struct BusGlue {
         return addr;
     }
 
-    uint8_t read_ad() {
+    uint8_t read_d() {
         uint8_t val = 0;
         for (int i = 0; i < 8; ++i)
-            if (ad[i] && ad[i]->level() == Level::High)
+            if (d[i] && d[i]->level() == Level::High)
                 val |= (1u << i);
         return val;
     }
 
-    void drive_ad(uint8_t val) {
+    void drive_d(uint8_t val) {
         for (int i = 0; i < 8; ++i)
-            if (ad[i])
-                ad[i]->drive((val >> i) & 1 ? Level::High : Level::Low);
+            if (d[i])
+                d[i]->drive((val >> i) & 1 ? Level::High : Level::Low);
     }
 
-    void release_ad() {
+    void release_d() {
         for (int i = 0; i < 8; ++i)
-            if (ad[i]) ad[i]->release();
+            if (d[i]) d[i]->release();
     }
 
     // Status decode: 0=INTA, 1=IOR, 2=IOW, 4=FETCH, 5=MEMR, 6=MEMW, 7=passive
@@ -252,7 +255,7 @@ struct BusGlue {
     void on_clk_rising() {
         uint8_t status = decode_status();
         spdlog::trace("[BusGlue] CLK_RISE  state={} status={} bus_addr=0x{:05X} ad=0x{:02X}",
-            tstate_name(), status, read_address(), read_ad());
+            tstate_name(), status, read_address(), read_d());
 
         switch (t_state) {
         case TState::IDLE:
@@ -277,14 +280,14 @@ struct BusGlue {
                     val = mem[cycle_addr & 0xFFFFF];
                     spdlog::trace("[BusGlue] T2 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
                 }
-                drive_ad(val);
+                drive_d(val);
             }
             break;
 
         case TState::T2:
             t_state = TState::T3;
             if (is_write_cycle()) {
-                uint8_t val = read_ad();
+                uint8_t val = read_d();
                 if (is_io_cycle()) {
                     spdlog::trace("[BusGlue]   -> T3 IO WRITE port[0x{:04X}]=0x{:02X}", cycle_addr, val);
                     io_write(cycle_addr & 0xFFFF, val);
@@ -314,7 +317,7 @@ struct BusGlue {
                 spdlog::trace("[BusGlue] T4->T1 overlap type={} cycle#{}", cycle_type, bus_cycle_count);
             } else {
                 if (is_read_cycle()) {
-                    release_ad();
+                    release_d();
                 }
                 bus_cycle_count++;
                 t_state = TState::IDLE;
@@ -326,7 +329,7 @@ struct BusGlue {
 
     void on_clk_falling() {
         spdlog::trace("[BusGlue] CLK_FALL  state={} bus_addr=0x{:05X} ad=0x{:02X}",
-            tstate_name(), read_address(), read_ad());
+            tstate_name(), read_address(), read_d());
         if (t_state == TState::T1) {
             cycle_addr = read_address();
             spdlog::trace("[BusGlue]   ALE latch addr=0x{:05X}", cycle_addr);
@@ -407,7 +410,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::debug);
+    spdlog::set_level(spdlog::level::info);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -532,14 +535,27 @@ int main() {
     Bus ad{"AD", 8};
     Bus a_upper{"A", 12};
 
+    // 8288 bus controller output signals
+    Signal ale{"ALE"}, den{"~DEN"}, dtr{"DT/~R"};
+    Signal memr{"~MEMR"}, memw{"~MEMW"};
+    Signal ior_sig{"~IOR"}, iow_sig{"~IOW"}, inta_sig{"~INTA"};
+
+    // System data bus (B side of 74S245 transceiver)
+    Signal d0("D0"), d1("D1"), d2("D2"), d3("D3");
+    Signal d4("D4"), d5("D5"), d6("D6"), d7("D7");
+    Signal* d_arr[] = {&d0, &d1, &d2, &d3, &d4, &d5, &d6, &d7};
+
     // All traces on this test board. On power loss, every trace discharges.
     std::vector<Signal*> all_traces = {
         &vcc, &clk, &reset, &ready, &nmi, &intr, &test_pin,
         &cpu_lock, &rqgt0, &qs0, &qs1, &s0, &s1, &s2,
+        &ale, &den, &dtr, &memr, &memw, &ior_sig, &iow_sig, &inta_sig,
     };
     for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
     for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
+    for (int i = 0; i < 8; ++i)  all_traces.push_back(d_arr[i]);
 
+    // U3: 8088 CPU
     Socket cpu_socket{"U3", "8088", 40};
     cpu_socket.wire(1, gnd); cpu_socket.wire(20, gnd);
     cpu_socket.wire(31, vcc); cpu_socket.wire(40, vcc);
@@ -552,18 +568,58 @@ int main() {
     cpu_socket.wire(29, cpu_lock); cpu_socket.wire(30, rqgt0);
     cpu_socket.wire(24, qs1); cpu_socket.wire(25, qs0);
     cpu_socket.wire(26, s0); cpu_socket.wire(27, s1); cpu_socket.wire(28, s2);
-
     auto* cpu = cpu_socket.emplace<IC_8088>(0xF000, 0x0123);
+
+    // U6: 8288 Bus Controller
+    Socket bc_socket{"U6", "8288", 20};
+    bc_socket.wire(1, gnd);
+    bc_socket.wire(2, clk);
+    bc_socket.wire(3, s1);    // ~S1
+    bc_socket.wire(4, den);   // ~DEN output
+    bc_socket.wire(5, ale);   // ALE output
+    bc_socket.wire(6, vcc);   // CEN = always enabled
+    bc_socket.wire(7, memr);  // ~MEMR output
+    bc_socket.wire(8, memw);  // ~MEMW output
+    bc_socket.wire(12, iow_sig);  // ~IOW output
+    bc_socket.wire(13, ior_sig);  // ~IOR output
+    bc_socket.wire(14, inta_sig); // ~INTA output
+    bc_socket.wire(15, vcc);  // ~AEN = High (no DMA)
+    bc_socket.wire(16, dtr);  // DT/~R output
+    bc_socket.wire(18, s2);   // ~S2
+    bc_socket.wire(19, s0);   // ~S0
+    bc_socket.wire(20, vcc);
+    auto* bc = bc_socket.emplace<IC_8288>();
+
+    // U8: 74S245 Data Bus Transceiver
+    // A side (pins 2-9) = AD7..AD0 (CPU local bus, reversed per BRD)
+    // B side (pins 18-11) = D7..D0 (system data bus, reversed per BRD)
+    Socket xcvr_socket{"U8", "74S245", 20};
+    xcvr_socket.wire(1, den);  // ~G = ~DEN
+    xcvr_socket.wire(2, ad[7]); xcvr_socket.wire(3, ad[6]);
+    xcvr_socket.wire(4, ad[5]); xcvr_socket.wire(5, ad[4]);
+    xcvr_socket.wire(6, ad[3]); xcvr_socket.wire(7, ad[2]);
+    xcvr_socket.wire(8, ad[1]); xcvr_socket.wire(9, ad[0]);
+    xcvr_socket.wire(10, gnd);
+    xcvr_socket.wire(11, d0); xcvr_socket.wire(12, d1);
+    xcvr_socket.wire(13, d2); xcvr_socket.wire(14, d3);
+    xcvr_socket.wire(15, d4); xcvr_socket.wire(16, d5);
+    xcvr_socket.wire(17, d6); xcvr_socket.wire(18, d7);
+    xcvr_socket.wire(19, dtr);  // DIR = DT/~R
+    xcvr_socket.wire(20, vcc);
+    auto* xcvr = xcvr_socket.emplace<IC_74S245>();
 
     Signal* ad_ptrs[8];
     Signal* a_upper_ptrs[12];
+    Signal* d_ptrs[8];
     for (int i = 0; i < 8; ++i)  ad_ptrs[i] = &ad[i];
     for (int i = 0; i < 12; ++i) a_upper_ptrs[i] = &a_upper[i];
+    for (int i = 0; i < 8; ++i)  d_ptrs[i] = d_arr[i];
 
     auto bus_ptr = std::make_unique<BusGlue>();
     auto& bus = *bus_ptr;
     bus.ad = ad_ptrs;
     bus.a_upper = a_upper_ptrs;
+    bus.d = d_ptrs;
     bus.s0 = &s0;
     bus.s1 = &s1;
     bus.s2 = &s2;
@@ -598,6 +654,8 @@ int main() {
         s2.drive(Level::High);
         vcc.drive(Level::High);
         cpu->clear_halt();
+        bc->power_on();
+        xcvr->power_on();
         clk_ic.power_on();
         cpu->power_on();
 
@@ -614,6 +672,8 @@ int main() {
         vcc.drive(Level::HiZ);
         cpu->power_off();
         clk_ic.power_off();
+        bc->power_off();
+        xcvr->power_off();
 
         // Power loss: every trace on the board discharges.
         for (auto* sig : all_traces)

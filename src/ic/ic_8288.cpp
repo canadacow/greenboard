@@ -5,6 +5,12 @@ namespace bench {
 
 IC_8288::IC_8288() : Component("8288") {}
 
+void IC_8288::on_power_on() {
+    state_ = State::Idle;
+    cycle_ = BusCycle::Passive;
+    clk_prev_ = Level::HiZ;
+}
+
 void IC_8288::install(Socket& socket) {
     // Output pins (we drive these).
     pin_ale_  = socket.pin_signal(5);   // ALE
@@ -123,6 +129,32 @@ void IC_8288::on_clk_rising() {
         return;
     }
 
+    auto cycle_name = [](BusCycle c) -> const char* {
+        switch (c) {
+            case BusCycle::Passive: return "Passive";
+            case BusCycle::INTA: return "INTA";
+            case BusCycle::IOR: return "IOR";
+            case BusCycle::IOW: return "IOW";
+            case BusCycle::Halt: return "Halt";
+            case BusCycle::Fetch: return "Fetch";
+            case BusCycle::MemR: return "MemR";
+            case BusCycle::MemW: return "MemW";
+        }
+        return "?";
+    };
+
+    auto state_name = [](State s) -> const char* {
+        switch (s) {
+            case State::Idle: return "Idle";
+            case State::T1: return "T1";
+            case State::T2: return "T2";
+            case State::T3: return "T3";
+        }
+        return "?";
+    };
+
+    spdlog::trace("[8288] CLK_RISE state={} cycle={}", state_name(state_), cycle_name(cycle_));
+
     switch (state_) {
         case State::Idle: {
             BusCycle bus = decode_status();
@@ -136,6 +168,7 @@ void IC_8288::on_clk_rising() {
                 // DT/~R: High = transmit (write), Low = receive (read).
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
                 if (pin_dtr_) pin_dtr_->drive(is_write ? Level::High : Level::Low);
+                spdlog::trace("[8288] Idle->T1 cycle={} DT/~R={}", cycle_name(bus), is_write ? "TX" : "RX");
             }
             break;
         }
@@ -154,18 +187,21 @@ void IC_8288::on_clk_rising() {
 
             // ~DEN active (Low) = data bus transceivers enabled.
             if (pin_den_) pin_den_->drive(Level::Low);
+            spdlog::trace("[8288] T1->T2 ~DEN=Low (enabled), cmd={}", cycle_name(cycle_));
             break;
         }
 
         case State::T2:
             // T3: Commands stay active. Nothing changes.
             state_ = State::T3;
+            spdlog::trace("[8288] T2->T3");
             break;
 
         case State::T3:
             // T4: Deassert commands, deassert ~DEN, back to idle.
             release_command();
             if (pin_den_) pin_den_->drive(Level::High);  // ~DEN deasserted
+            spdlog::trace("[8288] T3->Idle ~DEN=High (disabled)");
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
             break;
