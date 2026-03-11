@@ -3,10 +3,10 @@
 ; SP initialized to 0x0800 (stack at DS:0800 growing down).
 ;
 ; Expected results:
-;   [0200] = 0x0007   near CALL/RET (3+4 computed by subroutine)
-;   [0202] = 0x1234   PUSH/POP round-trip
-;   [0204] = 0x000A   nested CALL (factorial-ish: add_n(4) = 4+3+2+1 = 10)
-;   [0206] = 0xBEEF   PUSH reg / POP cross-reg
+;   [0500] = 0x0007   near CALL/RET (3+4 computed by subroutine)
+;   [0502] = 0x1234   PUSH/POP round-trip
+;   [0504] = 0x000A   nested CALL (factorial-ish: add_n(4) = 4+3+2+1 = 10)
+;   [0506] = 0xBEEF   PUSH reg / POP cross-reg
 
 cpu 8086
 org 0x0123
@@ -20,25 +20,25 @@ mov sp, 0x0800
 mov ax, 0x0003
 mov bx, 0x0004
 call add_ab
-mov [0x0200], ax        ; expect 0x0007
+mov [0x0500], ax        ; expect 0x0007
 
 ; --- Test 2: PUSH/POP ---
 mov ax, 0x1234
 push ax
 mov ax, 0x0000          ; clobber AX
 pop ax
-mov [0x0202], ax        ; expect 0x1234
+mov [0x0502], ax        ; expect 0x1234
 
 ; --- Test 3: nested calls (sum 1..N) ---
 mov cx, 4
 call sum_n
-mov [0x0204], ax        ; expect 10
+mov [0x0504], ax        ; expect 10
 
 ; --- Test 4: PUSH reg / POP to different reg ---
 mov bx, 0xBEEF
 push bx
 pop ax
-mov [0x0206], ax        ; expect 0xBEEF
+mov [0x0506], ax        ; expect 0xBEEF
 
 hlt
 

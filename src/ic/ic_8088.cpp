@@ -411,7 +411,7 @@ uint16_t IC_8088::pop16() {
 // ========================================================================
 
 uint32_t IC_8088::get_reg_addr(int reg_id) {
-    return REGS_BASE + (i_w_ ? 2 * reg_id : (2 * reg_id + (reg_id / 4 & 7)));
+    return REGS_BASE + (i_w_ ? 2 * reg_id : ((2 * reg_id + reg_id / 4) & 7));
 }
 
 int IC_8088::top_bit() {
@@ -539,7 +539,7 @@ void IC_8088::execute() {
     prefetch_len_ = 0;
 
     uint8_t opbyte = fetch_byte(0);
-    spdlog::debug("[8088] IP=0x{:04X} phys=0x{:05X} opcode=0x{:02X}", reg_ip_, cs_ip, opbyte);
+    spdlog::trace("[8088] IP=0x{:04X} phys=0x{:05X} opcode=0x{:02X}", reg_ip_, cs_ip, opbyte);
     set_opcode(opbyte);
     i_w_ = (i_reg4bit_ = raw_opcode_id_ & 7) & 1;
     i_d_ = i_reg4bit_ / 2 & 1;
@@ -578,7 +578,7 @@ void IC_8088::execute() {
             uint8_t d = regs8()[TABLE[TABLE_COND_JUMP_DECODE_D][scratch_uchar_]];
             int cond = i_w_ ^ (a || b || c ^ d);
             int8_t disp = (int8_t)(i_data0_ & 0xFF);
-            spdlog::debug("[8088] Jcc opcode=0x{:02X} idx={} i_w={} a={} b={} c={} d={} cond={} disp={}",
+            spdlog::trace("[8088] Jcc opcode=0x{:02X} idx={} i_w={} a={} b={} c={} d={} cond={} disp={}",
                 raw_opcode_id_, scratch_uchar_, i_w_, a, b, c, d, cond, disp);
             reg_ip_ += disp * cond;
         }
@@ -1199,7 +1199,7 @@ void IC_8088::execute() {
         regs8()[FLAG_SF] = sign_of(op_result_);
         regs8()[FLAG_ZF] = !(i_w_ ? (uint16_t)op_result_ : (uint8_t)op_result_);
         regs8()[FLAG_PF] = TABLE[TABLE_PARITY_FLAG][(uint8_t)op_result_];
-        spdlog::debug("[8088] FLAGS op=0x{:02X} result={} i_w={} ZF={} SF={} CF={}",
+        spdlog::trace("[8088] FLAGS op=0x{:02X} result={} i_w={} ZF={} SF={} CF={}",
             raw_opcode_id_, op_result_, i_w_, regs8()[FLAG_ZF], regs8()[FLAG_SF], regs8()[FLAG_CF]);
         if (set_flags_type_ & FLAGS_UPDATE_AO_ARITH) set_AF_OF_arith();
         if (set_flags_type_ & FLAGS_UPDATE_OC_LOGIC) { set_CF(0); set_OF(0); }

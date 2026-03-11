@@ -105,8 +105,7 @@ struct BusGlue {
             if (status != 7) {
                 t_state = TState::T1;
                 cycle_type = status;
-                if (bus_cycle_count < 5)
-                    spdlog::debug("[BusGlue] IDLE->T1 type={} cycle#{}", cycle_type, bus_cycle_count);
+                spdlog::trace("[BusGlue] IDLE->T1 type={} cycle#{}", cycle_type, bus_cycle_count);
             }
             break;
 
@@ -114,8 +113,7 @@ struct BusGlue {
             t_state = TState::T2;
             if (is_read_cycle()) {
                 uint8_t val = mem[cycle_addr & 0xFFFFF];
-                if (bus_cycle_count < 5)
-                    spdlog::debug("[BusGlue] T2 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
+                spdlog::trace("[BusGlue] T2 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
                 drive_ad(val);
             }
             break;
@@ -145,16 +143,14 @@ struct BusGlue {
                 t_state = TState::T1;
                 cycle_type = status;
                 bus_cycle_count++;
-                if (bus_cycle_count < 5)
-                    spdlog::debug("[BusGlue] T4->T1 overlap type={} cycle#{}", cycle_type, bus_cycle_count);
+                spdlog::trace("[BusGlue] T4->T1 overlap type={} cycle#{}", cycle_type, bus_cycle_count);
             } else {
                 if (is_read_cycle()) {
                     release_ad();
                 }
                 bus_cycle_count++;
                 t_state = TState::IDLE;
-                if (bus_cycle_count < 5)
-                    spdlog::debug("[BusGlue] T4->IDLE cycle#{}", bus_cycle_count);
+                spdlog::trace("[BusGlue] T4->IDLE cycle#{}", bus_cycle_count);
             }
             break;
         }
@@ -249,41 +245,59 @@ int main() {
     // Test table
     std::vector<TestCase> tests = {
         {"MOV/XCHG", "test_mov.bin", {
-            {0x0200, 0x1234, "MOV imm16"},
-            {0x0202, 0x5678, "MOV reg-reg"},
-            {0x0204, 0x00AB, "MOV byte"},
-            {0x0206, 0xDEF0, "XCHG ax"},
-            {0x0208, 0x9ABC, "XCHG bx"},
+            {0x0500, 0x1234, "MOV imm16"},
+            {0x0502, 0x5678, "MOV reg-reg"},
+            {0x0504, 0x00AB, "MOV byte"},
+            {0x0506, 0xDEF0, "XCHG ax"},
+            {0x0508, 0x9ABC, "XCHG bx"},
         }},
         {"ALU", "test_alu.bin", {
-            {0x0200, 0x0042, "ADD"},
-            {0x0202, 0x0010, "SUB"},
-            {0x0204, 0xFFBE, "NEG"},
-            {0x0206, 0x1234, "AND"},
-            {0x0208, 0xFFFF, "OR"},
-            {0x020A, 0xEDCB, "XOR"},
-            {0x020C, 0xEDCA, "NOT"},
-            {0x020E, 0x2468, "SHL"},
-            {0x0210, 0x048D, "SHR"},
-            {0x0212, 0x0001, "CMP/JE"},
-            {0x0214, 0x008A, "ADC"},
-            {0x0216, 0x00FE, "SBB"},
+            {0x0500, 0x0042, "ADD"},
+            {0x0502, 0x0010, "SUB"},
+            {0x0504, 0xFFBE, "NEG"},
+            {0x0506, 0x1234, "AND"},
+            {0x0508, 0xFFFF, "OR"},
+            {0x050A, 0xEDCB, "XOR"},
+            {0x050C, 0xEDCA, "NOT"},
+            {0x050E, 0x2468, "SHL"},
+            {0x0510, 0x048D, "SHR"},
+            {0x0512, 0x0001, "CMP/JE"},
+            {0x0514, 0x008A, "ADC"},
+            {0x0516, 0x00FE, "SBB"},
         }},
         {"CALL/RET", "test_call_ret.bin", {
-            {0x0200, 0x0007, "near CALL/RET"},
-            {0x0202, 0x1234, "PUSH/POP"},
-            {0x0204, 0x000A, "nested CALL"},
-            {0x0206, 0xBEEF, "PUSH/POP cross"},
+            {0x0500, 0x0007, "near CALL/RET"},
+            {0x0502, 0x1234, "PUSH/POP"},
+            {0x0504, 0x000A, "nested CALL"},
+            {0x0506, 0xBEEF, "PUSH/POP cross"},
         }},
         {"Jumps/Loops", "test_jumps.bin", {
-            {0x0200, 0x0001, "JE"},
-            {0x0202, 0x0001, "JNE"},
-            {0x0204, 0x0001, "JL"},
-            {0x0206, 0x0001, "JG"},
-            {0x0208, 0x0001, "JB"},
-            {0x020A, 0x0001, "JA"},
-            {0x020C, 0x0005, "LOOP count"},
-            {0x020E, 0x0037, "LOOP sum"},
+            {0x0500, 0x0001, "JE"},
+            {0x0502, 0x0001, "JNE"},
+            {0x0504, 0x0001, "JL"},
+            {0x0506, 0x0001, "JG"},
+            {0x0508, 0x0001, "JB"},
+            {0x050A, 0x0001, "JA"},
+            {0x050C, 0x0005, "LOOP count"},
+            {0x050E, 0x0037, "LOOP sum"},
+        }},
+        {"Interrupts", "test_int.bin", {
+            {0x0500, 0xAA55, "INT 0x40"},
+            {0x0502, 0x0001, "INT 3 (breakpoint)"},
+            {0x0504, 0x0001, "INTO (OF=1)"},
+            {0x0506, 0x0000, "INTO (OF=0, skip)"},
+            {0x0508, 0x0001, "IRET restores IF"},
+            {0x050A, 0x0003, "nested INT"},
+        }},
+        {"DIV/IDIV", "test_div.bin", {
+            {0x0500, 0x0003, "DIV byte quot"},
+            {0x0502, 0x0001, "DIV byte rem"},
+            {0x0504, 0x000A, "DIV word quot"},
+            {0x0506, 0x0000, "DIV word rem"},
+            {0x0508, 0xFFFD, "IDIV byte quot"},
+            {0x050A, 0xFFFF, "IDIV byte rem"},
+            {0x050C, 0x0001, "DIV by zero"},
+            {0x050E, 0x0001, "DIV overflow"},
         }},
     };
 
@@ -348,7 +362,7 @@ int main() {
         if (!load_bin(path, bus.mem, 0xF0123)) { ++failed; continue; }
 
         // Verify load
-        spdlog::debug("  mem[F0123..F012A] = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+        spdlog::trace("  mem[F0123..F012A] = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
             bus.mem[0xF0123], bus.mem[0xF0124], bus.mem[0xF0125], bus.mem[0xF0126],
             bus.mem[0xF0127], bus.mem[0xF0128], bus.mem[0xF0129], bus.mem[0xF012A]);
 
