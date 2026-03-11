@@ -46,6 +46,8 @@ add_executable(test_8088
     src/ic/ic_8288.cpp
     src/ic/ic_74s245.cpp
     src/ic/ic_8259a.cpp
+    src/ic/ic_8284a.cpp
+    src/ic/ic_74s373.cpp
 )
 target_include_directories(test_8088 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_8088 PRIVATE spdlog::spdlog fmt::fmt)

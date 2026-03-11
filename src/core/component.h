@@ -29,6 +29,7 @@ public:
     virtual ~Component() { power_off(); }
 
     const std::string& name() const { return name_; }
+    void set_name(std::string name) { name_ = std::move(name); }
 
     // Power control -- starts/stops the component's thread.
     void power_on();
@@ -50,6 +51,10 @@ protected:
 
     // Block until a connected signal changes, then return.
     void wait_mailbox(std::stop_token& stop);
+
+    // Ack the deferred pending from the last wait_mailbox wake.
+    // Call this when transitioning from wait_mailbox to a spin loop.
+    void flush_pending_ack();
 
     // Check if stop has been requested on this component's thread.
     bool stop_requested() const;

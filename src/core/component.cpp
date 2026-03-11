@@ -1,5 +1,8 @@
 #include "core/component.h"
 #include <spdlog/spdlog.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace bench {
 
@@ -10,7 +13,13 @@ Component::Component(std::string name)
 
 void Component::power_on() {
     if (thread_.joinable()) return;
-    thread_ = std::jthread([this](std::stop_token stop) { run(stop); });
+    thread_ = std::jthread([this](std::stop_token stop) {
+#ifdef _WIN32
+        std::wstring wname(name_.begin(), name_.end());
+        SetThreadDescription(GetCurrentThread(), wname.c_str());
+#endif
+        run(stop);
+    });
     spdlog::debug("[{}] powered on", name_);
 }
 
@@ -51,11 +60,22 @@ void Component::run(std::stop_token stop) {
 // cannot advance until this component is truly blocked and ready.
 void Component::wait_mailbox(std::stop_token& stop) {
     if (pending_ack_) {
+        int p = Signal::pending.load(std::memory_order_acquire);
+        spdlog::trace("[{}] ack (pending {} -> {})", name_, p, p - 1);
         Signal::ack();
         pending_ack_ = false;
     }
+    spdlog::trace("[{}] waiting on mailbox", name_);
     mailbox_->sem.acquire();
     pending_ack_ = true;
+    spdlog::trace("[{}] woke from mailbox", name_);
+}
+
+void Component::flush_pending_ack() {
+    if (pending_ack_) {
+        Signal::ack();
+        pending_ack_ = false;
+    }
 }
 
 bool Component::stop_requested() const {

@@ -1,5 +1,6 @@
 #include "core/signal.h"
 #include "core/component.h"
+#include <spdlog/spdlog.h>
 
 namespace bench {
 
@@ -9,10 +10,23 @@ std::atomic<int> Signal::pending{0};
 
 Signal::Signal(std::string name) : name_(std::move(name)) {}
 
+static const char* lvl_str(Level l) {
+    switch (l) {
+    case Level::Low: return "Low";
+    case Level::High: return "High";
+    case Level::HiZ: return "HiZ";
+    }
+    return "?";
+}
+
 void Signal::drive(Level lvl) {
     Level old = level_.load(std::memory_order_acquire);
     if (lvl == old) return;
     level_.store(lvl, std::memory_order_release);
+
+    int p = pending.load(std::memory_order_acquire);
+    spdlog::trace("[SIG] {} {} -> {} subs={} pending_before={}",
+        name_, lvl_str(old), lvl_str(lvl), subscribers_.size(), p);
 
     for (auto* mb : subscribers_) {
         pending.fetch_add(1, std::memory_order_release);

@@ -1,11 +1,12 @@
 // 8088 CPU test bench -- data-driven instruction tests.
 //
 // The CPU is real -- full pin-level, CLK-driven, threaded.
-// Everything else is combinational: BusGlue emulates the 8288 + address
-// latches + data transceiver + memory as instant logic. It runs
-// synchronously inside TestClock's drive loop, BEFORE the CLK edge
-// reaches the CPU's mailbox. This guarantees BusGlue sees the bus state
-// and drives data before the CPU reads it.
+// The 8284A clock generator is real -- drives OSC/CLK/PCLK/RESET/READY.
+// The 8288 bus controller is real -- decodes S0-S2 into control signals.
+// The 74S245 transceiver is real -- bidirectional data bus transfer.
+// The 74S373 address latches are real -- ALE-triggered address capture (U7/U9/U10).
+// The 8259A PIC is real -- signal-level interrupt handling.
+// BusGlue is a reactive Component: address decode + memory, subscribes to CLK.
 //
 // Each test is a flat binary assembled by NASM, loaded at F000:0123
 // (physical 0xF0123). DS=SS=0 after reset. Results checked at 0x0200+.
@@ -17,6 +18,8 @@
 #include "ic/ic_8288.h"
 #include "ic/ic_74s245.h"
 #include "ic/ic_8259a.h"
+#include "ic/ic_8284a.h"
+#include "ic/ic_74s373.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <cstring>
@@ -29,32 +32,63 @@
 using namespace bench;
 
 // =========================================================================
-// BusGlue: combinational address decode + memory. Drives ~CS/A0 for the
-// real IC_8259A PIC (signal-level), and handles memory/generic-I/O directly.
-// NOT a Component. Called synchronously by TestClock.
+// BusGlue: reactive Component -- address decode + memory.
+// Subscribes to CLK, detects edges, drives data/control for each T-state.
+// Drives ~CS/A0 for the real IC_8259A PIC, handles memory/generic-I/O.
 // =========================================================================
-struct BusGlue {
-    Signal** ad;           // AD0-AD7 (8 pointers) -- address read only
-    Signal** a_upper;      // A8-A19 (12 pointers)
-    Signal** d;            // D0-D7 (8 pointers) -- system data bus (B side of 74S245)
-    Signal* s0;
-    Signal* s1;
-    Signal* s2;
-    uint8_t mem[1 << 20];
-    uint8_t io[1 << 16];  // 64K I/O port space
+class BusGlue : public Component {
+public:
+    BusGlue() : Component("BusGlue") {}
+
+    Signal** xa = nullptr;       // XA0-XA19 (20 pointers) -- latched address from 74S373s
+    Signal** d = nullptr;        // D0-D7 (8 pointers) -- system data bus
+    Signal* s0 = nullptr;
+    Signal* s1 = nullptr;
+    Signal* s2 = nullptr;
+    Signal* pin_clk = nullptr;   // CLK input (subscribe to this)
+    std::unique_ptr<uint8_t[]> mem = std::make_unique<uint8_t[]>(1 << 20);
+    std::unique_ptr<uint8_t[]> io  = std::make_unique<uint8_t[]>(1 << 16);
 
     // Real PIC control signals (BusGlue acts as address decode logic)
-    Signal* pic_cs = nullptr;     // ~CS to PIC (driven by address decode)
-    Signal* pic_a0 = nullptr;     // A0 to PIC (port bit 0)
+    Signal* pic_cs = nullptr;     // ~CS to PIC
+    Signal* pic_a0 = nullptr;     // A0 to PIC
     Signal* pic_ir[8] = {};       // IR0-IR7 (for test trigger port 0xF0)
-    bool pic_active = false;      // true when PIC ~CS is asserted this cycle
+    bool pic_active = false;
 
-    // T-state machine (mirrors 8288 bus controller)
+    void subscribe_clk() {
+        if (pin_clk) pin_clk->connect(this);
+    }
+
+    // T-state machine
     enum class TState { IDLE, T1, T2, T3, T4 };
     TState t_state = TState::IDLE;
-    uint8_t cycle_type = 7;   // status code for current cycle
+    uint8_t cycle_type = 7;
     uint32_t cycle_addr = 0;
-    int bus_cycle_count = 0;   // debug: count completed bus cycles
+    int bus_cycle_count = 0;
+
+    void reset() {
+        t_state = TState::IDLE;
+        cycle_type = 7;
+        cycle_addr = 0;
+        bus_cycle_count = 0;
+        pic_active = false;
+        clk_prev_ = Level::HiZ;
+    }
+
+protected:
+    void on_signal_change() override {
+        Level clk_cur = pin_clk ? pin_clk->level() : Level::HiZ;
+
+        if (clk_cur == Level::High && clk_prev_ != Level::High)
+            on_clk_rising();
+        if (clk_cur == Level::Low && clk_prev_ != Level::Low)
+            on_clk_falling();
+
+        clk_prev_ = clk_cur;
+    }
+
+private:
+    Level clk_prev_ = Level::HiZ;
 
     uint8_t decode_status() {
         uint8_t v2 = (s2->level() == Level::High) ? 1 : 0;
@@ -65,12 +99,9 @@ struct BusGlue {
 
     uint32_t read_address() {
         uint32_t addr = 0;
-        for (int i = 0; i < 8; ++i)
-            if (ad[i] && ad[i]->level() == Level::High)
+        for (int i = 0; i < 20; ++i)
+            if (xa[i] && xa[i]->level() == Level::High)
                 addr |= (1u << i);
-        for (int i = 0; i < 12; ++i)
-            if (a_upper[i] && a_upper[i]->level() == Level::High)
-                addr |= (1u << (i + 8));
         return addr;
     }
 
@@ -93,11 +124,33 @@ struct BusGlue {
             if (d[i]) d[i]->release();
     }
 
-    // Status decode: 0=INTA, 1=IOR, 2=IOW, 4=FETCH, 5=MEMR, 6=MEMW, 7=passive
     bool is_read_cycle()  { return cycle_type == 0 || cycle_type == 1 || cycle_type == 4 || cycle_type == 5; }
     bool is_write_cycle() { return cycle_type == 2 || cycle_type == 6; }
     bool is_io_cycle()    { return cycle_type == 1 || cycle_type == 2; }
     bool is_inta_cycle()  { return cycle_type == 0; }
+    bool is_pic_port(uint32_t addr) { return (addr & 0xFFFF) == 0x20 || (addr & 0xFFFF) == 0x21; }
+
+    uint8_t io_read(uint16_t port) { return io[port]; }
+
+    void io_write(uint16_t port, uint8_t val) {
+        if (port == 0xF0) {
+            // Test trigger port: drive IR lines High.
+            // The 8284A's wait_quiescent after this CLK edge ensures the PIC
+            // processes the rising edge before the next CLK tick.
+            for (int i = 0; i < 8; i++) {
+                if ((val & (1 << i)) && pic_ir[i])
+                    pic_ir[i]->drive(Level::High);
+            }
+        } else if (port == 0xF1) {
+            // Test clear port: drive IR lines Low.
+            for (int i = 0; i < 8; i++) {
+                if ((val & (1 << i)) && pic_ir[i])
+                    pic_ir[i]->drive(Level::Low);
+            }
+        } else {
+            io[port] = val;
+        }
+    }
 
     const char* tstate_name() {
         switch (t_state) {
@@ -108,38 +161,6 @@ struct BusGlue {
         case TState::T4: return "T4";
         }
         return "?";
-    }
-
-    bool is_pic_port(uint32_t addr) { return (addr & 0xFFFF) == 0x20 || (addr & 0xFFFF) == 0x21; }
-
-    // I/O read: PIC ports handled by real PIC via signals, everything else generic
-    uint8_t io_read(uint16_t port) {
-        return io[port];
-    }
-
-    // I/O write: PIC ports handled by real PIC, trigger port pulses IR lines
-    void io_write(uint16_t port, uint8_t val) {
-        if (port == 0xF0) {
-            // Test trigger port: pulse IR lines (Low->High->Low).
-            // PIC latches IRR on rising edge; line returns Low so
-            // PIC re-init won't see stale high lines as pending.
-            for (int i = 0; i < 8; i++) {
-                if ((val & (1 << i)) && pic_ir[i])
-                    pic_ir[i]->drive(Level::Low);
-            }
-            Signal::wait_quiescent();
-            for (int i = 0; i < 8; i++) {
-                if ((val & (1 << i)) && pic_ir[i])
-                    pic_ir[i]->drive(Level::High);
-            }
-            Signal::wait_quiescent();
-            for (int i = 0; i < 8; i++) {
-                if ((val & (1 << i)) && pic_ir[i])
-                    pic_ir[i]->drive(Level::Low);
-            }
-        } else {
-            io[port] = val;
-        }
     }
 
     void on_clk_rising() {
@@ -157,37 +178,35 @@ struct BusGlue {
             break;
 
         case TState::T1:
+            // ALE falls this CLK rising (8288 T1->T2). Latches capture but
+            // may not have settled yet (concurrent). Just advance state.
             t_state = TState::T2;
-            if (is_read_cycle()) {
-                if (is_inta_cycle()) {
-                    // Real PIC handles INTA via 8288's ~INTA signal.
-                    // PIC drives vector onto D bus on second pulse.
-                    spdlog::trace("[BusGlue] T2 INTA -- real PIC cycle#{}", bus_cycle_count);
-                } else if (is_io_cycle() && is_pic_port(cycle_addr)) {
-                    // Assert PIC chip select + A0. The 8288 will drive ~IOR
-                    // on this same CLK edge, and the PIC will respond.
-                    if (pic_a0) pic_a0->drive(cycle_addr & 1 ? Level::High : Level::Low);
-                    if (pic_cs) pic_cs->drive(Level::Low);
-                    pic_active = true;
-                    spdlog::trace("[BusGlue] T2 PIC READ port=0x{:04X} cycle#{}", cycle_addr, bus_cycle_count);
-                } else if (is_io_cycle()) {
-                    uint8_t val = io_read(cycle_addr & 0xFFFF);
-                    spdlog::trace("[BusGlue] T2 IO READ port=0x{:04X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
-                    drive_d(val);
-                } else {
-                    uint8_t val = mem[cycle_addr & 0xFFFFF];
-                    spdlog::trace("[BusGlue] T2 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
-                    drive_d(val);
-                }
-            }
+            spdlog::trace("[BusGlue]   -> T2");
             break;
 
         case TState::T2:
+            // Address is latched (ALE fell last CLK rise, settled by now).
+            // Drive read data / capture write data.
             t_state = TState::T3;
-            if (is_write_cycle()) {
+            if (is_read_cycle()) {
+                if (is_inta_cycle()) {
+                    spdlog::trace("[BusGlue] T3 INTA -- real PIC cycle#{}", bus_cycle_count);
+                } else if (is_io_cycle() && is_pic_port(cycle_addr)) {
+                    if (pic_a0) pic_a0->drive(cycle_addr & 1 ? Level::High : Level::Low);
+                    if (pic_cs) pic_cs->drive(Level::Low);
+                    pic_active = true;
+                    spdlog::trace("[BusGlue] T3 PIC READ port=0x{:04X} cycle#{}", cycle_addr, bus_cycle_count);
+                } else if (is_io_cycle()) {
+                    uint8_t val = io_read(cycle_addr & 0xFFFF);
+                    spdlog::trace("[BusGlue] T3 IO READ port=0x{:04X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
+                    drive_d(val);
+                } else {
+                    uint8_t val = mem[cycle_addr & 0xFFFFF];
+                    spdlog::trace("[BusGlue] T3 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
+                    drive_d(val);
+                }
+            } else if (is_write_cycle()) {
                 if (is_io_cycle() && is_pic_port(cycle_addr)) {
-                    // Assert PIC chip select + A0. The 8288 drives ~IOW,
-                    // data is already on D bus from CPU via 74S245.
                     if (pic_a0) pic_a0->drive(cycle_addr & 1 ? Level::High : Level::Low);
                     if (pic_cs) pic_cs->drive(Level::Low);
                     pic_active = true;
@@ -207,8 +226,6 @@ struct BusGlue {
             break;
 
         case TState::T3:
-            // T3 is always exactly one clock. Move to T4 unconditionally.
-            // Deassert PIC ~CS here (before 8288 releases ~IOR/~IOW at T4).
             if (pic_active) {
                 if (pic_cs) pic_cs->drive(Level::High);
                 pic_active = false;
@@ -240,56 +257,12 @@ struct BusGlue {
     }
 
     void on_clk_falling() {
-        spdlog::trace("[BusGlue] CLK_FALL  state={} bus_addr=0x{:05X} ad=0x{:02X}",
-            tstate_name(), read_address(), read_d());
-        if (t_state == TState::T1) {
+        if (t_state == TState::T2) {
+            // ALE fell last CLK rise, latches settled. Read latched address.
             cycle_addr = read_address();
-            spdlog::trace("[BusGlue]   ALE latch addr=0x{:05X}", cycle_addr);
+            spdlog::trace("[BusGlue] T2_FALL latched addr=0x{:05X}", cycle_addr);
         }
     }
-
-    void reset() {
-        t_state = TState::IDLE;
-        cycle_type = 7;
-        cycle_addr = 0;
-        bus_cycle_count = 0;
-        pic_active = false;
-    }
-};
-
-// =========================================================================
-// TestClock: drives CLK AND calls BusGlue synchronously each tick.
-// =========================================================================
-class TestClock : public Component {
-public:
-    TestClock(Signal& clk, BusGlue& bus)
-        : Component("TestClock"), clk_(clk), bus_(bus) {}
-
-    void run(std::stop_token stop) override {
-        int tick = 0;
-        while (!stop.stop_requested()) {
-            Signal::wait_quiescent(stop);
-            if (stop.stop_requested()) break;
-
-            spdlog::trace("[CLK] ---- tick {} ---- PRE-RISE", tick);
-            bus_.on_clk_rising();
-            spdlog::trace("[CLK] ---- tick {} ---- DRIVE HIGH", tick);
-            clk_.drive(Level::High);
-
-            Signal::wait_quiescent(stop);
-            if (stop.stop_requested()) break;
-
-            spdlog::trace("[CLK] ---- tick {} ---- PRE-FALL", tick);
-            bus_.on_clk_falling();
-            spdlog::trace("[CLK] ---- tick {} ---- DRIVE LOW", tick);
-            clk_.drive(Level::Low);
-            tick++;
-        }
-    }
-    void on_signal_change() override {}
-private:
-    Signal& clk_;
-    BusGlue& bus_;
 };
 
 // =========================================================================
@@ -478,22 +451,47 @@ int main() {
     // PIC address decode signals (BusGlue drives these)
     Signal pic_cs{"~PIC_CS"}, pic_a0{"PIC_A0"};
 
-    // IRQ lines (BusGlue pulses these via test trigger port 0xF0)
+    // IRQ lines (BusGlue drives these via test trigger port 0xF0)
     Signal irq0{"IRQ0"}, irq1{"IRQ1"}, irq2{"IRQ2"}, irq3{"IRQ3"};
     Signal irq4{"IRQ4"}, irq5{"IRQ5"}, irq6{"IRQ6"}, irq7{"IRQ7"};
     Signal* irq_arr[] = {&irq0, &irq1, &irq2, &irq3, &irq4, &irq5, &irq6, &irq7};
+
+    // 8284A signals
+    Signal osc{"OSC"}, pclk{"PCLK"}, res{"RES"};
+
+    // Latched address bus (outputs from 74S373 latches, active after ALE)
+    Signal xa[20] = {
+        Signal("XA0"),  Signal("XA1"),  Signal("XA2"),  Signal("XA3"),
+        Signal("XA4"),  Signal("XA5"),  Signal("XA6"),  Signal("XA7"),
+        Signal("XA8"),  Signal("XA9"),  Signal("XA10"), Signal("XA11"),
+        Signal("XA12"), Signal("XA13"), Signal("XA14"), Signal("XA15"),
+        Signal("XA16"), Signal("XA17"), Signal("XA18"), Signal("XA19"),
+    };
 
     // All traces on this test board. On power loss, every trace discharges.
     std::vector<Signal*> all_traces = {
         &vcc, &clk, &reset, &ready, &nmi, &intr, &test_pin,
         &cpu_lock, &rqgt0, &qs0, &qs1, &s0, &s1, &s2,
         &ale, &den, &dtr, &memr, &memw, &ior_sig, &iow_sig, &inta_sig,
-        &pic_cs, &pic_a0,
+        &pic_cs, &pic_a0, &osc, &pclk, &res,
     };
     for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
     for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
     for (int i = 0; i < 8; ++i)  all_traces.push_back(d_arr[i]);
     for (int i = 0; i < 8; ++i)  all_traces.push_back(irq_arr[i]);
+    for (int i = 0; i < 20; ++i) all_traces.push_back(&xa[i]);
+
+    // U11: 8284A Clock Generator
+    Socket clk_socket{"U11", "8284A", 18};
+    clk_socket.wire(2, pclk);    // PCLK output
+    clk_socket.wire(5, ready);   // READY output
+    clk_socket.wire(8, clk);     // CLK output
+    clk_socket.wire(9, gnd);     // GND
+    clk_socket.wire(10, reset);  // RESET output
+    clk_socket.wire(11, res);    // RES input (PWR_GOOD)
+    clk_socket.wire(12, osc);    // OSC output
+    clk_socket.wire(18, vcc);    // VCC
+    auto* clk_gen = clk_socket.emplace<IC_8284A>();
 
     // U3: 8088 CPU
     Socket cpu_socket{"U3", "8088", 40};
@@ -514,27 +512,25 @@ int main() {
     Socket bc_socket{"U6", "8288", 20};
     bc_socket.wire(1, gnd);
     bc_socket.wire(2, clk);
-    bc_socket.wire(3, s1);    // ~S1
-    bc_socket.wire(4, den);   // ~DEN output
-    bc_socket.wire(5, ale);   // ALE output
-    bc_socket.wire(6, vcc);   // CEN = always enabled
-    bc_socket.wire(7, memr);  // ~MEMR output
-    bc_socket.wire(8, memw);  // ~MEMW output
-    bc_socket.wire(12, iow_sig);  // ~IOW output
-    bc_socket.wire(13, ior_sig);  // ~IOR output
-    bc_socket.wire(14, inta_sig); // ~INTA output
-    bc_socket.wire(15, vcc);  // ~AEN = High (no DMA)
-    bc_socket.wire(16, dtr);  // DT/~R output
-    bc_socket.wire(18, s2);   // ~S2
-    bc_socket.wire(19, s0);   // ~S0
+    bc_socket.wire(3, s1);
+    bc_socket.wire(4, den);
+    bc_socket.wire(5, ale);
+    bc_socket.wire(6, vcc);    // CEN = always enabled
+    bc_socket.wire(7, memr);
+    bc_socket.wire(8, memw);
+    bc_socket.wire(12, iow_sig);
+    bc_socket.wire(13, ior_sig);
+    bc_socket.wire(14, inta_sig);
+    bc_socket.wire(15, vcc);   // ~AEN = High (no DMA)
+    bc_socket.wire(16, dtr);
+    bc_socket.wire(18, s2);
+    bc_socket.wire(19, s0);
     bc_socket.wire(20, vcc);
     auto* bc = bc_socket.emplace<IC_8288>();
 
     // U8: 74S245 Data Bus Transceiver
-    // A side (pins 2-9) = AD7..AD0 (CPU local bus, reversed per BRD)
-    // B side (pins 18-11) = D7..D0 (system data bus, reversed per BRD)
     Socket xcvr_socket{"U8", "74S245", 20};
-    xcvr_socket.wire(1, den);  // ~G = ~DEN
+    xcvr_socket.wire(1, den);
     xcvr_socket.wire(2, ad[7]); xcvr_socket.wire(3, ad[6]);
     xcvr_socket.wire(4, ad[5]); xcvr_socket.wire(5, ad[4]);
     xcvr_socket.wire(6, ad[3]); xcvr_socket.wire(7, ad[2]);
@@ -544,60 +540,95 @@ int main() {
     xcvr_socket.wire(13, d2); xcvr_socket.wire(14, d3);
     xcvr_socket.wire(15, d4); xcvr_socket.wire(16, d5);
     xcvr_socket.wire(17, d6); xcvr_socket.wire(18, d7);
-    xcvr_socket.wire(19, dtr);  // DIR = DT/~R
+    xcvr_socket.wire(19, dtr);
     xcvr_socket.wire(20, vcc);
     auto* xcvr = xcvr_socket.emplace<IC_74S245>();
 
-    // U2: 8259A PIC (real IC, reactive -- signal-level communication)
-    // ~WR/~RD from 8288, ~CS/A0 from BusGlue address decode, D0-D7 on system bus.
+    // U10: 74S373 Address Latch (low byte: AD0-AD7 -> XA0-XA7)
+    Socket latch_lo{"U10", "74S373", 20};
+    latch_lo.wire(1, gnd);       // ~OE = always enabled
+    latch_lo.wire(11, ale);      // LE = ALE
+    latch_lo.wire(10, gnd);
+    latch_lo.wire(20, vcc);
+    // D inputs = AD0-AD7, Q outputs = XA0-XA7
+    // D pins: 3,4,7,8,13,14,17,18  Q pins: 2,5,6,9,12,15,16,19
+    latch_lo.wire(3, ad[0]); latch_lo.wire(2, xa[0]);
+    latch_lo.wire(4, ad[1]); latch_lo.wire(5, xa[1]);
+    latch_lo.wire(7, ad[2]); latch_lo.wire(6, xa[2]);
+    latch_lo.wire(8, ad[3]); latch_lo.wire(9, xa[3]);
+    latch_lo.wire(13, ad[4]); latch_lo.wire(12, xa[4]);
+    latch_lo.wire(14, ad[5]); latch_lo.wire(15, xa[5]);
+    latch_lo.wire(17, ad[6]); latch_lo.wire(16, xa[6]);
+    latch_lo.wire(18, ad[7]); latch_lo.wire(19, xa[7]);
+    auto* latch_lo_ic = latch_lo.emplace<IC_74S373>();
+
+    // U9: 74S373 Address Latch (mid byte: A0-A7 -> XA8-XA15)
+    Socket latch_mid{"U9", "74S373", 20};
+    latch_mid.wire(1, gnd);      // ~OE = always enabled
+    latch_mid.wire(11, ale);     // LE = ALE
+    latch_mid.wire(10, gnd);
+    latch_mid.wire(20, vcc);
+    latch_mid.wire(3, a_upper[0]); latch_mid.wire(2, xa[8]);
+    latch_mid.wire(4, a_upper[1]); latch_mid.wire(5, xa[9]);
+    latch_mid.wire(7, a_upper[2]); latch_mid.wire(6, xa[10]);
+    latch_mid.wire(8, a_upper[3]); latch_mid.wire(9, xa[11]);
+    latch_mid.wire(13, a_upper[4]); latch_mid.wire(12, xa[12]);
+    latch_mid.wire(14, a_upper[5]); latch_mid.wire(15, xa[13]);
+    latch_mid.wire(17, a_upper[6]); latch_mid.wire(16, xa[14]);
+    latch_mid.wire(18, a_upper[7]); latch_mid.wire(19, xa[15]);
+    auto* latch_mid_ic = latch_mid.emplace<IC_74S373>();
+
+    // U7: 74S373 Address Latch (high nibble: A8-A11 -> XA16-XA19)
+    Socket latch_hi{"U7", "74S373", 20};
+    latch_hi.wire(1, gnd);       // ~OE = always enabled
+    latch_hi.wire(11, ale);      // LE = ALE
+    latch_hi.wire(10, gnd);
+    latch_hi.wire(20, vcc);
+    latch_hi.wire(3, a_upper[8]);  latch_hi.wire(2, xa[16]);
+    latch_hi.wire(4, a_upper[9]);  latch_hi.wire(5, xa[17]);
+    latch_hi.wire(7, a_upper[10]); latch_hi.wire(6, xa[18]);
+    latch_hi.wire(8, a_upper[11]); latch_hi.wire(9, xa[19]);
+    // D4-D7 unused on U7 -- only 4 address bits (A16-A19)
+    auto* latch_hi_ic = latch_hi.emplace<IC_74S373>();
+
+    // U2: 8259A PIC
     Socket pic_socket{"U2", "8259A", 28};
-    pic_socket.wire(1, pic_cs);       // ~CS (address decode from BusGlue)
-    pic_socket.wire(2, iow_sig);      // ~WR (from 8288)
-    pic_socket.wire(3, ior_sig);      // ~RD (from 8288)
-    pic_socket.wire(4, d7);           // D7
-    pic_socket.wire(5, d6);           // D6
-    pic_socket.wire(6, d5);           // D5
-    pic_socket.wire(7, d4);           // D4
-    pic_socket.wire(8, d3);           // D3
-    pic_socket.wire(9, d2);           // D2
-    pic_socket.wire(10, d1);          // D1
-    pic_socket.wire(11, d0);          // D0
-    pic_socket.wire(14, gnd);         // GND
+    pic_socket.wire(1, pic_cs);
+    pic_socket.wire(2, iow_sig);
+    pic_socket.wire(3, ior_sig);
+    pic_socket.wire(4, d7);  pic_socket.wire(5, d6);
+    pic_socket.wire(6, d5);  pic_socket.wire(7, d4);
+    pic_socket.wire(8, d3);  pic_socket.wire(9, d2);
+    pic_socket.wire(10, d1); pic_socket.wire(11, d0);
+    pic_socket.wire(14, gnd);
     pic_socket.wire(16, vcc);         // ~SP/~EN = VCC (master mode)
     pic_socket.wire(17, intr);        // INT -> CPU INTR
-    pic_socket.wire(18, irq0);        // IR0
-    pic_socket.wire(19, irq1);        // IR1
-    pic_socket.wire(20, irq2);        // IR2
-    pic_socket.wire(21, irq3);        // IR3
-    pic_socket.wire(22, irq4);        // IR4
-    pic_socket.wire(23, irq5);        // IR5
-    pic_socket.wire(24, irq6);        // IR6
-    pic_socket.wire(25, irq7);        // IR7
-    pic_socket.wire(26, inta_sig);    // ~INTA (from 8288)
-    pic_socket.wire(27, pic_a0);      // A0 (from BusGlue address decode)
-    pic_socket.wire(28, vcc);         // VCC
+    pic_socket.wire(18, irq0); pic_socket.wire(19, irq1);
+    pic_socket.wire(20, irq2); pic_socket.wire(21, irq3);
+    pic_socket.wire(22, irq4); pic_socket.wire(23, irq5);
+    pic_socket.wire(24, irq6); pic_socket.wire(25, irq7);
+    pic_socket.wire(26, inta_sig);
+    pic_socket.wire(27, pic_a0);
+    pic_socket.wire(28, vcc);
     auto* pic = pic_socket.emplace<IC_8259A>();
 
-    Signal* ad_ptrs[8];
-    Signal* a_upper_ptrs[12];
+    // BusGlue: reactive address decode + memory
+    Signal* xa_ptrs[20];
     Signal* d_ptrs[8];
-    for (int i = 0; i < 8; ++i)  ad_ptrs[i] = &ad[i];
-    for (int i = 0; i < 12; ++i) a_upper_ptrs[i] = &a_upper[i];
+    for (int i = 0; i < 20; ++i) xa_ptrs[i] = &xa[i];
     for (int i = 0; i < 8; ++i)  d_ptrs[i] = d_arr[i];
 
-    auto bus_ptr = std::make_unique<BusGlue>();
-    auto& bus = *bus_ptr;
-    bus.ad = ad_ptrs;
-    bus.a_upper = a_upper_ptrs;
+    BusGlue bus;
+    bus.xa = xa_ptrs;
     bus.d = d_ptrs;
     bus.s0 = &s0;
     bus.s1 = &s1;
     bus.s2 = &s2;
+    bus.pin_clk = &clk;
     bus.pic_cs = &pic_cs;
     bus.pic_a0 = &pic_a0;
     for (int i = 0; i < 8; ++i) bus.pic_ir[i] = irq_arr[i];
-
-    TestClock clk_ic(clk, bus);
+    bus.subscribe_clk();
 
     // --- Run tests (power cycle between each) ---
     int passed = 0, failed = 0;
@@ -606,48 +637,71 @@ int main() {
         spdlog::info("--- {} ---", tc.name);
 
         // Reset memory, I/O space, and BusGlue state
-        std::memset(bus.mem, 0xF4, sizeof(bus.mem));
-        std::memset(bus.io, 0xFF, sizeof(bus.io));
+        std::memset(bus.mem.get(), 0xF4, 1 << 20);
+        std::memset(bus.io.get(), 0xFF, 1 << 16);
         bus.reset();
 
         // Load binary
         std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;
-        if (!load_bin(path, bus.mem, 0xF0123)) { ++failed; continue; }
+        if (!load_bin(path, bus.mem.get(), 0xF0123)) { ++failed; continue; }
 
         // Verify load
         spdlog::trace("  mem[F0123..F012A] = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
             bus.mem[0xF0123], bus.mem[0xF0124], bus.mem[0xF0125], bus.mem[0xF0126],
             bus.mem[0xF0127], bus.mem[0xF0128], bus.mem[0xF0129], bus.mem[0xF012A]);
 
-        // Power on
-        ready.drive(Level::High);
-        s0.drive(Level::High);
-        s1.drive(Level::High);
-        s2.drive(Level::High);
-        pic_cs.drive(Level::High);   // PIC deselected at startup
-        vcc.drive(Level::High);
+        // Seat all ICs (threads start, block on wait_mailbox).
         cpu->clear_halt();
         pic->power_on();
         bc->power_on();
         xcvr->power_on();
-        clk_ic.power_on();
+        latch_lo_ic->power_on();
+        latch_mid_ic->power_on();
+        latch_hi_ic->power_on();
+        bus.power_on();
+        clk_gen->power_on();
         cpu->power_on();
+        spdlog::debug("All ICs seated, pending={}", Signal::pending.load());
 
-        // Wait for CPU to halt, with 5s safety timeout
+        // Flip the switch.
+        gnd.drive(Level::Low);
+        s0.drive(Level::High);
+        s1.drive(Level::High);
+        s2.drive(Level::High);
+        pic_cs.drive(Level::High);
+        spdlog::debug("Pre-VCC signals driven, pending={}", Signal::pending.load());
+
+        vcc.drive(Level::High);
+        spdlog::debug("VCC driven High, pending={}", Signal::pending.load());
+
+        // Brief delay for 8284A to start oscillating and assert RESET.
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        spdlog::debug("After 5ms delay, pending={}", Signal::pending.load());
+
+        // Drive RES (power good) -- 8284A deasserts RESET on next CLK fall.
+        res.drive(Level::High);
+        spdlog::debug("RES driven High, pending={}", Signal::pending.load());
+
+        // Wait for CPU to halt, with 10s safety timeout
         {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
             while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             if (!cpu->halted())
-                spdlog::warn("  timeout -- CPU did not halt within 5s");
+                spdlog::warn("  timeout -- CPU did not halt within 10s");
         }
 
-        // Power off
+        // Power off: drop VCC, ICs detect and exit.
+        res.drive(Level::Low);
         vcc.drive(Level::HiZ);
         cpu->power_off();
-        clk_ic.power_off();
+        clk_gen->power_off();
+        bus.power_off();
         bc->power_off();
         xcvr->power_off();
+        latch_lo_ic->power_off();
+        latch_mid_ic->power_off();
+        latch_hi_ic->power_off();
         pic->power_off();
 
         // Power loss: every trace on the board discharges.

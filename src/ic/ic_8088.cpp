@@ -233,15 +233,15 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     spdlog::trace("[8088]   wait T1 rise...");
     wait_clk_rising();
     spdlog::trace("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
-    spdlog::trace("[8088]   wait T1 fall (ALE)...");
+    spdlog::trace("[8088]   wait T1 fall...");
     wait_clk_falling();
-    spdlog::trace("[8088]   T1 fall -- release AD");
-    release_data();
+    spdlog::trace("[8088]   T1 fall (address held for latch capture)");
     spdlog::trace("[8088]   wait T2 rise...");
     wait_clk_rising();
-    spdlog::trace("[8088]   T2 rise");
+    spdlog::trace("[8088]   T2 rise (ALE fell, latches capturing -- address held)");
     wait_clk_falling();
-    spdlog::trace("[8088]   T2 fall");
+    spdlog::trace("[8088]   T2 fall -- release AD (latches captured)");
+    release_data();
     spdlog::trace("[8088]   wait T3 rise...");
     wait_clk_rising();
     spdlog::trace("[8088]   T3 rise -- drive status passive");
@@ -269,15 +269,15 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     spdlog::trace("[8088]   wait T1 rise...");
     wait_clk_rising();
     spdlog::trace("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
-    spdlog::trace("[8088]   wait T1 fall (ALE)...");
+    spdlog::trace("[8088]   wait T1 fall...");
     wait_clk_falling();
-    spdlog::trace("[8088]   T1 fall -- drive write data 0x{:02X}", value);
-    drive_data(value);
+    spdlog::trace("[8088]   T1 fall (address held for latch capture)");
     spdlog::trace("[8088]   wait T2 rise...");
     wait_clk_rising();
-    spdlog::trace("[8088]   T2 rise");
+    spdlog::trace("[8088]   T2 rise (ALE fell, latches capturing -- address held)");
     wait_clk_falling();
-    spdlog::trace("[8088]   T2 fall");
+    spdlog::trace("[8088]   T2 fall -- drive write data 0x{:02X} (latches captured)", value);
+    drive_data(value);
     spdlog::trace("[8088]   wait T3 rise...");
     wait_clk_rising();
     spdlog::trace("[8088]   T3 rise -- drive status passive");
@@ -311,10 +311,11 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
     if (stop_.stop_requested()) return 0;
     drive_status((BUS_IOR >> 2) & 1, (BUS_IOR >> 1) & 1, BUS_IOR & 1);
     drive_address(port);
-    wait_clk_rising();
-    wait_clk_falling();
-    release_data();
-    wait_clk_rising(); wait_clk_falling();
+    wait_clk_rising();                      // T1 rise
+    wait_clk_falling();                     // T1 fall (hold address for latch)
+    wait_clk_rising();                      // T2 rise (ALE fell, latches capturing)
+    wait_clk_falling();                     // T2 fall (latches captured)
+    release_data();                         // release AD
     wait_clk_rising();
     drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
@@ -331,10 +332,11 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     if (stop_.stop_requested()) return;
     drive_status((BUS_IOW >> 2) & 1, (BUS_IOW >> 1) & 1, BUS_IOW & 1);
     drive_address(port);
-    wait_clk_rising();
-    wait_clk_falling();
-    drive_data(value);
-    wait_clk_rising(); wait_clk_falling();
+    wait_clk_rising();                      // T1 rise
+    wait_clk_falling();                     // T1 fall (hold address for latch)
+    wait_clk_rising();                      // T2 rise (ALE fell, latches capturing)
+    wait_clk_falling();                     // T2 fall (latches captured)
+    drive_data(value);                      // drive write data
     wait_clk_rising();
     drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
@@ -1237,10 +1239,10 @@ void IC_8088::execute() {
             spdlog::trace("[8088] INTA pulse 1 -- drive status");
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             wait_clk_rising();              // T1 rise
-            wait_clk_falling();             // T1 fall
+            wait_clk_falling();             // T1 fall (hold for latch)
+            wait_clk_rising();              // T2 rise (ALE fell, latches capturing)
+            wait_clk_falling();             // T2 fall (latches captured)
             release_data();
-            wait_clk_rising();              // T2 rise
-            wait_clk_falling();             // T2 fall
             wait_clk_rising();              // T3 rise
             drive_status_passive();
             wait_clk_falling();             // T3 fall
@@ -1250,10 +1252,10 @@ void IC_8088::execute() {
             spdlog::trace("[8088] INTA pulse 2 -- drive status, will read vector");
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             wait_clk_rising();              // T1 rise
-            wait_clk_falling();             // T1 fall
+            wait_clk_falling();             // T1 fall (hold for latch)
+            wait_clk_rising();              // T2 rise (ALE fell, latches capturing)
+            wait_clk_falling();             // T2 fall (latches captured)
             release_data();
-            wait_clk_rising();              // T2 rise
-            wait_clk_falling();             // T2 fall
             wait_clk_rising();              // T3 rise
             drive_status_passive();
             wait_clk_falling();             // T3 fall -- sample vector

@@ -43,6 +43,7 @@ public:
     IC* emplace(Args&&... args) {
         auto ic = std::make_unique<IC>(std::forward<Args>(args)...);
         IC* ptr = ic.get();
+        ptr->set_name(ref_ + "-" + label_);
         ptr->install(*this);
         insert(std::move(ic));
         return ptr;

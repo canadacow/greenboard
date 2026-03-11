@@ -43,6 +43,12 @@ void IC_74S373::install(Socket& socket) {
     spdlog::debug("[74S373] installed into socket {}", socket.ref());
 }
 
+void IC_74S373::on_power_on() {
+    for (int i = 0; i < 8; ++i)
+        latch_[i] = Level::HiZ;
+    le_prev_ = Level::HiZ;
+}
+
 void IC_74S373::on_signal_change() {
     if (pin_le_) {
         Level cur = pin_le_->level();

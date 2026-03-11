@@ -4,7 +4,8 @@
 ;
 ; BusGlue provides:
 ;   - 8259A PIC at ports 0x20-0x21
-;   - Test trigger port 0xF0: writing bit N raises IRQ N
+;   - Test trigger port 0xF0: writing bit N raises IRQ N (drives High)
+;   - Test clear port 0xF1: writing bit N clears IRQ N (drives Low)
 ;
 ; Expected results:
 ;   [0500] = 0x0001   IRQ1 fires with correct vector (INT 9)
@@ -215,12 +216,16 @@ irq0_handler:
 .irq0_p2_not_first:
     inc bx
     mov [0x0600], bx
+    mov al, 0x01
+    out 0xF1, al               ; clear IRQ0 line
     mov al, 0x20
     out 0x20, al               ; non-specific EOI
     jmp .irq0_done
 
 .irq0_phase5:
     ; Specific EOI for IRQ0: OCW2 = 0x60 (cmd=3, L=0)
+    mov al, 0x01
+    out 0xF1, al               ; clear IRQ0 line
     mov al, 0x60
     out 0x20, al
     ; Read ISR
@@ -235,6 +240,8 @@ irq0_handler:
 
 .irq0_phase6:
     ; Auto-EOI: ISR should already be 0
+    mov al, 0x01
+    out 0xF1, al               ; clear IRQ0 line
     mov al, 0x0B
     out 0x20, al
     in al, 0x20
@@ -248,6 +255,8 @@ irq0_handler:
 .irq0_phase7:
     ; Nested: increment counter, EOI, STI, trigger IRQ1
     add word [0x050C], 1
+    mov al, 0x01
+    out 0xF1, al               ; clear IRQ0 line
     mov al, 0x20
     out 0x20, al               ; EOI for IRQ0 first (so IRQ1 can nest)
     sti                        ; re-enable interrupts
@@ -287,6 +296,8 @@ irq1_handler:
 .irq1_phase1:
     ; IRQ1 fires test: mark success
     mov word [0x0500], 0x0001
+    mov al, 0x02
+    out 0xF1, al               ; clear IRQ1 line
     mov al, 0x20
     out 0x20, al
     jmp .irq1_done
@@ -300,6 +311,8 @@ irq1_handler:
 .irq1_p2_not_second:
     inc bx
     mov [0x0600], bx
+    mov al, 0x02
+    out 0xF1, al               ; clear IRQ1 line
     mov al, 0x20
     out 0x20, al
     jmp .irq1_done
@@ -307,6 +320,8 @@ irq1_handler:
 .irq1_phase7:
     ; Nested: increment counter, EOI
     add word [0x050C], 1
+    mov al, 0x02
+    out 0xF1, al               ; clear IRQ1 line
     mov al, 0x20
     out 0x20, al
     jmp .irq1_done
@@ -321,6 +336,8 @@ irq1_handler:
 ; =====================================================================
 irq2_handler:
     mov word [0x0506], 0xDEAD
+    mov al, 0x04
+    out 0xF1, al               ; clear IRQ2 line
     mov al, 0x20
     out 0x20, al
     iret

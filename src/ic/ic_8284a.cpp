@@ -37,6 +37,7 @@ void IC_8284A::run(std::stop_token stop) {
     }
 
     if (stop.stop_requested()) return;
+    flush_pending_ack();  // ack VCC wake before entering spin loop
     spdlog::debug("[8284A] VCC is High, oscillator spinning");
 
     // Assert RESET on power-up (RES starts low from RC delay).
@@ -91,6 +92,16 @@ void IC_8284A::run(std::stop_token stop) {
             if (clk_state) {
                 pclk_state = !pclk_state;
                 if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
+            }
+
+            // Drain our own mailbox and wait for all reactive components
+            // to settle. Must drain inside the loop because signals (RES,
+            // VCC) can arrive for us while we're waiting.
+            while (!stop.stop_requested()) {
+                while (mailbox()->sem.try_acquire())
+                    Signal::ack();
+                if (Signal::pending.load(std::memory_order_acquire) == 0)
+                    break;
             }
         }
 

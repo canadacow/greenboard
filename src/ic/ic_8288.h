@@ -71,6 +71,7 @@ private:
     void drive_command(BusCycle cycle);
     void release_command();
     void on_clk_rising();
+    void on_clk_falling();
 
     // Output pins (we drive these)
     Signal* pin_ale_  = nullptr;   // Pin  5: ALE

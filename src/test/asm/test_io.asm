@@ -133,6 +133,10 @@ irq0_handler:
     ; We know our IVT slot is 8, so store that.
     mov word [0x050A], 0x0008
 
+    ; Clear IRQ0 line so PIC re-init won't see it as pending
+    mov al, 0x01
+    out 0xF1, al
+
     ; Send EOI to PIC (non-specific EOI = 0x20)
     mov al, 0x20
     out 0x20, al

@@ -48,6 +48,8 @@ void IC_8288::on_signal_change() {
         Level cur = pin_clk_->level();
         if (cur == Level::High && clk_prev_ != Level::High)
             on_clk_rising();
+        if (cur == Level::Low && clk_prev_ != Level::Low)
+            on_clk_falling();
         clk_prev_ = cur;
     }
 }
@@ -176,18 +178,12 @@ void IC_8288::on_clk_rising() {
         case State::T1: {
             state_ = State::T2;
 
-            // T2: Deassert ALE, drive command strobe, assert ~DEN.
+            // T2 CLK rise: Deassert ALE (latches capture on falling edge).
+            // ~DEN and command strobe are deferred to T2 CLK fall to avoid
+            // bus contention: the 74S245 must not drive AD while the 74S373
+            // is capturing the address from AD.
             if (pin_ale_) pin_ale_->drive(Level::Low);
-
-            // Only drive commands if CEN is High (command enable).
-            bool cen = !pin_cen_ || pin_cen_->level() == Level::High;
-            if (cen) {
-                drive_command(cycle_);
-            }
-
-            // ~DEN active (Low) = data bus transceivers enabled.
-            if (pin_den_) pin_den_->drive(Level::Low);
-            spdlog::trace("[8288] T1->T2 ~DEN=Low (enabled), cmd={}", cycle_name(cycle_));
+            spdlog::trace("[8288] T1->T2 ALE=Low (latches capture), cmd deferred");
             break;
         }
 
@@ -205,6 +201,20 @@ void IC_8288::on_clk_rising() {
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
             break;
+    }
+}
+
+void IC_8288::on_clk_falling() {
+    // Deferred from T2 CLK rise: assert ~DEN and command strobe.
+    // This gives the 74S373 a full half-cycle to capture the address
+    // before the 74S245 transceiver enables and drives the AD bus.
+    if (state_ == State::T2 && pin_den_ && pin_den_->level() != Level::Low) {
+        bool cen = !pin_cen_ || pin_cen_->level() == Level::High;
+        if (cen) {
+            drive_command(cycle_);
+        }
+        if (pin_den_) pin_den_->drive(Level::Low);
+        spdlog::trace("[8288] T2_FALL ~DEN=Low (enabled), cmd active");
     }
 }
 
