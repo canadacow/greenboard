@@ -41,6 +41,29 @@ void IC_8259A::install(Socket& socket) {
     spdlog::debug("[8259A] installed into socket {}", socket.ref());
 }
 
+void IC_8259A::on_power_on() {
+    irr_ = 0;
+    isr_ = 0;
+    imr_ = 0;
+    vector_base_ = 0;
+    icw1_ = 0;
+    icw4_needed_ = false;
+    single_mode_ = true;
+    edge_triggered_ = true;
+    auto_eoi_ = false;
+    mode_8086_ = true;
+    ir_prev_ = 0;
+    read_isr_ = false;
+    inta_count_ = 0;
+    inta_level_ = -1;
+    init_state_ = InitState::Ready;
+    initialized_ = false;
+    wr_prev_ = Level::HiZ;
+    cs_prev_ = Level::HiZ;
+    rd_prev_ = Level::HiZ;
+    inta_prev_ = Level::HiZ;
+}
+
 void IC_8259A::on_signal_change() {
     Level wr_cur = pin_wr_ ? pin_wr_->level() : Level::HiZ;
     Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;

@@ -16,6 +16,7 @@
 #include "ic/ic_8088.h"
 #include "ic/ic_8288.h"
 #include "ic/ic_74s245.h"
+#include "ic/ic_8259a.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <cstring>
@@ -28,151 +29,10 @@
 using namespace bench;
 
 // =========================================================================
-// BusGlue: combinational 8288 + latches + transceiver + 1MB flat memory.
+// BusGlue: combinational address decode + memory. Drives ~CS/A0 for the
+// real IC_8259A PIC (signal-level), and handles memory/generic-I/O directly.
 // NOT a Component. Called synchronously by TestClock.
 // =========================================================================
-// =========================================================================
-// Minimal 8259A PIC emulation for the test harness.
-// Handles ICW1-4 init sequence, IMR, IRR, ISR, INTA, and EOI.
-// =========================================================================
-struct PIC {
-    enum class InitState { INIT_READY, EXPECT_ICW2, EXPECT_ICW3, EXPECT_ICW4 };
-    InitState init_state = InitState::INIT_READY;
-    uint8_t icw1 = 0;
-    uint8_t vector_base = 0;  // ICW2: base interrupt vector (upper 5 bits)
-    uint8_t icw4 = 0;
-    uint8_t imr = 0xFF;       // interrupt mask register (all masked)
-    uint8_t irr = 0;          // interrupt request register
-    uint8_t isr = 0;          // in-service register
-    bool read_isr = false;    // OCW3: read ISR instead of IRR
-    Signal* intr = nullptr;   // INTR output to CPU
-    bool inta_pending = false;   // true after first INTA pulse (vector latched)
-    uint8_t latched_vector = 0;  // vector latched on first INTA pulse
-
-    void write(uint16_t port, uint8_t val) {
-        if (port == 0x20) {
-            if (val & 0x10) {
-                // ICW1: bit 4 set
-                icw1 = val;
-                init_state = InitState::EXPECT_ICW2;
-                imr = 0xFF;
-                irr = 0;
-                isr = 0;
-                read_isr = false;
-                spdlog::trace("[PIC] ICW1=0x{:02X}", val);
-            } else if ((val & 0x18) == 0x00) {
-                // OCW2: EOI commands (bits 4:3 = 00)
-                uint8_t cmd = (val >> 5) & 7;
-                if (cmd == 1) {
-                    // Non-specific EOI: clear highest-priority ISR bit
-                    for (int i = 0; i < 8; i++) {
-                        if (isr & (1 << i)) { isr &= ~(1 << i); break; }
-                    }
-                    spdlog::trace("[PIC] non-specific EOI, ISR=0x{:02X}", isr);
-                } else if (cmd == 3) {
-                    // Specific EOI: clear bit specified by L2:L0
-                    isr &= ~(1 << (val & 7));
-                    spdlog::trace("[PIC] specific EOI IRQ{}, ISR=0x{:02X}", val & 7, isr);
-                }
-                update_intr();
-            } else if ((val & 0x18) == 0x08) {
-                // OCW3: bits 4:3 = 01
-                if (val & 0x02) read_isr = (val & 0x01);
-                spdlog::trace("[PIC] OCW3=0x{:02X} read_isr={}", val, read_isr);
-            }
-        } else { // port 0x21
-            switch (init_state) {
-            case InitState::EXPECT_ICW2:
-                vector_base = val & 0xF8;
-                spdlog::trace("[PIC] ICW2=0x{:02X} base_vector={}", val, vector_base);
-                // ICW1 bit 1: 1=single, 0=cascade (need ICW3)
-                init_state = (icw1 & 0x02) ?
-                    ((icw1 & 0x01) ? InitState::EXPECT_ICW4 : InitState::INIT_READY) :
-                    InitState::EXPECT_ICW3;
-                break;
-            case InitState::EXPECT_ICW3:
-                spdlog::trace("[PIC] ICW3=0x{:02X}", val);
-                init_state = (icw1 & 0x01) ? InitState::EXPECT_ICW4 : InitState::INIT_READY;
-                break;
-            case InitState::EXPECT_ICW4:
-                icw4 = val;
-                spdlog::trace("[PIC] ICW4=0x{:02X}", val);
-                init_state = InitState::INIT_READY;
-                break;
-            case InitState::INIT_READY:
-                // OCW1: interrupt mask register
-                imr = val;
-                spdlog::trace("[PIC] OCW1 IMR=0x{:02X}", val);
-                update_intr();
-                break;
-            }
-        }
-    }
-
-    uint8_t read(uint16_t port) {
-        if (port == 0x20) {
-            return read_isr ? isr : irr;
-        } else { // port 0x21
-            return imr;
-        }
-    }
-
-    void raise_irq(int n) {
-        irr |= (1 << n);
-        spdlog::trace("[PIC] IRQ{} raised, IRR=0x{:02X}", n, irr);
-        update_intr();
-    }
-
-    // INTA: two-pulse acknowledge sequence.
-    // First INTA bus cycle: freeze priority, latch vector, set ISR, clear IRR.
-    // Second INTA bus cycle: return latched vector.
-    uint8_t ack() {
-        if (inta_pending) {
-            // Second INTA pulse: return previously latched vector
-            inta_pending = false;
-            spdlog::trace("[PIC] INTA pulse 2 -> vector {}", latched_vector);
-            return latched_vector;
-        }
-        // First INTA pulse: acknowledge highest-priority pending interrupt
-        int irq = highest_priority();
-        if (irq < 0) { inta_pending = true; latched_vector = vector_base; return vector_base; }
-        irr &= ~(1 << irq);
-        isr |= (1 << irq);
-        latched_vector = vector_base + irq;
-        inta_pending = true;
-        spdlog::trace("[PIC] INTA pulse 1 -> vector {} (IRQ{}), ISR=0x{:02X}", latched_vector, irq, isr);
-        // Auto-EOI: clear ISR immediately
-        if (icw4 & 0x02) isr &= ~(1 << irq);
-        update_intr();
-        return latched_vector;
-    }
-
-    int highest_priority() {
-        uint8_t pending = irr & ~imr;
-        for (int i = 0; i < 8; i++)
-            if (pending & (1 << i)) return i;
-        return -1;
-    }
-
-    bool has_interrupt() { return (irr & ~imr) != 0; }
-
-    void update_intr() {
-        if (!intr) return;
-        if (has_interrupt())
-            intr->drive(Level::High);
-        else
-            intr->drive(Level::Low);
-    }
-
-    void reset() {
-        init_state = InitState::INIT_READY;
-        icw1 = 0; vector_base = 0; icw4 = 0;
-        imr = 0xFF; irr = 0; isr = 0;
-        read_isr = false;
-        inta_pending = false; latched_vector = 0;
-    }
-};
-
 struct BusGlue {
     Signal** ad;           // AD0-AD7 (8 pointers) -- address read only
     Signal** a_upper;      // A8-A19 (12 pointers)
@@ -182,7 +42,12 @@ struct BusGlue {
     Signal* s2;
     uint8_t mem[1 << 20];
     uint8_t io[1 << 16];  // 64K I/O port space
-    PIC pic;               // 8259A PIC at ports 0x20-0x21
+
+    // Real PIC control signals (BusGlue acts as address decode logic)
+    Signal* pic_cs = nullptr;     // ~CS to PIC (driven by address decode)
+    Signal* pic_a0 = nullptr;     // A0 to PIC (port bit 0)
+    Signal* pic_ir[8] = {};       // IR0-IR7 (for test trigger port 0xF0)
+    bool pic_active = false;      // true when PIC ~CS is asserted this cycle
 
     // T-state machine (mirrors 8288 bus controller)
     enum class TState { IDLE, T1, T2, T3, T4 };
@@ -245,21 +110,33 @@ struct BusGlue {
         return "?";
     }
 
-    // I/O read: route PIC ports to PIC, everything else to generic io[]
+    bool is_pic_port(uint32_t addr) { return (addr & 0xFFFF) == 0x20 || (addr & 0xFFFF) == 0x21; }
+
+    // I/O read: PIC ports handled by real PIC via signals, everything else generic
     uint8_t io_read(uint16_t port) {
-        if (port == 0x20 || port == 0x21)
-            return pic.read(port);
         return io[port];
     }
 
-    // I/O write: route PIC ports to PIC, trigger port to IRQ, else generic io[]
+    // I/O write: PIC ports handled by real PIC, trigger port pulses IR lines
     void io_write(uint16_t port, uint8_t val) {
-        if (port == 0x20 || port == 0x21) {
-            pic.write(port, val);
-        } else if (port == 0xF0) {
-            // Test trigger port: each bit raises corresponding IRQ
-            for (int i = 0; i < 8; i++)
-                if (val & (1 << i)) pic.raise_irq(i);
+        if (port == 0xF0) {
+            // Test trigger port: pulse IR lines (Low->High->Low).
+            // PIC latches IRR on rising edge; line returns Low so
+            // PIC re-init won't see stale high lines as pending.
+            for (int i = 0; i < 8; i++) {
+                if ((val & (1 << i)) && pic_ir[i])
+                    pic_ir[i]->drive(Level::Low);
+            }
+            Signal::wait_quiescent();
+            for (int i = 0; i < 8; i++) {
+                if ((val & (1 << i)) && pic_ir[i])
+                    pic_ir[i]->drive(Level::High);
+            }
+            Signal::wait_quiescent();
+            for (int i = 0; i < 8; i++) {
+                if ((val & (1 << i)) && pic_ir[i])
+                    pic_ir[i]->drive(Level::Low);
+            }
         } else {
             io[port] = val;
         }
@@ -282,29 +159,45 @@ struct BusGlue {
         case TState::T1:
             t_state = TState::T2;
             if (is_read_cycle()) {
-                uint8_t val;
                 if (is_inta_cycle()) {
-                    val = pic.ack();
-                    spdlog::trace("[BusGlue] T2 INTA vector=0x{:02X} cycle#{}", val, bus_cycle_count);
+                    // Real PIC handles INTA via 8288's ~INTA signal.
+                    // PIC drives vector onto D bus on second pulse.
+                    spdlog::trace("[BusGlue] T2 INTA -- real PIC cycle#{}", bus_cycle_count);
+                } else if (is_io_cycle() && is_pic_port(cycle_addr)) {
+                    // Assert PIC chip select + A0. The 8288 will drive ~IOR
+                    // on this same CLK edge, and the PIC will respond.
+                    if (pic_a0) pic_a0->drive(cycle_addr & 1 ? Level::High : Level::Low);
+                    if (pic_cs) pic_cs->drive(Level::Low);
+                    pic_active = true;
+                    spdlog::trace("[BusGlue] T2 PIC READ port=0x{:04X} cycle#{}", cycle_addr, bus_cycle_count);
                 } else if (is_io_cycle()) {
-                    val = io_read(cycle_addr & 0xFFFF);
+                    uint8_t val = io_read(cycle_addr & 0xFFFF);
                     spdlog::trace("[BusGlue] T2 IO READ port=0x{:04X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
+                    drive_d(val);
                 } else {
-                    val = mem[cycle_addr & 0xFFFFF];
+                    uint8_t val = mem[cycle_addr & 0xFFFFF];
                     spdlog::trace("[BusGlue] T2 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
+                    drive_d(val);
                 }
-                drive_d(val);
             }
             break;
 
         case TState::T2:
             t_state = TState::T3;
             if (is_write_cycle()) {
-                uint8_t val = read_d();
-                if (is_io_cycle()) {
+                if (is_io_cycle() && is_pic_port(cycle_addr)) {
+                    // Assert PIC chip select + A0. The 8288 drives ~IOW,
+                    // data is already on D bus from CPU via 74S245.
+                    if (pic_a0) pic_a0->drive(cycle_addr & 1 ? Level::High : Level::Low);
+                    if (pic_cs) pic_cs->drive(Level::Low);
+                    pic_active = true;
+                    spdlog::trace("[BusGlue]   -> T3 PIC WRITE port=0x{:04X}", cycle_addr);
+                } else if (is_io_cycle()) {
+                    uint8_t val = read_d();
                     spdlog::trace("[BusGlue]   -> T3 IO WRITE port[0x{:04X}]=0x{:02X}", cycle_addr, val);
                     io_write(cycle_addr & 0xFFFF, val);
                 } else {
+                    uint8_t val = read_d();
                     spdlog::trace("[BusGlue]   -> T3 WRITE mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
                     mem[cycle_addr & 0xFFFFF] = val;
                 }
@@ -315,7 +208,12 @@ struct BusGlue {
 
         case TState::T3:
             // T3 is always exactly one clock. Move to T4 unconditionally.
-            // (Wait states are handled via READY, not status polling.)
+            // Deassert PIC ~CS here (before 8288 releases ~IOR/~IOW at T4).
+            if (pic_active) {
+                if (pic_cs) pic_cs->drive(Level::High);
+                pic_active = false;
+                spdlog::trace("[BusGlue]   PIC ~CS deasserted");
+            }
             t_state = TState::T4;
             if (status == 7)
                 spdlog::trace("[BusGlue]   -> T4 (status passive)");
@@ -355,7 +253,7 @@ struct BusGlue {
         cycle_type = 7;
         cycle_addr = 0;
         bus_cycle_count = 0;
-        pic.reset();
+        pic_active = false;
     }
 };
 
@@ -577,15 +475,25 @@ int main() {
     Signal d4("D4"), d5("D5"), d6("D6"), d7("D7");
     Signal* d_arr[] = {&d0, &d1, &d2, &d3, &d4, &d5, &d6, &d7};
 
+    // PIC address decode signals (BusGlue drives these)
+    Signal pic_cs{"~PIC_CS"}, pic_a0{"PIC_A0"};
+
+    // IRQ lines (BusGlue pulses these via test trigger port 0xF0)
+    Signal irq0{"IRQ0"}, irq1{"IRQ1"}, irq2{"IRQ2"}, irq3{"IRQ3"};
+    Signal irq4{"IRQ4"}, irq5{"IRQ5"}, irq6{"IRQ6"}, irq7{"IRQ7"};
+    Signal* irq_arr[] = {&irq0, &irq1, &irq2, &irq3, &irq4, &irq5, &irq6, &irq7};
+
     // All traces on this test board. On power loss, every trace discharges.
     std::vector<Signal*> all_traces = {
         &vcc, &clk, &reset, &ready, &nmi, &intr, &test_pin,
         &cpu_lock, &rqgt0, &qs0, &qs1, &s0, &s1, &s2,
         &ale, &den, &dtr, &memr, &memw, &ior_sig, &iow_sig, &inta_sig,
+        &pic_cs, &pic_a0,
     };
     for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
     for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
     for (int i = 0; i < 8; ++i)  all_traces.push_back(d_arr[i]);
+    for (int i = 0; i < 8; ++i)  all_traces.push_back(irq_arr[i]);
 
     // U3: 8088 CPU
     Socket cpu_socket{"U3", "8088", 40};
@@ -640,6 +548,36 @@ int main() {
     xcvr_socket.wire(20, vcc);
     auto* xcvr = xcvr_socket.emplace<IC_74S245>();
 
+    // U2: 8259A PIC (real IC, reactive -- signal-level communication)
+    // ~WR/~RD from 8288, ~CS/A0 from BusGlue address decode, D0-D7 on system bus.
+    Socket pic_socket{"U2", "8259A", 28};
+    pic_socket.wire(1, pic_cs);       // ~CS (address decode from BusGlue)
+    pic_socket.wire(2, iow_sig);      // ~WR (from 8288)
+    pic_socket.wire(3, ior_sig);      // ~RD (from 8288)
+    pic_socket.wire(4, d7);           // D7
+    pic_socket.wire(5, d6);           // D6
+    pic_socket.wire(6, d5);           // D5
+    pic_socket.wire(7, d4);           // D4
+    pic_socket.wire(8, d3);           // D3
+    pic_socket.wire(9, d2);           // D2
+    pic_socket.wire(10, d1);          // D1
+    pic_socket.wire(11, d0);          // D0
+    pic_socket.wire(14, gnd);         // GND
+    pic_socket.wire(16, vcc);         // ~SP/~EN = VCC (master mode)
+    pic_socket.wire(17, intr);        // INT -> CPU INTR
+    pic_socket.wire(18, irq0);        // IR0
+    pic_socket.wire(19, irq1);        // IR1
+    pic_socket.wire(20, irq2);        // IR2
+    pic_socket.wire(21, irq3);        // IR3
+    pic_socket.wire(22, irq4);        // IR4
+    pic_socket.wire(23, irq5);        // IR5
+    pic_socket.wire(24, irq6);        // IR6
+    pic_socket.wire(25, irq7);        // IR7
+    pic_socket.wire(26, inta_sig);    // ~INTA (from 8288)
+    pic_socket.wire(27, pic_a0);      // A0 (from BusGlue address decode)
+    pic_socket.wire(28, vcc);         // VCC
+    auto* pic = pic_socket.emplace<IC_8259A>();
+
     Signal* ad_ptrs[8];
     Signal* a_upper_ptrs[12];
     Signal* d_ptrs[8];
@@ -655,7 +593,9 @@ int main() {
     bus.s0 = &s0;
     bus.s1 = &s1;
     bus.s2 = &s2;
-    bus.pic.intr = &intr;
+    bus.pic_cs = &pic_cs;
+    bus.pic_a0 = &pic_a0;
+    for (int i = 0; i < 8; ++i) bus.pic_ir[i] = irq_arr[i];
 
     TestClock clk_ic(clk, bus);
 
@@ -684,8 +624,10 @@ int main() {
         s0.drive(Level::High);
         s1.drive(Level::High);
         s2.drive(Level::High);
+        pic_cs.drive(Level::High);   // PIC deselected at startup
         vcc.drive(Level::High);
         cpu->clear_halt();
+        pic->power_on();
         bc->power_on();
         xcvr->power_on();
         clk_ic.power_on();
@@ -706,6 +648,7 @@ int main() {
         clk_ic.power_off();
         bc->power_off();
         xcvr->power_off();
+        pic->power_off();
 
         // Power loss: every trace on the board discharges.
         for (auto* sig : all_traces)
