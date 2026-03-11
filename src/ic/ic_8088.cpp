@@ -1219,20 +1219,37 @@ void IC_8088::execute() {
             nmi_pending_ = false;
             pc_interrupt(2);
         } else if (pin_intr_ && pin_intr_->level() == Level::High) {
-            // INTA bus cycle: drive INTA status, read vector from 8259A
+            // INTA bus cycle: two back-to-back INTA pulses.
+            // Each pulse is a full 4-T-state bus cycle, same as bus_read_byte.
+
+            // First INTA pulse (PIC latches request)
+            spdlog::trace("[8088] INTA pulse 1 -- drive status");
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
-            wait_clk_rising(); wait_clk_falling();
-            wait_clk_rising(); wait_clk_falling();
-            drive_status_passive();
-            // Second INTA pulse: read vector byte from PIC
-            drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
-            wait_clk_rising(); wait_clk_falling();
+            wait_clk_rising();              // T1 rise
+            wait_clk_falling();             // T1 fall
             release_data();
-            wait_clk_rising(); wait_clk_falling();
-            wait_clk_rising(); wait_clk_falling();
-            uint8_t vector = read_data();
+            wait_clk_rising();              // T2 rise
+            wait_clk_falling();             // T2 fall
+            wait_clk_rising();              // T3 rise
             drive_status_passive();
-            wait_clk_rising(); wait_clk_falling();
+            wait_clk_falling();             // T3 fall
+            wait_clk_rising(); wait_clk_falling();  // T4
+
+            // Second INTA pulse (PIC drives vector on data bus)
+            spdlog::trace("[8088] INTA pulse 2 -- drive status, will read vector");
+            drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
+            wait_clk_rising();              // T1 rise
+            wait_clk_falling();             // T1 fall
+            release_data();
+            wait_clk_rising();              // T2 rise
+            wait_clk_falling();             // T2 fall
+            wait_clk_rising();              // T3 rise
+            drive_status_passive();
+            wait_clk_falling();             // T3 fall -- sample vector
+            uint8_t vector = read_data();
+            spdlog::trace("[8088] INTA vector = 0x{:02X}", vector);
+            wait_clk_rising(); wait_clk_falling();  // T4
+
             pc_interrupt(vector);
         }
     }

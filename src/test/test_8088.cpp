@@ -301,12 +301,13 @@ struct BusGlue {
             break;
 
         case TState::T3:
-            if (status == 7) {
-                t_state = TState::T4;
+            // T3 is always exactly one clock. Move to T4 unconditionally.
+            // (Wait states are handled via READY, not status polling.)
+            t_state = TState::T4;
+            if (status == 7)
                 spdlog::trace("[BusGlue]   -> T4 (status passive)");
-            } else {
-                spdlog::trace("[BusGlue]   Tw (status={}, waiting)", status);
-            }
+            else
+                spdlog::trace("[BusGlue]   -> T4 (status={}, forced)", status);
             break;
 
         case TState::T4:
