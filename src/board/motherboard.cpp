@@ -2,6 +2,7 @@
 #include "board/brd_parser.h"
 #include <spdlog/spdlog.h>
 #include <filesystem>
+#include <unordered_set>
 
 namespace bench {
 
@@ -61,7 +62,22 @@ void Motherboard::power_on() {
 
 void Motherboard::power_off() {
     psu.switch_off();
-    spdlog::info("5150 powered off");
+
+    // Power loss: every copper trace on the board loses its charge.
+    // Wiring stays intact, but all levels drop to HiZ.
+    // Use net_map_ to reach every unique Signal on the motherboard.
+    std::unordered_set<Signal*> seen;
+    for (auto& [name, sig] : net_map_) {
+        if (sig && seen.insert(sig).second)
+            sig->reset();
+    }
+    // Dynamic signals not in net_map_ (shouldn't happen, but be safe).
+    for (auto& sig : dynamic_signals_) {
+        if (sig && seen.insert(sig.get()).second)
+            sig->reset();
+    }
+
+    spdlog::info("5150 powered off ({} traces discharged)", seen.size());
 }
 
 // =========================================================================

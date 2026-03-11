@@ -42,6 +42,7 @@ struct BusGlue {
     TState t_state = TState::IDLE;
     uint8_t cycle_type = 7;   // status code for current cycle
     uint32_t cycle_addr = 0;
+    int bus_cycle_count = 0;   // debug: count completed bus cycles
 
     uint8_t decode_status() {
         uint8_t v2 = (s2->level() == Level::High) ? 1 : 0;
@@ -104,7 +105,8 @@ struct BusGlue {
             if (status != 7) {
                 t_state = TState::T1;
                 cycle_type = status;
-                spdlog::trace("[BusGlue]   -> T1 NEW CYCLE type={}", cycle_type);
+                if (bus_cycle_count < 5)
+                    spdlog::debug("[BusGlue] IDLE->T1 type={} cycle#{}", cycle_type, bus_cycle_count);
             }
             break;
 
@@ -112,10 +114,9 @@ struct BusGlue {
             t_state = TState::T2;
             if (is_read_cycle()) {
                 uint8_t val = mem[cycle_addr & 0xFFFFF];
-                spdlog::trace("[BusGlue]   -> T2 READ drive mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
+                if (bus_cycle_count < 5)
+                    spdlog::debug("[BusGlue] T2 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
                 drive_ad(val);
-            } else {
-                spdlog::trace("[BusGlue]   -> T2");
             }
             break;
 
@@ -143,13 +144,17 @@ struct BusGlue {
             if (status != 7) {
                 t_state = TState::T1;
                 cycle_type = status;
-                spdlog::trace("[BusGlue]   -> T1 NEW CYCLE (overlapped T4) type={}", cycle_type);
+                bus_cycle_count++;
+                if (bus_cycle_count < 5)
+                    spdlog::debug("[BusGlue] T4->T1 overlap type={} cycle#{}", cycle_type, bus_cycle_count);
             } else {
                 if (is_read_cycle()) {
                     release_ad();
                 }
+                bus_cycle_count++;
                 t_state = TState::IDLE;
-                spdlog::trace("[BusGlue]   -> IDLE");
+                if (bus_cycle_count < 5)
+                    spdlog::debug("[BusGlue] T4->IDLE cycle#{}", bus_cycle_count);
             }
             break;
         }
@@ -168,6 +173,7 @@ struct BusGlue {
         t_state = TState::IDLE;
         cycle_type = 7;
         cycle_addr = 0;
+        bus_cycle_count = 0;
     }
 };
 
@@ -281,13 +287,21 @@ int main() {
         }},
     };
 
-    // --- Wiring (permanent) ---
+    // --- Wiring (permanent -- these are the copper traces on the test board) ---
     Signal vcc{"+5V"}, gnd{"GND"}, clk{"CLK"}, reset{"RESET"};
     Signal ready{"READY"}, nmi{"NMI"}, intr{"INTR"}, test_pin{"~TEST"};
     Signal cpu_lock{"~LOCK"}, rqgt0{"~RQ/GT0"};
     Signal qs0{"QS0"}, qs1{"QS1"}, s0{"~S0"}, s1{"~S1"}, s2{"~S2"};
     Bus ad{"AD", 8};
     Bus a_upper{"A", 12};
+
+    // All traces on this test board. On power loss, every trace discharges.
+    std::vector<Signal*> all_traces = {
+        &vcc, &clk, &reset, &ready, &nmi, &intr, &test_pin,
+        &cpu_lock, &rqgt0, &qs0, &qs1, &s0, &s1, &s2,
+    };
+    for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
+    for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
 
     Socket cpu_socket{"U3", "8088", 40};
     cpu_socket.wire(1, gnd); cpu_socket.wire(20, gnd);
@@ -353,6 +367,10 @@ int main() {
         vcc.drive(Level::HiZ);
         cpu->power_off();
         clk_ic.power_off();
+
+        // Power loss: every trace on the board discharges.
+        for (auto* sig : all_traces)
+            sig->reset();
 
         // Check results
         bool pass = true;
