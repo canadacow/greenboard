@@ -17,13 +17,19 @@ void Component::power_on() {
 void Component::power_off() {
     if (!thread_.joinable()) return;
     thread_.request_stop();
-    mailbox_->wake();  // wake consumer if blocking
+    // Wake the consumer so it can see the stop request.
+    // Increment pending so this wake is balanced like any signal wake.
+    Signal::pending.fetch_add(1, std::memory_order_release);
+    mailbox_->wake();
     thread_.join();
-    // Flush any un-acked pending from the deferred ack pattern.
+    // Flush deferred ack + drain any queued wakes. Every semaphore
+    // count has a matching pending increment, so ack them all.
     if (pending_ack_) {
         Signal::ack();
         pending_ack_ = false;
     }
+    while (mailbox_->sem.try_acquire())
+        Signal::ack();
     spdlog::trace("[{}] powered off", name_);
 }
 

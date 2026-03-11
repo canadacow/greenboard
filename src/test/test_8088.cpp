@@ -333,6 +333,11 @@ int main() {
         std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;
         if (!load_bin(path, bus.mem, 0xF0123)) { ++failed; continue; }
 
+        // Verify load
+        spdlog::debug("  mem[F0123..F012A] = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+            bus.mem[0xF0123], bus.mem[0xF0124], bus.mem[0xF0125], bus.mem[0xF0126],
+            bus.mem[0xF0127], bus.mem[0xF0128], bus.mem[0xF0129], bus.mem[0xF012A]);
+
         // Power on
         ready.drive(Level::High);
         s0.drive(Level::High);
