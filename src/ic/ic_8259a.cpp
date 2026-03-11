@@ -64,11 +64,31 @@ void IC_8259A::on_power_on() {
     inta_prev_ = Level::HiZ;
 }
 
+void little_sleep(std::chrono::microseconds us)
+{
+    auto start = std::chrono::high_resolution_clock::now();
+    auto end = start + us;
+    do
+    {
+        std::this_thread::yield();
+    }
+    while (std::chrono::high_resolution_clock::now() < end);
+}
+
 void IC_8259A::on_signal_change() {
     Level wr_cur = pin_wr_ ? pin_wr_->level() : Level::HiZ;
     Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;
     Level rd_cur = pin_rd_ ? pin_rd_->level() : Level::HiZ;
     Level inta_cur = pin_inta_ ? pin_inta_->level() : Level::HiZ;
+
+    auto d_before = read_data();
+    bool a0_before = pin_a0_ && pin_a0_->level() == Level::High;    
+
+    //little_sleep(std::chrono::microseconds(100));
+
+    //auto d_after = read_data();
+    //bool a0_after = pin_a0_ && pin_a0_->level() == Level::High;
+    //spdlog::info("[8259A] D:{:#04x}->{:#04x} A0:{}->{}", d_before, d_after, a0_before, a0_after);    
 
     // Bus write: ~WR falling while ~CS active
     if (wr_cur == Level::Low && wr_prev_ != Level::Low && cs_cur == Level::Low)
