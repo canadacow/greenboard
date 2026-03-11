@@ -29,6 +29,135 @@ using namespace bench;
 // BusGlue: combinational 8288 + latches + transceiver + 1MB flat memory.
 // NOT a Component. Called synchronously by TestClock.
 // =========================================================================
+// =========================================================================
+// Minimal 8259A PIC emulation for the test harness.
+// Handles ICW1-4 init sequence, IMR, IRR, ISR, INTA, and EOI.
+// =========================================================================
+struct PIC {
+    enum class InitState { INIT_READY, EXPECT_ICW2, EXPECT_ICW3, EXPECT_ICW4 };
+    InitState init_state = InitState::INIT_READY;
+    uint8_t icw1 = 0;
+    uint8_t vector_base = 0;  // ICW2: base interrupt vector (upper 5 bits)
+    uint8_t icw4 = 0;
+    uint8_t imr = 0xFF;       // interrupt mask register (all masked)
+    uint8_t irr = 0;          // interrupt request register
+    uint8_t isr = 0;          // in-service register
+    bool read_isr = false;    // OCW3: read ISR instead of IRR
+    Signal* intr = nullptr;   // INTR output to CPU
+
+    void write(uint16_t port, uint8_t val) {
+        if (port == 0x20) {
+            if (val & 0x10) {
+                // ICW1: bit 4 set
+                icw1 = val;
+                init_state = InitState::EXPECT_ICW2;
+                imr = 0xFF;
+                irr = 0;
+                isr = 0;
+                read_isr = false;
+                spdlog::trace("[PIC] ICW1=0x{:02X}", val);
+            } else if ((val & 0x18) == 0x00) {
+                // OCW2: EOI commands (bits 4:3 = 00)
+                uint8_t cmd = (val >> 5) & 7;
+                if (cmd == 1) {
+                    // Non-specific EOI: clear highest-priority ISR bit
+                    for (int i = 0; i < 8; i++) {
+                        if (isr & (1 << i)) { isr &= ~(1 << i); break; }
+                    }
+                    spdlog::trace("[PIC] non-specific EOI, ISR=0x{:02X}", isr);
+                } else if (cmd == 3) {
+                    // Specific EOI: clear bit specified by L2:L0
+                    isr &= ~(1 << (val & 7));
+                    spdlog::trace("[PIC] specific EOI IRQ{}, ISR=0x{:02X}", val & 7, isr);
+                }
+                update_intr();
+            } else if ((val & 0x18) == 0x08) {
+                // OCW3: bits 4:3 = 01
+                if (val & 0x02) read_isr = (val & 0x01);
+                spdlog::trace("[PIC] OCW3=0x{:02X} read_isr={}", val, read_isr);
+            }
+        } else { // port 0x21
+            switch (init_state) {
+            case InitState::EXPECT_ICW2:
+                vector_base = val & 0xF8;
+                spdlog::trace("[PIC] ICW2=0x{:02X} base_vector={}", val, vector_base);
+                // ICW1 bit 1: 1=single, 0=cascade (need ICW3)
+                init_state = (icw1 & 0x02) ?
+                    ((icw1 & 0x01) ? InitState::EXPECT_ICW4 : InitState::INIT_READY) :
+                    InitState::EXPECT_ICW3;
+                break;
+            case InitState::EXPECT_ICW3:
+                spdlog::trace("[PIC] ICW3=0x{:02X}", val);
+                init_state = (icw1 & 0x01) ? InitState::EXPECT_ICW4 : InitState::INIT_READY;
+                break;
+            case InitState::EXPECT_ICW4:
+                icw4 = val;
+                spdlog::trace("[PIC] ICW4=0x{:02X}", val);
+                init_state = InitState::INIT_READY;
+                break;
+            case InitState::INIT_READY:
+                // OCW1: interrupt mask register
+                imr = val;
+                spdlog::trace("[PIC] OCW1 IMR=0x{:02X}", val);
+                update_intr();
+                break;
+            }
+        }
+    }
+
+    uint8_t read(uint16_t port) {
+        if (port == 0x20) {
+            return read_isr ? isr : irr;
+        } else { // port 0x21
+            return imr;
+        }
+    }
+
+    void raise_irq(int n) {
+        irr |= (1 << n);
+        spdlog::trace("[PIC] IRQ{} raised, IRR=0x{:02X}", n, irr);
+        update_intr();
+    }
+
+    // INTA: acknowledge highest-priority pending interrupt
+    uint8_t ack() {
+        int irq = highest_priority();
+        if (irq < 0) return vector_base; // shouldn't happen
+        irr &= ~(1 << irq);
+        isr |= (1 << irq);
+        uint8_t vec = vector_base + irq;
+        spdlog::trace("[PIC] INTA -> vector {} (IRQ{}), ISR=0x{:02X}", vec, irq, isr);
+        // Auto-EOI: clear ISR immediately
+        if (icw4 & 0x02) isr &= ~(1 << irq);
+        update_intr();
+        return vec;
+    }
+
+    int highest_priority() {
+        uint8_t pending = irr & ~imr;
+        for (int i = 0; i < 8; i++)
+            if (pending & (1 << i)) return i;
+        return -1;
+    }
+
+    bool has_interrupt() { return (irr & ~imr) != 0; }
+
+    void update_intr() {
+        if (!intr) return;
+        if (has_interrupt())
+            intr->drive(Level::High);
+        else
+            intr->drive(Level::Low);
+    }
+
+    void reset() {
+        init_state = InitState::INIT_READY;
+        icw1 = 0; vector_base = 0; icw4 = 0;
+        imr = 0xFF; irr = 0; isr = 0;
+        read_isr = false;
+    }
+};
+
 struct BusGlue {
     Signal** ad;           // AD0-AD7 (8 pointers)
     Signal** a_upper;      // A8-A19 (12 pointers)
@@ -37,6 +166,7 @@ struct BusGlue {
     Signal* s2;
     uint8_t mem[1 << 20];
     uint8_t io[1 << 16];  // 64K I/O port space
+    PIC pic;               // 8259A PIC at ports 0x20-0x21
 
     // T-state machine (mirrors 8288 bus controller)
     enum class TState { IDLE, T1, T2, T3, T4 };
@@ -82,9 +212,11 @@ struct BusGlue {
             if (ad[i]) ad[i]->release();
     }
 
-    bool is_read_cycle()  { return cycle_type == 1 || cycle_type == 4 || cycle_type == 5; }
+    // Status decode: 0=INTA, 1=IOR, 2=IOW, 4=FETCH, 5=MEMR, 6=MEMW, 7=passive
+    bool is_read_cycle()  { return cycle_type == 0 || cycle_type == 1 || cycle_type == 4 || cycle_type == 5; }
     bool is_write_cycle() { return cycle_type == 2 || cycle_type == 6; }
     bool is_io_cycle()    { return cycle_type == 1 || cycle_type == 2; }
+    bool is_inta_cycle()  { return cycle_type == 0; }
 
     const char* tstate_name() {
         switch (t_state) {
@@ -95,6 +227,26 @@ struct BusGlue {
         case TState::T4: return "T4";
         }
         return "?";
+    }
+
+    // I/O read: route PIC ports to PIC, everything else to generic io[]
+    uint8_t io_read(uint16_t port) {
+        if (port == 0x20 || port == 0x21)
+            return pic.read(port);
+        return io[port];
+    }
+
+    // I/O write: route PIC ports to PIC, trigger port to IRQ, else generic io[]
+    void io_write(uint16_t port, uint8_t val) {
+        if (port == 0x20 || port == 0x21) {
+            pic.write(port, val);
+        } else if (port == 0xF0) {
+            // Test trigger port: each bit raises corresponding IRQ
+            for (int i = 0; i < 8; i++)
+                if (val & (1 << i)) pic.raise_irq(i);
+        } else {
+            io[port] = val;
+        }
     }
 
     void on_clk_rising() {
@@ -115,8 +267,11 @@ struct BusGlue {
             t_state = TState::T2;
             if (is_read_cycle()) {
                 uint8_t val;
-                if (is_io_cycle()) {
-                    val = io[cycle_addr & 0xFFFF];
+                if (is_inta_cycle()) {
+                    val = pic.ack();
+                    spdlog::trace("[BusGlue] T2 INTA vector=0x{:02X} cycle#{}", val, bus_cycle_count);
+                } else if (is_io_cycle()) {
+                    val = io_read(cycle_addr & 0xFFFF);
                     spdlog::trace("[BusGlue] T2 IO READ port=0x{:04X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
                 } else {
                     val = mem[cycle_addr & 0xFFFFF];
@@ -132,7 +287,7 @@ struct BusGlue {
                 uint8_t val = read_ad();
                 if (is_io_cycle()) {
                     spdlog::trace("[BusGlue]   -> T3 IO WRITE port[0x{:04X}]=0x{:02X}", cycle_addr, val);
-                    io[cycle_addr & 0xFFFF] = val;
+                    io_write(cycle_addr & 0xFFFF, val);
                 } else {
                     spdlog::trace("[BusGlue]   -> T3 WRITE mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
                     mem[cycle_addr & 0xFFFFF] = val;
@@ -183,6 +338,7 @@ struct BusGlue {
         cycle_type = 7;
         cycle_addr = 0;
         bus_cycle_count = 0;
+        pic.reset();
     }
 };
 
@@ -251,7 +407,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::debug);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -347,12 +503,14 @@ int main() {
             {0x050A, 0x2000, "CS after far call"},
         }},
         {"I/O (PIC ports)", "test_io.bin", {
-            {0x0500, 0x00AB, "OUT imm8, AL / IN AL, imm8"},
-            {0x0502, 0x00CD, "OUT DX, AL / IN AL, DX"},
-            {0x0504, 0xBEEF, "OUT imm8, AX / IN AX, imm8 (word)"},
-            {0x0506, 0x0001, "PIC ICW1 write/read"},
-            {0x0508, 0x0001, "PIC OCW1 mask write/read"},
-            {0x050A, 0x0001, "I/O doesn't touch memory"},
+            {0x0500, 0x00AB, "OUT imm8 / IN imm8 byte"},
+            {0x0502, 0x00CD, "OUT DX / IN DX byte"},
+            {0x0504, 0xBEEF, "OUT/IN word"},
+            {0x0506, 0x00FE, "PIC IMR readback"},
+            {0x0508, 0x0001, "Timer IRQ0 -> INT 8"},
+            {0x050A, 0x0008, "INT 8 vector correct"},
+            {0x050C, 0x0001, "EOI clears ISR"},
+            {0x050E, 0x0001, "I/O doesn't touch memory"},
         }},
         {"DIV/IDIV", "test_div.bin", {
             {0x0500, 0x0003, "DIV byte quot"},
@@ -409,6 +567,7 @@ int main() {
     bus.s0 = &s0;
     bus.s1 = &s1;
     bus.s2 = &s2;
+    bus.pic.intr = &intr;
 
     TestClock clk_ic(clk, bus);
 

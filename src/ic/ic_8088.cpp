@@ -1220,7 +1220,7 @@ void IC_8088::execute() {
             wait_clk_rising(); wait_clk_falling();
             wait_clk_rising(); wait_clk_falling();
             drive_status_passive();
-            // Second INTA pulse: read vector byte
+            // Second INTA pulse: read vector byte from PIC
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             wait_clk_rising(); wait_clk_falling();
             release_data();
