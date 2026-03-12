@@ -1,5 +1,5 @@
 #pragma once
-#include "core/callback_component.h"
+#include "core/inline_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -48,8 +48,10 @@ namespace bench {
 //   T3: Command stays active
 //   T4: Command deasserted, DEN deasserted, back to idle
 //
-// Callback IC -- never yields, completes all work in on_signal_change().
-class IC_8288 : public CallbackComponent {
+// Inline IC -- runs in the fixed-point loop so ALE/~DEN/commands are
+// visible to other inlines (74S373 latches, 74S245 transceivers) in the
+// same evaluation cycle, before fibers resume.
+class IC_8288 : public InlineComponent {
 public:
     IC_8288();
 
