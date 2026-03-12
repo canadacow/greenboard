@@ -35,10 +35,8 @@ public:
     // Commit + eval inlines + call callbacks + resume fibers.
     void evaluate(Fiber caller) {
         commit_and_eval_inlines();
-        for (int i = 0; i < callback_count_; ++i) {
-            if (callbacks_[i]->is_powered())
-                callbacks_[i]->on_signal_change();
-        }
+        for (int i = 0; i < callback_count_; ++i)
+            callbacks_[i]->on_signal_change();
         for (int i = 0; i < fiber_count_; ++i)
             fibers_[i]->resume(caller);
     }
@@ -51,14 +49,13 @@ public:
 private:
     void commit_and_eval_inlines() {
         // Phase 1: Commit all signals.
-        SignalPool::commit();
+        if (!SignalPool::commit()) return;
 
         // Phase 2: Fixed-point inline IC evaluation.
+        // No is_powered() check -- inlines are always powered during eval.
         for (;;) {
-            for (int i = 0; i < inline_count_; ++i) {
-                if (inlines_[i]->is_powered())
-                    inlines_[i]->on_signal_change();
-            }
+            for (int i = 0; i < inline_count_; ++i)
+                inlines_[i]->on_signal_change();
             if (!SignalPool::commit()) break;
         }
     }
