@@ -4,6 +4,7 @@
 #include "core/inline_component.h"
 #include <atomic>
 #include <cassert>
+#include <spdlog/spdlog.h>
 
 namespace bench {
 
@@ -68,31 +69,26 @@ private:
         dirty_count_.store(0, std::memory_order_relaxed);
 
         // Phase 2: Fixed-point inline IC evaluation.
-        for (;;) {
-            for (int i = 0; i < inline_count_; ++i) {
-                if (inlines_[i]->is_powered())
-                    inlines_[i]->on_signal_change();
-            }
-
-            int new_dirty = dirty_count_.load(std::memory_order_relaxed);
-            if (new_dirty == 0) break;
-
-            bool any_changed = false;
-            for (int i = 0; i < new_dirty; ++i) {
-                Signal* sig = dirty_[i];
-                sig->dirty_.store(false, std::memory_order_relaxed);
-                if (sig->commit())
-                    any_changed = true;
-            }
-            dirty_count_.store(0, std::memory_order_relaxed);
-
-            if (!any_changed) break;
+        for (int i = 0; i < inline_count_; ++i) {
+            if (inlines_[i]->is_powered())
+                inlines_[i]->on_signal_change();
         }
+
+        int new_dirty = dirty_count_.load(std::memory_order_relaxed);
+
+        bool any_changed = false;
+        for (int i = 0; i < new_dirty; ++i) {
+            Signal* sig = dirty_[i];
+            sig->dirty_.store(false, std::memory_order_relaxed);
+            if (sig->commit())
+                any_changed = true;
+        }
+        dirty_count_.store(0, std::memory_order_relaxed);
     }
 
     static constexpr int MAX_INLINES = 32;
     static constexpr int MAX_DIRTY = 512;
-    static constexpr int MAX_FIBERS = 32;
+    static constexpr int MAX_FIBERS = 256;
 
     InlineComponent* inlines_[MAX_INLINES] = {};
     int inline_count_ = 0;
