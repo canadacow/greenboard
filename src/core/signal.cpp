@@ -2,48 +2,40 @@
 #include "core/component.h"
 #include "core/inline_component.h"
 #include "core/scheduler.h"
-#include <spdlog/spdlog.h>
 #include <cassert>
 
 namespace bench {
 
+// --- SignalPool ---
+
+alignas(64) Level SignalPool::current[MAX_SIGNALS] = {};
+alignas(64) Level SignalPool::pending[MAX_SIGNALS] = {};
+int SignalPool::count = 0;
+
 // --- Signal ---
 
-std::atomic<int> Signal::pending{0};
+std::atomic<int> Signal::pending_count{0};
 Scheduler* Signal::scheduler_ = nullptr;
 
-Signal::Signal(std::string name) : name_(std::move(name)) {}
-
-void Signal::drive(Level lvl) {
-    if (lvl == pending_) return;
-    pending_ = lvl;
-    if (!dirty_) {
-        dirty_ = true;
-        scheduler_->mark_dirty(this);
-    }
-}
-
-void Signal::release() {
-    drive(pull_);
-}
-
-void Signal::reset() {
-    level_ = Level::HiZ;
-    pending_ = Level::HiZ;
-    dirty_ = false;
+Signal::Signal(std::string name) : name_(std::move(name)) {
+    int idx = SignalPool::allocate();
+    assert(idx < SignalPool::MAX_SIGNALS && "Signal pool exhausted");
+    current_ = &SignalPool::current[idx];
+    pending_ = &SignalPool::pending[idx];
+    *current_ = Level::HiZ;
+    *pending_ = Level::HiZ;
 }
 
 void Signal::set_pull(Level pull) {
     pull_ = pull;
-    if (level_ == Level::HiZ && pull != Level::HiZ) {
+    if (*current_ == Level::HiZ && pull != Level::HiZ) {
         drive(pull);
     }
 }
 
-bool Signal::commit() {
-    if (pending_ == level_) return false;
-    level_ = pending_;
-    return true;
+void Signal::reset() {
+    *current_ = Level::HiZ;
+    *pending_ = Level::HiZ;
 }
 
 void Signal::connect(Component* c) {
@@ -52,7 +44,6 @@ void Signal::connect(Component* c) {
 
 void Signal::disconnect(Component* c) {
     // Only async subscribers need disconnect for now.
-    // InlineComponents don't disconnect individually.
 }
 
 // --- Bus ---

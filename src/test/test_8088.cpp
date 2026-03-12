@@ -849,7 +849,7 @@ int main() {
         bus.power_on();
         clk_gen->power_on();
         cpu->power_on();
-        spdlog::debug("All ICs seated, pending={}", Signal::pending.load());
+        spdlog::debug("All ICs seated, pending={}", Signal::pending_count.load());
 
         // Flip the switch.
         gnd.drive(Level::Low);
@@ -861,11 +861,11 @@ int main() {
         // Commit VCC (and other initial drives) so ICs see them on first wake.
         // No async wake -- 8284A's run() is polling VCC directly.
         scheduler.evaluate_no_wake();
-        spdlog::debug("VCC driven High, pending={}", Signal::pending.load());
+        spdlog::debug("VCC driven High, pending={}", Signal::pending_count.load());
 
         // Drive RES (power good) -- 8284A deasserts RESET on next CLK fall.
         res.drive(Level::High);
-        spdlog::debug("RES driven High, pending={}", Signal::pending.load());
+        spdlog::debug("RES driven High, pending={}", Signal::pending_count.load());
 
         // 8284A's thread is already running (power_on above), polling for VCC.
         // Now that VCC is committed, it will start oscillating.

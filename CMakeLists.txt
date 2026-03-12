@@ -39,6 +39,13 @@ add_executable(bench
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt)
 
+# AVX2 for SignalPool::commit() SIMD optimization
+if(MSVC)
+    add_compile_options(/arch:AVX2)
+else()
+    add_compile_options(-mavx2)
+endif()
+
 # Set working directory to project root so relative paths (e.g. assets/) resolve correctly.
 set_target_properties(bench PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 

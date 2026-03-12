@@ -28,7 +28,7 @@ void ThreadedComponent::power_off() {
     thread_.request_stop();
     // Wake the consumer so it can see the stop request.
     // Increment pending so this wake is balanced like any signal wake.
-    Signal::pending.fetch_add(1, std::memory_order_release);
+    Signal::pending_count.fetch_add(1, std::memory_order_release);
     mailbox_->wake();
     thread_.join();
     // Flush deferred ack + drain any queued wakes. Every semaphore
@@ -60,7 +60,7 @@ void ThreadedComponent::run(std::stop_token stop) {
 // cannot advance until this component is truly blocked and ready.
 void ThreadedComponent::wait_mailbox(std::stop_token& stop) {
     if (pending_ack_) {
-        int p = Signal::pending.load(std::memory_order_acquire);
+        int p = Signal::pending_count.load(std::memory_order_acquire);
         Signal::ack();
         pending_ack_ = false;
     }
