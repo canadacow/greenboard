@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <cassert>
 #include <immintrin.h>
 #include <cstring>
 
@@ -43,6 +44,38 @@ struct SignalPool {
     }
 };
 
+// Lightweight handle into the SignalPool. Stores an index, not a pointer.
+// drive()/level() use static array base + index = no pointer chase.
+// Default-constructed Pin targets slot 0 (dummy: reads HiZ, writes vanish).
+struct Pin {
+    int idx = 0;
+
+    Level level() const { return SignalPool::current[idx]; }
+    void drive(Level lvl) { SignalPool::pending[idx] = lvl; }
+    void release() { SignalPool::pending[idx] = Level::HiZ; }
+};
+
+// Contiguous block of N pool slots. Stores one base index; read/write
+// the whole block with memcpy/memset at compile-time-known width.
+// Default base 0 targets the dummy slot (writes vanish, reads HiZ).
+template<int N>
+struct PinBlock {
+    int base = 0;
+
+    void drive(const Level* src) { std::memcpy(&SignalPool::pending[base], src, N); }
+    void read(Level* dst) const  { std::memcpy(dst, &SignalPool::current[base], N); }
+    void fill(Level lvl)         { std::memset(&SignalPool::pending[base], static_cast<uint8_t>(lvl), N); }
+    void release()               { fill(Level::HiZ); }
+
+    // Single-element access when needed.
+    Level level(int i) const     { return SignalPool::current[base + i]; }
+    void drive(int i, Level lvl) { SignalPool::pending[base + i] = lvl; }
+
+    // Build from socket pin array, asserting contiguity. Defined after Signal.
+    template<typename Socket>
+    static PinBlock from_socket(Socket& socket, const int (&pins)[N]);
+};
+
 // A single named signal line -- a wire/trace on the motherboard.
 //
 // Double-buffered via SignalPool: drive() writes pending[idx],
@@ -57,9 +90,15 @@ public:
     Level level() const { return *current_; }
 
     void drive(Level lvl) {
-        if (lvl == *pending_) return;
         *pending_ = lvl;
     }
+
+    // Raw pool pointers -- for hot-path ICs that cache these directly.
+    Level* current_ptr() const { return current_; }
+    Level* pending_ptr() const { return pending_; }
+
+    // Index-based handle -- no pointer chase on the hot path.
+    Pin pin() const { return Pin{static_cast<int>(current_ - SignalPool::current)}; }
 
     // Release the signal (go Hi-Z, or to pull level if set).
     void release() { drive(pull_); }
@@ -118,5 +157,21 @@ public:
 private:
     std::vector<std::unique_ptr<Signal>> lines_;
 };
+
+// -- PinBlock::from_socket (needs Signal to be complete) --
+template<int N>
+template<typename Socket>
+PinBlock<N> PinBlock<N>::from_socket(Socket& socket, const int (&pins)[N]) {
+    PinBlock pb;
+    Signal* s0 = socket.pin_signal(pins[0]);
+    if (!s0) return pb;
+    pb.base = s0->pin().idx;
+    for (int i = 1; i < N; ++i) {
+        Signal* s = socket.pin_signal(pins[i]);
+        assert(s && s->pin().idx == pb.base + i &&
+               "PinBlock: signals must map to contiguous pool slots");
+    }
+    return pb;
+}
 
 } // namespace bench

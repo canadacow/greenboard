@@ -10,7 +10,7 @@ namespace bench {
 
 alignas(64) Level SignalPool::current[MAX_SIGNALS] = {};
 alignas(64) Level SignalPool::pending[MAX_SIGNALS] = {};
-int SignalPool::count = 0;
+int SignalPool::count = 1;  // slot 0 reserved as dummy (reads HiZ, writes vanish)
 
 // --- Signal ---
 

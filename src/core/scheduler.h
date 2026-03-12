@@ -53,9 +53,11 @@ private:
 
         // Phase 2: Fixed-point inline IC evaluation.
         // No is_powered() check -- inlines are always powered during eval.
-        for (;;) {
+        for (;;)
+        {
             for (int i = 0; i < inline_count_; ++i)
                 inlines_[i]->on_signal_change();
+
             if (!SignalPool::commit()) break;
         }
     }

@@ -1,6 +1,7 @@
 #pragma once
 #include "core/inline_component.h"
 #include "board/socket.h"
+#include <cstring>
 
 namespace bench {
 
@@ -41,13 +42,10 @@ protected:
 private:
     void update_outputs();
 
-    // D/Q pin pairs (8 channels): D[i] -> latch -> Q[i]
-    Signal* pin_d_[8] = {};  // D0=pin3,D1=pin4,D2=pin7,D3=pin8,D4=pin13,D5=pin14,D6=pin17,D7=pin18
-    Signal* pin_q_[8] = {};  // Q0=pin2,Q1=pin5,Q2=pin6,Q3=pin9,Q4=pin12,Q5=pin15,Q6=pin16,Q7=pin19
-
-    Signal* pin_le_ = nullptr;   // Pin 11: LE
-    Signal* pin_oe_ = nullptr;   // Pin  1: ~OE
-    Signal* pin_vcc_ = nullptr;  // Pin 20: VCC
+    Pin d_[8];        // D input levels (read)
+    PinBlock<8> q_;   // Q output levels (write, contiguous)
+    Pin le_;          // LE (read)
+    Pin oe_;          // ~OE (read)
 
     Level latch_[8] = {};  // Latched values
     Level le_prev_ = Level::HiZ;
