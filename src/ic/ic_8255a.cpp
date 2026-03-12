@@ -50,8 +50,6 @@ void IC_8255A::install(Socket& socket) {
     if (pin_rd_)    pin_rd_->connect(this);
     if (pin_reset_) pin_reset_->connect(this);
     if (pin_vcc_)   pin_vcc_->connect(this);
-
-    spdlog::debug("[8255A] installed into socket {}", socket.ref());
 }
 
 void IC_8255A::on_signal_change() {

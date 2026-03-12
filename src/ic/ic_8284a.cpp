@@ -18,8 +18,6 @@ void IC_8284A::install(Socket& socket) {
     pin_rdy1_  = socket.pin_signal(4);   // RDY1 input
     pin_aen1_  = socket.pin_signal(3);   // ~AEN1 input
     pin_vcc_   = socket.pin_signal(18);  // VCC
-
-    spdlog::debug("[8284A] installed into socket {}", socket.ref());
 }
 
 void IC_8284A::run(std::stop_token stop) {

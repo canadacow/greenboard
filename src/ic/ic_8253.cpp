@@ -42,8 +42,6 @@ void IC_8253::install(Socket& socket) {
     if (pin_rd_)  pin_rd_->connect(this);
     if (pin_wr_)  pin_wr_->connect(this);
     if (pin_vcc_) pin_vcc_->connect(this);
-
-    spdlog::debug("[8253] installed into socket {}", socket.ref());
 }
 
 void IC_8253::on_signal_change() {

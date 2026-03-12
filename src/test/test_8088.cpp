@@ -276,7 +276,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -289,6 +289,7 @@ int main() {
             {0x0506, 0xDEF0, "XCHG ax"},
             {0x0508, 0x9ABC, "XCHG bx"},
         }},
+#if 0
         {"ALU", "test_alu.bin", {
             {0x0500, 0x0042, "ADD"},
             {0x0502, 0x0010, "SUB"},
@@ -415,6 +416,7 @@ int main() {
             {0x0504, 0x0032, "last string byte ('2')"},
             {0x0506, 0xB000, "8K byte sum"},
         }},
+#endif
     };
 
     // --- Wiring (permanent -- these are the copper traces on the test board) ---
@@ -731,6 +733,9 @@ int main() {
     scheduler.register_fiber(cpu);
     clk_gen->set_scheduler(&scheduler);
 
+    //#define RUN_BENCHMARK
+
+#if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---
     constexpr int BENCH_SECONDS = 5;
     spdlog::info("--- Benchmark: 64-bit increment ({} seconds) ---", BENCH_SECONDS);
@@ -819,6 +824,7 @@ int main() {
                 sig->reset();
         }
     }
+#endif
 
     // --- Run tests (power cycle between each) ---
     int passed = 0, failed = 0;

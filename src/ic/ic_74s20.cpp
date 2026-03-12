@@ -33,8 +33,6 @@ void IC_74S20::install(Socket& socket) {
     // VCC
     Signal* vcc = socket.pin_signal(14);
     if (vcc) vcc->connect(this);
-
-    spdlog::debug("[74S20] installed into socket {}", socket.ref());
 }
 
 void IC_74S20::on_power_on() {

@@ -53,8 +53,6 @@ void IC_ROM_8K::install(Socket& socket) {
     // Subscribe to chip select (drives output changes)
     if (pin_cs_) pin_cs_->connect(this);
     if (pin_vcc_) pin_vcc_->connect(this);
-
-    spdlog::debug("[{}] installed into socket {}", name(), socket.ref());
 }
 
 void IC_ROM_8K::on_power_on() {

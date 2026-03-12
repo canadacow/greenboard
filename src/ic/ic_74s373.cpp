@@ -28,8 +28,6 @@ void IC_74S373::install(Socket& socket) {
     if (le) { le->connect(this); le_ = le->pin(); }
     if (oe) { oe->connect(this); oe_ = oe->pin(); }
     if (vcc) vcc->connect(this);
-
-    spdlog::debug("[74S373] installed into socket {}", socket.ref());
 }
 
 void IC_74S373::on_power_on() {

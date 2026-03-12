@@ -32,8 +32,6 @@ void IC_74S138::install(Socket& socket) {
     // VCC
     Signal* vcc = socket.pin_signal(16);
     if (vcc) vcc->connect(this);
-
-    spdlog::debug("[74S138] installed into socket {}", socket.ref());
 }
 
 void IC_74S138::on_power_on() {

@@ -67,8 +67,7 @@ private:
     void release_data();
     void drive_status(uint8_t s2, uint8_t s1, uint8_t s0);
     void drive_status_passive();
-    void wait_clk_rising();
-    void wait_clk_falling();
+    void wait_clk(); // There is no clk rising/falling. We only provide single full cycles
 
     // --- Memory routing (register file or bus) ---
     static constexpr uint32_t REGS_BASE = 0xF0000;

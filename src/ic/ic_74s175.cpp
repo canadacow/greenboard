@@ -32,8 +32,6 @@ void IC_74S175::install(Socket& socket) {
     if (pin_clk_) subscribe_to(*pin_clk_);
     if (pin_clr_) subscribe_to(*pin_clr_);
     if (pin_vcc_) subscribe_to(*pin_vcc_);
-
-    spdlog::debug("[74S175] installed into socket {}", socket.ref());
 }
 
 void IC_74S175::on_signal_change() {

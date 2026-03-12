@@ -33,8 +33,6 @@ void IC_74S245::install(Socket& socket) {
 
     Signal* vcc = socket.pin_signal(20);
     if (vcc) vcc->connect(this);
-
-    spdlog::debug("[74S245] installed into socket {}", socket.ref());
 }
 
 void IC_74S245::on_signal_change() {

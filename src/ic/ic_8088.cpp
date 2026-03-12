@@ -77,8 +77,6 @@ void IC_8088::install(Socket& socket) {
     if (pin_reset_) pin_reset_->connect(this);
     if (pin_nmi_)   pin_nmi_->connect(this);
     if (pin_vcc_)   pin_vcc_->connect(this);
-
-    spdlog::debug("[8088] installed into socket {}", socket.ref());
 }
 
 void IC_8088::on_signal_change() {
@@ -184,59 +182,60 @@ void IC_8088::drive_status_passive() {
     if (pin_s2_) pin_s2_->drive(Level::High);
 }
 
-void IC_8088::wait_clk_rising() {
-    clk_rose_ = false;
-    clk_fell_ = false;
-    while (!clk_rose_) {
-        yield();
-        on_signal_change();
-    }
+void IC_8088::wait_clk() {
+    yield();
+    on_signal_change();
 }
 
-void IC_8088::wait_clk_falling() {
-    clk_rose_ = false;
-    clk_fell_ = false;
-    while (!clk_fell_) {
-        yield();
-        on_signal_change();
-    }
-}
-
+// ---- Memory read: 4 T-states (T1, T2, T3, T4) + optional Tw ----
 uint8_t IC_8088::bus_read_byte(uint32_t address) {
+    // T1 -- drive S0-S2 (MEMR), drive address on AD0-AD7 / A8-A19
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
     drive_address(address & 0xFFFFF);
-    wait_clk_rising();
-    wait_clk_falling();
-    wait_clk_rising();
-    wait_clk_falling();
+    wait_clk();                                             // T1
+
+    // T2 -- ALE fell (latches captured), release AD bus, status -> passive
     release_data();
-    wait_clk_rising();
     drive_status_passive();
+    wait_clk();                                             // T2
+
+    // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
-        wait_clk_falling(); wait_clk_rising();
+        wait_clk();                                         // Tw
     }
-    wait_clk_falling();
+
+    // T3 -- data available on AD bus
     uint8_t data = read_data();
-    wait_clk_rising(); wait_clk_falling();
+    wait_clk();                                             // T3
+
+    // T4 -- bus cycle complete
+    wait_clk();                                             // T4
     return data;
 }
 
+// ---- Memory write: 4 T-states (T1, T2, T3, T4) + optional Tw ----
 void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
+    // T1 -- drive S0-S2 (MEMW), drive address on AD0-AD7 / A8-A19
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
     drive_address(address & 0xFFFFF);
-    wait_clk_rising();
-    wait_clk_falling();
-    wait_clk_rising();
-    wait_clk_falling();
+    wait_clk();                                             // T1
+
+    // T2 -- ALE fell (latches captured), drive write data, status -> passive
     drive_data(value);
-    wait_clk_rising();
     drive_status_passive();
+    wait_clk();                                             // T2
+
+    // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
-        wait_clk_falling(); wait_clk_rising();
+        wait_clk();                                         // Tw
     }
-    wait_clk_falling();
+
+    // T3 -- data held on bus
+    wait_clk();                                             // T3
+
+    // T4 -- bus cycle complete, release data bus
     release_data();
-    wait_clk_rising(); wait_clk_falling();
+    wait_clk();                                             // T4
 }
 
 uint16_t IC_8088::bus_read_word(uint32_t address) {
@@ -250,41 +249,55 @@ void IC_8088::bus_write_word(uint32_t address, uint16_t value) {
     bus_write_byte(address + 1, (value >> 8) & 0xFF);
 }
 
+// ---- I/O read: 4 T-states (T1, T2, T3, T4) + optional Tw ----
 uint8_t IC_8088::io_read_byte(uint16_t port) {
+    // T1 -- drive S0-S2 (IOR), drive port address
     drive_status((BUS_IOR >> 2) & 1, (BUS_IOR >> 1) & 1, BUS_IOR & 1);
     drive_address(port);
-    wait_clk_rising();                      // T1 rise
-    wait_clk_falling();                     // T1 fall (hold address for latch)
-    wait_clk_rising();                      // T2 rise (ALE fell, latches capturing)
-    wait_clk_falling();                     // T2 fall (latches captured)
-    release_data();                         // release AD
-    wait_clk_rising();
+    wait_clk();                                             // T1
+
+    // T2 -- ALE fell (latches captured), release AD bus, status -> passive
+    release_data();
     drive_status_passive();
+    wait_clk();                                             // T2
+
+    // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
-        wait_clk_falling(); wait_clk_rising();
+        wait_clk();                                         // Tw
     }
-    wait_clk_falling();
+
+    // T3 -- data available on AD bus
     uint8_t data = read_data();
-    wait_clk_rising(); wait_clk_falling();
+    wait_clk();                                             // T3
+
+    // T4 -- bus cycle complete
+    wait_clk();                                             // T4
     return data;
 }
 
+// ---- I/O write: 4 T-states (T1, T2, T3, T4) + optional Tw ----
 void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
+    // T1 -- drive S0-S2 (IOW), drive port address
     drive_status((BUS_IOW >> 2) & 1, (BUS_IOW >> 1) & 1, BUS_IOW & 1);
     drive_address(port);
-    wait_clk_rising();                      // T1 rise
-    wait_clk_falling();                     // T1 fall (hold address for latch)
-    wait_clk_rising();                      // T2 rise (ALE fell, latches capturing)
-    wait_clk_falling();                     // T2 fall (latches captured)
-    drive_data(value);                      // drive write data
-    wait_clk_rising();
+    wait_clk();                                             // T1
+
+    // T2 -- ALE fell (latches captured), drive write data, status -> passive
+    drive_data(value);
     drive_status_passive();
+    wait_clk();                                             // T2
+
+    // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
-        wait_clk_falling(); wait_clk_rising();
+        wait_clk();                                         // Tw
     }
-    wait_clk_falling();
+
+    // T3 -- data held on bus
+    wait_clk();                                             // T3
+
+    // T4 -- bus cycle complete, release data bus
     release_data();
-    wait_clk_rising(); wait_clk_falling();
+    wait_clk();                                             // T4
 }
 
 // ========================================================================
@@ -1169,30 +1182,24 @@ void IC_8088::execute() {
             // INTA bus cycle: two back-to-back INTA pulses.
             // Each pulse is a full 4-T-state bus cycle, same as bus_read_byte.
 
-            // First INTA pulse (PIC latches request)
+            // First INTA pulse (PIC latches request) -- 4 T-states
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
-            wait_clk_rising();              // T1 rise
-            wait_clk_falling();             // T1 fall (hold for latch)
-            wait_clk_rising();              // T2 rise (ALE fell, latches capturing)
-            wait_clk_falling();             // T2 fall (latches captured)
+            wait_clk();                                     // T1
             release_data();
-            wait_clk_rising();              // T3 rise
             drive_status_passive();
-            wait_clk_falling();             // T3 fall
-            wait_clk_rising(); wait_clk_falling();  // T4
+            wait_clk();                                     // T2
+            wait_clk();                                     // T3
+            wait_clk();                                     // T4
 
-            // Second INTA pulse (PIC drives vector on data bus)
+            // Second INTA pulse (PIC drives vector on data bus) -- 4 T-states
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
-            wait_clk_rising();              // T1 rise
-            wait_clk_falling();             // T1 fall (hold for latch)
-            wait_clk_rising();              // T2 rise (ALE fell, latches capturing)
-            wait_clk_falling();             // T2 fall (latches captured)
+            wait_clk();                                     // T1
             release_data();
-            wait_clk_rising();              // T3 rise
             drive_status_passive();
-            wait_clk_falling();             // T3 fall -- sample vector
+            wait_clk();                                     // T2
             uint8_t vector = read_data();
-            wait_clk_rising(); wait_clk_falling();  // T4
+            wait_clk();                                     // T3
+            wait_clk();                                     // T4
 
             pc_interrupt(vector);
         }

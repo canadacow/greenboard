@@ -37,8 +37,6 @@ void IC_8259A::install(Socket& socket) {
     // VCC
     Signal* vcc = socket.pin_signal(28);
     if (vcc) vcc->connect(this);
-
-    spdlog::debug("[8259A] installed into socket {}", socket.ref());
 }
 
 void IC_8259A::on_power_on() {

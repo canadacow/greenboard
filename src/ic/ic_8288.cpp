@@ -39,8 +39,6 @@ void IC_8288::install(Socket& socket) {
     if (pin_cen_) pin_cen_->connect(this);
     if (pin_aen_) pin_aen_->connect(this);
     if (pin_vcc_) pin_vcc_->connect(this);
-
-    spdlog::debug("[8288] installed into socket {}", socket.ref());
 }
 
 void IC_8288::on_signal_change() {

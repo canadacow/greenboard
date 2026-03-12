@@ -66,8 +66,6 @@ void IC_8237A::install(Socket& socket) {
         if (pin_dreq_[i]) pin_dreq_[i]->connect(this);
     }
 
-    spdlog::debug("[8237A] installed into socket {}", socket.ref());
-}
 
 void IC_8237A::on_signal_change() {
     Level reset_cur = pin_reset_ ? pin_reset_->level() : Level::HiZ;
