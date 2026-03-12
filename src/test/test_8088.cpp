@@ -733,7 +733,7 @@ int main() {
     scheduler.register_fiber(cpu);
     clk_gen->set_scheduler(&scheduler);
 
-    //#define RUN_BENCHMARK
+    #define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

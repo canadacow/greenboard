@@ -66,8 +66,6 @@ void IC_8284A::run(std::stop_token stop) {
         if (new_clk != clk_state) {
             clk_state = new_clk;
 
-            spdlog::trace("[8284A] Cycle {} clk_state {}", clk_cycles_, (int)clk_state);
-
             if (pin_clk_) pin_clk_->drive(clk_state ? Level::High : Level::Low);
 
             // On CLK falling edge: update READY and RESET (synchronized to CLK).

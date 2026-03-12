@@ -88,7 +88,6 @@ void IC_ROM_8K::update_outputs() {
     if (selected) {
         uint16_t addr = read_address();
         uint8_t data = rom_[addr & 0x1FFF];
-        spdlog::trace("[{}] ~CS=L addr={:04X} data={:02X}", name(), addr, data);
         for (int i = 0; i < 8; ++i) {
             if (pin_d_[i])
                 pin_d_[i]->drive((data >> i) & 1 ? Level::High : Level::Low);

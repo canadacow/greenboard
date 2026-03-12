@@ -202,13 +202,6 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
     drive_address(address & 0xFFFFF);
     full_wait_clk();                                             // T1
-    spdlog::trace("[8088] MEMR {:05X} T1: S2:S1:S0={}{}{} READY={} AD={}",
-        address & 0xFFFFF,
-        pin_s2_ ? (int)pin_s2_->level() : -1,
-        pin_s1_ ? (int)pin_s1_->level() : -1,
-        pin_s0_ ? (int)pin_s0_->level() : -1,
-        pin_ready_ ? (int)pin_ready_->level() : -1,
-        read_data());
 
     // T2 rise -- ALE falls, latches capture address (AD still driven)
     half_wait_clk();                                             // T2 rise
@@ -216,22 +209,15 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     release_data();
     drive_status_passive();
     half_wait_clk();                                             // T2 fall (~DEN + cmd asserted)
-    spdlog::trace("[8088] MEMR {:05X} T2: AD(released)={:02X} READY={}",
-        address & 0xFFFFF, read_data(),
-        pin_ready_ ? (int)pin_ready_->level() : -1);
 
     // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
         full_wait_clk();                                         // Tw
-        spdlog::trace("[8088] MEMR {:05X} Tw: READY={}",
-            address & 0xFFFFF,
-            pin_ready_ ? (int)pin_ready_->level() : -1);
     }
 
     // T3 -- data propagates through bus
     full_wait_clk();                                             // T3
     uint8_t data = read_data();                                  // read AFTER T3 commits
-    spdlog::trace("[8088] MEMR {:05X} T3: data={:02X}", address & 0xFFFFF, data);
 
     // T4 -- bus cycle complete
     full_wait_clk();                                             // T4
@@ -244,12 +230,6 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
     drive_address(address & 0xFFFFF);
     full_wait_clk();                                             // T1
-    spdlog::trace("[8088] MEMW {:05X} <- {:02X} T1: S2:S1:S0={}{}{} READY={}",
-        address & 0xFFFFF, value,
-        pin_s2_ ? (int)pin_s2_->level() : -1,
-        pin_s1_ ? (int)pin_s1_->level() : -1,
-        pin_s0_ ? (int)pin_s0_->level() : -1,
-        pin_ready_ ? (int)pin_ready_->level() : -1);
 
     // T2 rise -- ALE falls, latches capture address (AD still driven)
     half_wait_clk();                                             // T2 rise
@@ -257,16 +237,10 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     drive_data(value);
     drive_status_passive();
     half_wait_clk();                                             // T2 fall (~DEN + cmd asserted)
-    spdlog::trace("[8088] MEMW {:05X} T2: AD(driven)={:02X} READY={}",
-        address & 0xFFFFF, read_data(),
-        pin_ready_ ? (int)pin_ready_->level() : -1);
 
     // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
         full_wait_clk();                                         // Tw
-        spdlog::trace("[8088] MEMW {:05X} Tw: READY={}",
-            address & 0xFFFFF,
-            pin_ready_ ? (int)pin_ready_->level() : -1);
     }
 
     // T3 -- data held on bus

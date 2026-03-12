@@ -37,8 +37,6 @@ void IC_74S245::install(Socket& socket) {
 
 void IC_74S245::on_signal_change() {
     if (g_.level() != Level::Low) {
-        if (driving_ != Driving::None)
-            spdlog::trace("[{}] ~G=H: outputs released", name());
         release_outputs();
         return;
     }
@@ -51,9 +49,6 @@ void IC_74S245::on_signal_change() {
         for (int i = 0; i < 8; ++i)
             if (b_[i].level() == Level::High) val |= (1 << i);
     }
-    spdlog::trace("[{}] ~G=L DIR={} data={:02X} ({})", name(),
-        dir_high ? "H(A->B)" : "L(B->A)", val,
-        dir_high ? "tx" : "rx");
     update_outputs();
 }
 

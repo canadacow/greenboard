@@ -44,7 +44,6 @@ void IC_74S373::on_signal_change() {
         uint8_t val = 0;
         for (int i = 0; i < 8; ++i)
             if (latch_[i] == Level::High) val |= (1 << i);
-        spdlog::trace("[{}] LE fall: latched {:02X}", name(), val);
     }
     le_prev_ = le;
 
