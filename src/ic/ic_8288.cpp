@@ -12,51 +12,52 @@ void IC_8288::on_power_on() {
 }
 
 void IC_8288::install(Socket& socket) {
+    auto pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        return s ? s->pin() : Pin{};
+    };
+    auto connect_pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+        return s ? s->pin() : Pin{};
+    };
+
     // Output pins (we drive these).
-    pin_ale_  = socket.pin_signal(5);   // ALE
-    pin_den_  = socket.pin_signal(4);   // ~DEN (active low)
-    pin_dtr_  = socket.pin_signal(16);  // DT/~R
-    pin_memr_ = socket.pin_signal(7);   // ~MEMR (active low)
-    pin_memw_ = socket.pin_signal(8);   // ~MEMW (active low)
-    pin_ior_  = socket.pin_signal(13);  // ~IOR (active low)
-    pin_iow_  = socket.pin_signal(12);  // ~IOW (active low)
-    pin_inta_ = socket.pin_signal(14);  // ~INTA (active low)
+    pin_ale_  = pin(5);    // ALE
+    pin_den_  = pin(4);    // ~DEN (active low)
+    pin_dtr_  = pin(16);   // DT/~R
+    pin_memr_ = pin(7);    // ~MEMR (active low)
+    pin_memw_ = pin(8);    // ~MEMW (active low)
+    pin_ior_  = pin(13);   // ~IOR (active low)
+    pin_iow_  = pin(12);   // ~IOW (active low)
+    pin_inta_ = pin(14);   // ~INTA (active low)
 
     // Input pins (we subscribe to these).
-    pin_clk_  = socket.pin_signal(2);   // CLK
-    pin_s0_   = socket.pin_signal(19);  // ~S0
-    pin_s1_   = socket.pin_signal(3);   // ~S1
-    pin_s2_   = socket.pin_signal(18);  // ~S2
-    pin_cen_  = socket.pin_signal(6);   // CEN (command enable)
-    pin_aen_  = socket.pin_signal(15);  // ~AEN (active low)
-    pin_vcc_  = socket.pin_signal(20);  // VCC
+    pin_clk_  = connect_pin(2);    // CLK
+    pin_s0_   = connect_pin(19);   // ~S0
+    pin_s1_   = connect_pin(3);    // ~S1
+    pin_s2_   = connect_pin(18);   // ~S2
+    pin_cen_  = connect_pin(6);    // CEN (command enable)
+    pin_aen_  = connect_pin(15);   // ~AEN (active low)
 
-    // Subscribe to input signals for mailbox events.
-    if (pin_clk_) pin_clk_->connect(this);
-    if (pin_s0_)  pin_s0_->connect(this);
-    if (pin_s1_)  pin_s1_->connect(this);
-    if (pin_s2_)  pin_s2_->connect(this);
-    if (pin_cen_) pin_cen_->connect(this);
-    if (pin_aen_) pin_aen_->connect(this);
-    if (pin_vcc_) pin_vcc_->connect(this);
+    Signal* vcc = socket.pin_signal(20);
+    if (vcc) vcc->connect(this);
 }
 
 void IC_8288::on_signal_change() {
-    if (pin_clk_) {
-        Level cur = pin_clk_->level();
-        if (cur == Level::High && clk_prev_ != Level::High)
-            on_clk_rising();
-        if (cur == Level::Low && clk_prev_ != Level::Low)
-            on_clk_falling();
-        clk_prev_ = cur;
-    }
+    Level cur = pin_clk_.level();
+    if (cur == Level::High && clk_prev_ != Level::High)
+        on_clk_rising();
+    if (cur == Level::Low && clk_prev_ != Level::Low)
+        on_clk_falling();
+    clk_prev_ = cur;
 }
 
 IC_8288::BusCycle IC_8288::decode_status() const {
     // Status lines are active low from the 8088.
-    bool s0 = pin_s0_ && pin_s0_->level() == Level::Low;   // active
-    bool s1 = pin_s1_ && pin_s1_->level() == Level::Low;   // active
-    bool s2 = pin_s2_ && pin_s2_->level() == Level::Low;   // active
+    bool s0 = pin_s0_.level() == Level::Low;   // active
+    bool s1 = pin_s1_.level() == Level::Low;   // active
+    bool s2 = pin_s2_.level() == Level::Low;   // active
 
     //  ~S2 ~S1 ~S0 | Cycle
     //   0   0   0  | INTA     (s2=1, s1=1, s0=1 active)
@@ -82,47 +83,22 @@ IC_8288::BusCycle IC_8288::decode_status() const {
         default: return BusCycle::Passive; // none active
     }
 }
-
-void IC_8288::drive_command(BusCycle cycle) {
-    // Assert the appropriate command strobe (active low).
-    switch (cycle) {
-        case BusCycle::INTA:
-            if (pin_inta_) pin_inta_->drive(Level::Low);
-            break;
-        case BusCycle::IOR:
-            if (pin_ior_) pin_ior_->drive(Level::Low);
-            break;
-        case BusCycle::IOW:
-            if (pin_iow_) pin_iow_->drive(Level::Low);
-            break;
-        case BusCycle::Fetch:
-        case BusCycle::MemR:
-            if (pin_memr_) pin_memr_->drive(Level::Low);
-            break;
-        case BusCycle::MemW:
-            if (pin_memw_) pin_memw_->drive(Level::Low);
-            break;
-        default:
-            break;
-    }
-}
-
 void IC_8288::release_command() {
     // Deassert all command strobes (active low -> High).
-    if (pin_memr_) pin_memr_->drive(Level::High);
-    if (pin_memw_) pin_memw_->drive(Level::High);
-    if (pin_ior_)  pin_ior_->drive(Level::High);
-    if (pin_iow_)  pin_iow_->drive(Level::High);
-    if (pin_inta_) pin_inta_->drive(Level::High);
+    pin_memr_.drive(Level::High);
+    pin_memw_.drive(Level::High);
+    pin_ior_.drive(Level::High);
+    pin_iow_.drive(Level::High);
+    pin_inta_.drive(Level::High);
 }
 
 void IC_8288::on_clk_rising() {
     // If ~AEN is active (Low), DMA owns the bus -- 8288 is inhibited.
-    if (pin_aen_ && pin_aen_->level() == Level::Low) {
+    if (pin_aen_.level() == Level::Low) {
         if (state_ != State::Idle) {
             release_command();
-            if (pin_ale_) pin_ale_->drive(Level::Low);
-            if (pin_den_) pin_den_->drive(Level::High);  // ~DEN deasserted
+            pin_ale_.drive(Level::Low);
+            pin_den_.drive(Level::High);  // ~DEN deasserted
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
         }
@@ -162,8 +138,8 @@ void IC_8288::on_clk_rising() {
 
                 // T1: Assert ALE, set DT/~R direction.
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
-                pin_ale_->drive(Level::High);
-                if (pin_dtr_) pin_dtr_->drive(is_write ? Level::High : Level::Low);
+                pin_ale_.drive(Level::High);
+                pin_dtr_.drive(is_write ? Level::High : Level::Low);
             }
             break;
         }
@@ -175,7 +151,7 @@ void IC_8288::on_clk_rising() {
             // ~DEN and command strobe are deferred to T2 CLK fall to avoid
             // bus contention: the 74S245 must not drive AD while the 74S373
             // is capturing the address from AD.
-            pin_ale_->drive(Level::Low);
+            pin_ale_.drive(Level::Low);
             break;
         }
 
@@ -187,7 +163,7 @@ void IC_8288::on_clk_rising() {
         case State::T3: {
             // T4: Deassert commands, deassert ~DEN, back to idle.
             release_command();
-            pin_den_->drive(Level::High);  // ~DEN deasserted
+            pin_den_.drive(Level::High);  // ~DEN deasserted
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
             break;
@@ -199,12 +175,33 @@ void IC_8288::on_clk_falling() {
     // Deferred from T2 CLK rise: assert ~DEN and command strobe.
     // This gives the 74S373 a full half-cycle to capture the address
     // before the 74S245 transceiver enables and drives the AD bus.
-    if (state_ == State::T2 && pin_den_ && pin_den_->level() != Level::Low) {
-        bool cen = !pin_cen_ || pin_cen_->level() == Level::High;
+    if (state_ == State::T2 && pin_den_.level() != Level::Low) {
+        bool cen = pin_cen_.level() == Level::High;
         if (cen) {
-            drive_command(cycle_);
+            // drive_command
+            // Assert the appropriate command strobe (active low).
+            switch (cycle_) {
+                case BusCycle::INTA:
+                    pin_inta_.drive(Level::Low);
+                    break;
+                case BusCycle::IOR:
+                    pin_ior_.drive(Level::Low);
+                    break;
+                case BusCycle::IOW:
+                    pin_iow_.drive(Level::Low);
+                    break;
+                case BusCycle::Fetch:
+                case BusCycle::MemR:
+                    pin_memr_.drive(Level::Low);
+                    break;
+                case BusCycle::MemW:
+                    pin_memw_.drive(Level::Low);
+                    break;
+                default:
+                    break;
+            }
         }
-        pin_den_->drive(Level::Low);
+        pin_den_.drive(Level::Low);
     }
 }
 

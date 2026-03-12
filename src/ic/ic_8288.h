@@ -69,29 +69,27 @@ private:
     enum class State { Idle, T1, T2, T3 };
 
     BusCycle decode_status() const;
-    void drive_command(BusCycle cycle);
     void release_command();
     void on_clk_rising();
     void on_clk_falling();
 
     // Output pins (we drive these)
-    Signal* pin_ale_  = nullptr;   // Pin  5: ALE
-    Signal* pin_den_  = nullptr;   // Pin  4: ~DEN (active low)
-    Signal* pin_dtr_  = nullptr;   // Pin 16: DT/~R
-    Signal* pin_memr_ = nullptr;   // Pin  7: ~MEMR (active low)
-    Signal* pin_memw_ = nullptr;   // Pin  8: ~MEMW (active low)
-    Signal* pin_ior_  = nullptr;   // Pin 13: ~IOR (active low)
-    Signal* pin_iow_  = nullptr;   // Pin 12: ~IOW (active low)
-    Signal* pin_inta_ = nullptr;   // Pin 14: ~INTA (active low)
+    Pin pin_ale_;    // Pin  5: ALE
+    Pin pin_den_;    // Pin  4: ~DEN (active low)
+    Pin pin_dtr_;    // Pin 16: DT/~R
+    Pin pin_memr_;   // Pin  7: ~MEMR (active low)
+    Pin pin_memw_;   // Pin  8: ~MEMW (active low)
+    Pin pin_ior_;    // Pin 13: ~IOR (active low)
+    Pin pin_iow_;    // Pin 12: ~IOW (active low)
+    Pin pin_inta_;   // Pin 14: ~INTA (active low)
 
     // Input pins (we read / subscribe to these)
-    Signal* pin_clk_  = nullptr;   // Pin  2: CLK
-    Signal* pin_s0_   = nullptr;   // Pin 19: ~S0
-    Signal* pin_s1_   = nullptr;   // Pin  3: ~S1
-    Signal* pin_s2_   = nullptr;   // Pin 18: ~S2
-    Signal* pin_cen_  = nullptr;   // Pin  6: CEN (command enable)
-    Signal* pin_aen_  = nullptr;   // Pin 15: ~AEN
-    Signal* pin_vcc_  = nullptr;   // Pin 20: VCC
+    Pin pin_clk_;    // Pin  2: CLK
+    Pin pin_s0_;     // Pin 19: ~S0
+    Pin pin_s1_;     // Pin  3: ~S1
+    Pin pin_s2_;     // Pin 18: ~S2
+    Pin pin_cen_;    // Pin  6: CEN (command enable)
+    Pin pin_aen_;    // Pin 15: ~AEN
 
     // Internal state
     State state_ = State::Idle;
