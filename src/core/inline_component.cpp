@@ -16,7 +16,7 @@ void InlineComponent::power_on() {
 void InlineComponent::power_off() {
     on_power_off();
     powered_ = false;
-    spdlog::trace("[{}] powered off (inline)", name());
+    spdlog::debug("[{}] powered off (inline)", name());
 }
 
 void InlineComponent::subscribe_to(Signal& sig) {

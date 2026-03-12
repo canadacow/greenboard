@@ -155,8 +155,6 @@ void IC_8288::on_clk_rising() {
         return "?";
     };
 
-    spdlog::trace("[8288] CLK_RISE state={} cycle={}", state_name(state_), cycle_name(cycle_));
-
     switch (state_) {
         case State::Idle: {
             BusCycle bus = decode_status();
@@ -168,7 +166,6 @@ void IC_8288::on_clk_rising() {
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
                 pin_ale_->drive(Level::High);
                 if (pin_dtr_) pin_dtr_->drive(is_write ? Level::High : Level::Low);
-                spdlog::trace("[8288] Idle->T1 cycle={} DT/~R={}", cycle_name(bus), is_write ? "TX" : "RX");
             }
             break;
         }
@@ -181,21 +178,18 @@ void IC_8288::on_clk_rising() {
             // bus contention: the 74S245 must not drive AD while the 74S373
             // is capturing the address from AD.
             pin_ale_->drive(Level::Low);
-            spdlog::trace("[8288] T1->T2 ALE=Low (latches capture), cmd deferred");
             break;
         }
 
         case State::T2:
             // T3: Commands stay active. Nothing changes.
             state_ = State::T3;
-            spdlog::trace("[8288] T2->T3");
             break;
 
         case State::T3: {
             // T4: Deassert commands, deassert ~DEN, back to idle.
             release_command();
             pin_den_->drive(Level::High);  // ~DEN deasserted
-            spdlog::trace("[8288] T3->Idle ~DEN=High (disabled)");
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
             break;
@@ -213,7 +207,6 @@ void IC_8288::on_clk_falling() {
             drive_command(cycle_);
         }
         pin_den_->drive(Level::Low);
-        spdlog::trace("[8288] T2_FALL ~DEN=Low (enabled), cmd active");
     }
 }
 

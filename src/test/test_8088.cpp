@@ -164,15 +164,12 @@ private:
 
     void on_clk_rising() {
         uint8_t status = decode_status();
-        spdlog::trace("[BusGlue] CLK_RISE  state={} status={} bus_addr=0x{:05X} ad=0x{:02X}",
-            tstate_name(), status, read_address(), read_d());
 
         switch (t_state) {
         case TState::IDLE:
             if (status != 7) {
                 t_state = TState::T1;
                 cycle_type = status;
-                spdlog::trace("[BusGlue] IDLE->T1 type={} cycle#{}", cycle_type, bus_cycle_count);
             }
             break;
 
@@ -180,7 +177,6 @@ private:
             // ALE falls this CLK rising (8288 T1->T2). Latches capture but
             // may not have settled yet (concurrent). Just advance state.
             t_state = TState::T2;
-            spdlog::trace("[BusGlue]   -> T2");
             break;
 
         case TState::T2:
@@ -189,43 +185,31 @@ private:
             t_state = TState::T3;
             if (is_read_cycle()) {
                 if (is_inta_cycle()) {
-                    spdlog::trace("[BusGlue] T3 INTA -- real PIC cycle#{}", bus_cycle_count);
                 } else if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
                     // PIC (and other U66-decoded ports) -- handled by real hardware.
-                    spdlog::trace("[BusGlue] T3 HW IO READ port=0x{:04X} cycle#{}", cycle_addr, bus_cycle_count);
                 } else if (is_io_cycle()) {
                     uint8_t val = io_read(cycle_addr & 0xFFFF);
-                    spdlog::trace("[BusGlue] T3 IO READ port=0x{:04X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
                     drive_d(val);
                 } else {
                     uint8_t val = mem[cycle_addr & 0xFFFFF];
-                    spdlog::trace("[BusGlue] T3 READ addr=0x{:05X} data=0x{:02X} cycle#{}", cycle_addr, val, bus_cycle_count);
                     drive_d(val);
                 }
             } else if (is_write_cycle()) {
                 if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
                     // PIC (and other U66-decoded ports) -- handled by real hardware.
-                    spdlog::trace("[BusGlue]   -> T3 HW IO WRITE port=0x{:04X}", cycle_addr);
                 } else if (is_io_cycle()) {
                     uint8_t val = read_d();
-                    spdlog::trace("[BusGlue]   -> T3 IO WRITE port[0x{:04X}]=0x{:02X}", cycle_addr, val);
                     io_write(cycle_addr & 0xFFFF, val);
                 } else {
                     uint8_t val = read_d();
-                    spdlog::trace("[BusGlue]   -> T3 WRITE mem[0x{:05X}]=0x{:02X}", cycle_addr, val);
                     mem[cycle_addr & 0xFFFFF] = val;
                 }
             } else {
-                spdlog::trace("[BusGlue]   -> T3");
             }
             break;
 
         case TState::T3:
             t_state = TState::T4;
-            if (status == 7)
-                spdlog::trace("[BusGlue]   -> T4 (status passive)");
-            else
-                spdlog::trace("[BusGlue]   -> T4 (status={}, forced)", status);
             break;
 
         case TState::T4:
@@ -233,14 +217,12 @@ private:
                 t_state = TState::T1;
                 cycle_type = status;
                 bus_cycle_count++;
-                spdlog::trace("[BusGlue] T4->T1 overlap type={} cycle#{}", cycle_type, bus_cycle_count);
             } else {
                 if (is_read_cycle()) {
                     release_d();
                 }
                 bus_cycle_count++;
                 t_state = TState::IDLE;
-                spdlog::trace("[BusGlue] T4->IDLE cycle#{}", bus_cycle_count);
             }
             break;
         }
@@ -250,7 +232,6 @@ private:
         if (t_state == TState::T2) {
             // ALE fell last CLK rise, latches settled. Read latched address.
             cycle_addr = read_address();
-            spdlog::trace("[BusGlue] T2_FALL latched addr=0x{:05X}", cycle_addr);
         }
     }
 };
@@ -285,7 +266,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 

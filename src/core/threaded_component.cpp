@@ -39,7 +39,7 @@ void ThreadedComponent::power_off() {
     }
     while (mailbox_->sem.try_acquire())
         Signal::ack();
-    spdlog::trace("[{}] powered off", name());
+    spdlog::debug("[{}] powered off", name());
 }
 
 // Default run loop for reactive components: block on mailbox, check pins.
@@ -61,14 +61,11 @@ void ThreadedComponent::run(std::stop_token stop) {
 void ThreadedComponent::wait_mailbox(std::stop_token& stop) {
     if (pending_ack_) {
         int p = Signal::pending.load(std::memory_order_acquire);
-        spdlog::trace("[{}] ack (pending {} -> {})", name(), p, p - 1);
         Signal::ack();
         pending_ack_ = false;
     }
-    spdlog::trace("[{}] waiting on mailbox", name());
     mailbox_->sem.acquire();
     pending_ack_ = true;
-    spdlog::trace("[{}] woke from mailbox", name());
 }
 
 void ThreadedComponent::flush_pending_ack() {

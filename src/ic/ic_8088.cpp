@@ -173,16 +173,6 @@ uint8_t IC_8088::read_data() {
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i] && pin_ad_[i]->level() == Level::High)
             val |= (1 << i);
-    spdlog::trace("[8088] read_data -> 0x{:02X} (AD levels: {}{}{}{}{}{}{}{})",
-        val,
-        pin_ad_[7] ? (int)pin_ad_[7]->level() : -1,
-        pin_ad_[6] ? (int)pin_ad_[6]->level() : -1,
-        pin_ad_[5] ? (int)pin_ad_[5]->level() : -1,
-        pin_ad_[4] ? (int)pin_ad_[4]->level() : -1,
-        pin_ad_[3] ? (int)pin_ad_[3]->level() : -1,
-        pin_ad_[2] ? (int)pin_ad_[2]->level() : -1,
-        pin_ad_[1] ? (int)pin_ad_[1]->level() : -1,
-        pin_ad_[0] ? (int)pin_ad_[0]->level() : -1);
     return val;
 }
 
@@ -225,73 +215,43 @@ void IC_8088::wait_clk_falling() {
 
 uint8_t IC_8088::bus_read_byte(uint32_t address) {
     if (stop_.stop_requested()) return 0;
-    spdlog::trace("[8088] bus_read_byte(0x{:05X}) -- drive status MEMR", address & 0xFFFFF);
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
     drive_address(address & 0xFFFFF);
-    spdlog::trace("[8088]   wait T1 rise...");
     wait_clk_rising();
-    spdlog::trace("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
-    spdlog::trace("[8088]   wait T1 fall...");
     wait_clk_falling();
-    spdlog::trace("[8088]   T1 fall (address held for latch capture)");
-    spdlog::trace("[8088]   wait T2 rise...");
     wait_clk_rising();
-    spdlog::trace("[8088]   T2 rise (ALE fell, latches capturing -- address held)");
     wait_clk_falling();
-    spdlog::trace("[8088]   T2 fall -- release AD (latches captured)");
     release_data();
-    spdlog::trace("[8088]   wait T3 rise...");
     wait_clk_rising();
-    spdlog::trace("[8088]   T3 rise -- drive status passive");
     drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
            && !stop_.stop_requested()) {
-        spdlog::trace("[8088]   Tw (READY not high)");
         wait_clk_falling(); wait_clk_rising();
     }
-    spdlog::trace("[8088]   wait T3 fall (sample data)...");
     wait_clk_falling();
     uint8_t data = read_data();
-    spdlog::trace("[8088]   T3 fall -- READ 0x{:05X} -> 0x{:02X}", address & 0xFFFFF, data);
-    spdlog::trace("[8088]   wait T4...");
     wait_clk_rising(); wait_clk_falling();
-    spdlog::trace("[8088]   T4 done");
     return data;
 }
 
 void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     if (stop_.stop_requested()) return;
-    spdlog::trace("[8088] bus_write_byte(0x{:05X}, 0x{:02X}) -- drive status MEMW", address & 0xFFFFF, value);
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
     drive_address(address & 0xFFFFF);
-    spdlog::trace("[8088]   wait T1 rise...");
     wait_clk_rising();
-    spdlog::trace("[8088]   T1 rise -- address 0x{:05X} already on bus", address & 0xFFFFF);
-    spdlog::trace("[8088]   wait T1 fall...");
     wait_clk_falling();
-    spdlog::trace("[8088]   T1 fall (address held for latch capture)");
-    spdlog::trace("[8088]   wait T2 rise...");
     wait_clk_rising();
-    spdlog::trace("[8088]   T2 rise (ALE fell, latches capturing -- address held)");
     wait_clk_falling();
-    spdlog::trace("[8088]   T2 fall -- drive write data 0x{:02X} (latches captured)", value);
     drive_data(value);
-    spdlog::trace("[8088]   wait T3 rise...");
     wait_clk_rising();
-    spdlog::trace("[8088]   T3 rise -- drive status passive");
     drive_status_passive();
     while (pin_ready_ && pin_ready_->level() != Level::High
            && !stop_.stop_requested()) {
-        spdlog::trace("[8088]   Tw (READY not high)");
         wait_clk_falling(); wait_clk_rising();
     }
-    spdlog::trace("[8088]   wait T3 fall...");
     wait_clk_falling();
-    spdlog::trace("[8088]   T3 fall -- WRITE 0x{:05X} <- 0x{:02X}", address & 0xFFFFF, value);
     release_data();
-    spdlog::trace("[8088]   wait T4...");
     wait_clk_rising(); wait_clk_falling();
-    spdlog::trace("[8088]   T4 done");
 }
 
 uint16_t IC_8088::bus_read_word(uint32_t address) {
@@ -540,7 +500,6 @@ void IC_8088::execute() {
     prefetch_len_ = 0;
 
     uint8_t opbyte = fetch_byte(0);
-    spdlog::trace("[8088] IP=0x{:04X} phys=0x{:05X} opcode=0x{:02X}", reg_ip_, cs_ip, opbyte);
     set_opcode(opbyte);
     i_w_ = (i_reg4bit_ = raw_opcode_id_ & 7) & 1;
     i_d_ = i_reg4bit_ / 2 & 1;
@@ -579,8 +538,6 @@ void IC_8088::execute() {
             uint8_t d = regs8()[TABLE[TABLE_COND_JUMP_DECODE_D][scratch_uchar_]];
             int cond = i_w_ ^ (a || b || c ^ d);
             int8_t disp = (int8_t)(i_data0_ & 0xFF);
-            spdlog::trace("[8088] Jcc opcode=0x{:02X} idx={} i_w={} a={} b={} c={} d={} cond={} disp={}",
-                raw_opcode_id_, scratch_uchar_, i_w_, a, b, c, d, cond, disp);
             reg_ip_ += disp * cond;
         }
         break;
@@ -1214,8 +1171,6 @@ void IC_8088::execute() {
         regs8()[FLAG_SF] = sign_of(op_result_);
         regs8()[FLAG_ZF] = !(i_w_ ? (uint16_t)op_result_ : (uint8_t)op_result_);
         regs8()[FLAG_PF] = TABLE[TABLE_PARITY_FLAG][(uint8_t)op_result_];
-        spdlog::trace("[8088] FLAGS op=0x{:02X} result={} i_w={} ZF={} SF={} CF={}",
-            raw_opcode_id_, op_result_, i_w_, regs8()[FLAG_ZF], regs8()[FLAG_SF], regs8()[FLAG_CF]);
         if (set_flags_type_ & FLAGS_UPDATE_AO_ARITH) set_AF_OF_arith();
         if (set_flags_type_ & FLAGS_UPDATE_OC_LOGIC) { set_CF(0); set_OF(0); }
     }
@@ -1234,7 +1189,6 @@ void IC_8088::execute() {
             // Each pulse is a full 4-T-state bus cycle, same as bus_read_byte.
 
             // First INTA pulse (PIC latches request)
-            spdlog::trace("[8088] INTA pulse 1 -- drive status");
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             wait_clk_rising();              // T1 rise
             wait_clk_falling();             // T1 fall (hold for latch)
@@ -1247,7 +1201,6 @@ void IC_8088::execute() {
             wait_clk_rising(); wait_clk_falling();  // T4
 
             // Second INTA pulse (PIC drives vector on data bus)
-            spdlog::trace("[8088] INTA pulse 2 -- drive status, will read vector");
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             wait_clk_rising();              // T1 rise
             wait_clk_falling();             // T1 fall (hold for latch)
@@ -1258,7 +1211,6 @@ void IC_8088::execute() {
             drive_status_passive();
             wait_clk_falling();             // T3 fall -- sample vector
             uint8_t vector = read_data();
-            spdlog::trace("[8088] INTA vector = 0x{:02X}", vector);
             wait_clk_rising(); wait_clk_falling();  // T4
 
             pc_interrupt(vector);
