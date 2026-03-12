@@ -33,6 +33,7 @@ add_executable(bench
     src/ic/ic_74s373.cpp
     src/ic/ic_74s245.cpp
     src/ic/ic_74s138.cpp
+    src/ic/ic_74s20.cpp
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -58,6 +59,8 @@ add_executable(test_8088
     src/ic/ic_8284a.cpp
     src/ic/ic_74s373.cpp
     src/ic/ic_74s138.cpp
+    src/ic/ic_74s20.cpp
+    src/ic/ic_rom_8k.cpp
 )
 target_include_directories(test_8088 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_8088 PRIVATE spdlog::spdlog fmt::fmt)
@@ -70,7 +73,7 @@ set(ASM_TEST_DIR ${CMAKE_SOURCE_DIR}/src/test/asm)
 set(ASM_BIN_DIR  ${CMAKE_BINARY_DIR}/test_bins)
 file(MAKE_DIRECTORY ${ASM_BIN_DIR})
 
-file(GLOB ASM_SOURCES ${ASM_TEST_DIR}/*.asm)
+file(GLOB ASM_SOURCES CONFIGURE_DEPENDS ${ASM_TEST_DIR}/*.asm)
 set(ASM_BINS "")
 foreach(asm_src ${ASM_SOURCES})
     get_filename_component(asm_name ${asm_src} NAME_WE)
@@ -90,4 +93,5 @@ add_dependencies(test_8088 asm_tests)
 # Pass bin directory to test_8088 so it can find the assembled tests.
 target_compile_definitions(test_8088 PRIVATE
     ASM_TEST_DIR="${ASM_BIN_DIR}"
+    ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets"
 )

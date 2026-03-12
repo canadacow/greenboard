@@ -69,21 +69,26 @@ private:
         dirty_count_.store(0, std::memory_order_relaxed);
 
         // Phase 2: Fixed-point inline IC evaluation.
-        for (int i = 0; i < inline_count_; ++i) {
-            if (inlines_[i]->is_powered())
-                inlines_[i]->on_signal_change();
-        }
+        for (;;) {
+            for (int i = 0; i < inline_count_; ++i) {
+                if (inlines_[i]->is_powered())
+                    inlines_[i]->on_signal_change();
+            }
 
-        int new_dirty = dirty_count_.load(std::memory_order_relaxed);
+            int new_dirty = dirty_count_.load(std::memory_order_relaxed);
+            if (new_dirty == 0) break;
 
-        bool any_changed = false;
-        for (int i = 0; i < new_dirty; ++i) {
-            Signal* sig = dirty_[i];
-            sig->dirty_.store(false, std::memory_order_relaxed);
-            if (sig->commit())
-                any_changed = true;
+            bool any_changed = false;
+            for (int i = 0; i < new_dirty; ++i) {
+                Signal* sig = dirty_[i];
+                sig->dirty_.store(false, std::memory_order_relaxed);
+                if (sig->commit())
+                    any_changed = true;
+            }
+            dirty_count_.store(0, std::memory_order_relaxed);
+
+            if (!any_changed) break;
         }
-        dirty_count_.store(0, std::memory_order_relaxed);
     }
 
     static constexpr int MAX_INLINES = 32;

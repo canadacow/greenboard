@@ -1,5 +1,5 @@
 #pragma once
-#include "core/fiber_component.h"
+#include "core/inline_component.h"
 #include "board/socket.h"
 #include <array>
 #include <string>
@@ -27,8 +27,8 @@ namespace bench {
 // Behavior: When ~CS is Low, drives rom[address] onto D0-D7.
 //           When ~CS is High, D0-D7 are tri-stated.
 //
-// Threading: Reactive IC. Default run() -- blocks on mailbox.
-class IC_ROM_8K : public FiberComponent {
+// Threading: InlineComponent -- combinational, no thread.
+class IC_ROM_8K : public InlineComponent {
 public:
     explicit IC_ROM_8K(const std::string& label = "ROM",
                        const std::string& file_path = "");
@@ -36,11 +36,12 @@ public:
     void install(Socket& socket);
 
 protected:
+    void on_power_on() override;
+    void on_power_off() override;
     void on_signal_change() override;
 
 private:
-    void drive_output();
-    void release_output();
+    void update_outputs();
     uint16_t read_address() const;
 
     std::array<uint8_t, 8192> rom_{};
@@ -49,6 +50,7 @@ private:
     Signal* pin_d_[8]  = {};  // D0(pin9)..D7(pin17)
     Signal* pin_cs_    = nullptr;  // Pin 20: ~CS
     Signal* pin_vcc_   = nullptr;  // Pin 24: VCC
+    bool    driving_   = false;    // true when outputs are being driven
 };
 
 } // namespace bench

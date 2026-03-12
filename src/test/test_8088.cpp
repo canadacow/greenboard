@@ -6,6 +6,9 @@
 // The 74S245 transceiver is real -- bidirectional data bus transfer.
 // The 74S373 address latches are real -- ALE-triggered address capture (U7/U9/U10).
 // The 74S138 I/O decoder is real -- U66 decodes XA5-7 into PIC/PIT/PPI/DMA chip selects.
+// The 74S20 NAND gate is real -- U64 generates ~ROM_ADDR_SEL from A16-A19.
+// The 74S138 ROM decoder is real -- U46 decodes A13-A15 into ROM chip selects.
+// The IC_ROM_8K is real -- U33 serves FE000-FFFFF from the BIOS binary.
 // The 8259A PIC is real -- signal-level interrupt handling.
 // BusGlue is a reactive Component: memory + generic I/O, subscribes to CLK.
 //
@@ -23,6 +26,8 @@
 #include "ic/ic_8284a.h"
 #include "ic/ic_74s373.h"
 #include "ic/ic_74s138.h"
+#include "ic/ic_74s20.h"
+#include "ic/ic_rom_8k.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <cstring>
@@ -128,6 +133,8 @@ private:
     bool is_inta_cycle()  { return cycle_type == 0; }
     // PIC ports 0x20-0x21 are handled by U66 (74S138) -> PIC ~CS. BusGlue skips them.
     bool is_hw_decoded(uint32_t addr) { return (addr & 0xFFFF) >= 0x20 && (addr & 0xFFFF) <= 0x3F; }
+    // ROM range served by real IC_ROM_8K chips. BusGlue must not drive data here.
+    bool is_rom_range(uint32_t addr) { return addr >= 0xFE000 && addr <= 0xFFFFF; }
 
     uint8_t io_read(uint16_t port) { return io[port]; }
 
@@ -190,6 +197,8 @@ private:
                 } else if (is_io_cycle()) {
                     uint8_t val = io_read(cycle_addr & 0xFFFF);
                     drive_d(val);
+                } else if (is_rom_range(cycle_addr & 0xFFFFF)) {
+                    // ROM chip drives the data bus -- BusGlue stays off.
                 } else {
                     uint8_t val = mem[cycle_addr & 0xFFFFF];
                     drive_d(val);
@@ -399,6 +408,12 @@ int main() {
             {0x050A, 0x0001, "Auto-EOI"},
             {0x050C, 0x0002, "Nested HW interrupts"},
         }},
+        {"ROM (BIOS U33)", "test_rom.bin", {
+            {0x0500, 0x0001, "ID string match"},
+            {0x0502, 0x0031, "first ROM byte ('1')"},
+            {0x0504, 0x0032, "last string byte ('2')"},
+            {0x0506, 0xB000, "8K byte sum"},
+        }},
     };
 
     // --- Wiring (permanent -- these are the copper traces on the test board) ---
@@ -606,6 +621,78 @@ int main() {
     pic_socket.wire(28, vcc);
     auto* pic = pic_socket.emplace<IC_8259A>();
 
+    // --- ROM decode chain ---
+
+    // ROM-specific signals
+    Signal rom_addr_sel{"~ROM_ADDR_SEL"};   // U64 output: active low when A19:A16 = 1111
+    Signal cs7{"~CS7"};                      // U46 output: ROM chip select for U33 (FE000-FFFFF)
+
+    // U64: 74S20 Dual 4-Input NAND (ROM address decode)
+    // Gate 1: NAND(A19, A18, A17, A16) -> ~ROM_ADDR_SEL
+    // Active low when all four high bits are set (address >= F0000).
+    Socket nand_socket{"U64", "74S20", 14};
+    nand_socket.wire(1, xa[19]);            // A1 = XA19
+    nand_socket.wire(2, xa[18]);            // B1 = XA18
+    nand_socket.wire(4, xa[17]);            // C1 = XA17
+    nand_socket.wire(5, xa[16]);            // D1 = XA16
+    nand_socket.wire(6, rom_addr_sel);      // Y1 = ~ROM_ADDR_SEL
+    nand_socket.wire(7, gnd);
+    nand_socket.wire(14, vcc);
+    auto* nand_ic = nand_socket.emplace<IC_74S20>();
+
+    // U46: 74S138 ROM Chip Select Decoder
+    // Decodes A15:A13 into ~CS2-~CS7 when ~ROM_ADDR_SEL=Low and ~MEMR=Low.
+    // G1 = VCC (always enabled -- on real board this is ~RESET_DRV,
+    //           but 8288 doesn't issue ~MEMR during reset, so safe).
+    Socket rom_decode{"U46", "74S138", 16};
+    rom_decode.wire(1, xa[13]);             // A = XA13
+    rom_decode.wire(2, xa[14]);             // B = XA14
+    rom_decode.wire(3, xa[15]);             // C = XA15
+    rom_decode.wire(4, memr);               // ~G2A = ~MEMR (active during memory read)
+    rom_decode.wire(5, rom_addr_sel);       // ~G2B = ~ROM_ADDR_SEL
+    rom_decode.wire(6, vcc);                // G1 = VCC (see note above)
+    rom_decode.wire(7, cs7);                // ~Y7 = ~CS7 -> U33 (FE000-FFFFF)
+    // ~Y0-~Y6 unconnected (no other ROM chips installed in test bench)
+    rom_decode.wire(8, gnd);
+    rom_decode.wire(16, vcc);
+    auto* rom_dec = rom_decode.emplace<IC_74S138>();
+
+    // U33: 8K x 8 BIOS ROM (FE000-FFFFF)
+    // Address pins wired to XA0-XA12, data pins to system data bus (D0-D7).
+    // On the real board, ROM data pins connect to XD0-XD7 which reach D0-D7
+    // through U12-U14 system bus transceivers. We connect directly since
+    // those buffers are not modeled in the test bench.
+    std::string bios_path = std::string(ASSETS_DIR) + "/BIOS_IBM5150_27OCT82_1501476_U33.BIN";
+    Socket rom_socket{"U33", "8K_X_8ROS", 24};
+    rom_socket.wire(1, xa[7]);              // A7
+    rom_socket.wire(2, xa[6]);              // A6
+    rom_socket.wire(3, xa[5]);              // A5
+    rom_socket.wire(4, xa[4]);              // A4
+    rom_socket.wire(5, xa[3]);              // A3
+    rom_socket.wire(6, xa[2]);              // A2
+    rom_socket.wire(7, xa[1]);              // A1
+    rom_socket.wire(8, xa[0]);              // A0
+    rom_socket.wire(9, d0);                 // D0
+    rom_socket.wire(10, d1);                // D1
+    rom_socket.wire(11, d2);                // D2
+    rom_socket.wire(12, gnd);               // GND
+    rom_socket.wire(13, d3);                // D3
+    rom_socket.wire(14, d4);                // D4
+    rom_socket.wire(15, d5);                // D5
+    rom_socket.wire(16, d6);                // D6
+    rom_socket.wire(17, d7);                // D7
+    rom_socket.wire(18, xa[11]);            // A11
+    rom_socket.wire(19, xa[10]);            // A10
+    rom_socket.wire(20, cs7);               // ~CS
+    rom_socket.wire(21, xa[12]);            // A12
+    rom_socket.wire(22, xa[9]);             // A9
+    rom_socket.wire(23, xa[8]);             // A8
+    rom_socket.wire(24, vcc);               // VCC
+    auto* rom_ic = rom_socket.emplace<IC_ROM_8K>("BIOS_U33", bios_path);
+
+    all_traces.push_back(&rom_addr_sel);
+    all_traces.push_back(&cs7);
+
     // BusGlue: reactive address decode + memory
     Signal* xa_ptrs[20];
     Signal* d_ptrs[8];
@@ -632,12 +719,100 @@ int main() {
     scheduler.register_inline(latch_mid_ic);
     scheduler.register_inline(latch_hi_ic);
     scheduler.register_inline(io_dec);
+    scheduler.register_inline(nand_ic);
+    scheduler.register_inline(rom_dec);
+    scheduler.register_inline(rom_ic);
     // Register all fiber components (everything except the 8284A clock).
     scheduler.register_fiber(cpu);
     scheduler.register_fiber(bc);
     scheduler.register_fiber(pic);
     scheduler.register_fiber(&bus);
     clk_gen->set_scheduler(&scheduler);
+
+    // --- Benchmark: 64-bit increment loop, timed by NMI ---
+    constexpr int BENCH_SECONDS = 5;
+    spdlog::info("--- Benchmark: 64-bit increment ({} seconds) ---", BENCH_SECONDS);
+    {
+        std::memset(bus.mem.get(), 0xF4, 1 << 20);
+        std::memset(bus.io.get(), 0xFF, 1 << 16);
+        bus.reset();
+
+        std::string path = std::string(ASM_TEST_DIR) + "/test_bench64.bin";
+        if (!load_bin(path, bus.mem.get(), 0xF0123)) {
+            spdlog::error("  benchmark skipped -- cannot load binary");
+        } else {
+            cpu->clear_halt();
+            pic->power_on();
+            bc->power_on();
+            xcvr->power_on();
+            io_dec->power_on();
+            nand_ic->power_on();
+            rom_dec->power_on();
+            rom_ic->power_on();
+            latch_lo_ic->power_on();
+            latch_mid_ic->power_on();
+            latch_hi_ic->power_on();
+            bus.power_on();
+            clk_gen->power_on();
+            cpu->power_on();
+
+            gnd.drive(Level::Low);
+            s0.drive(Level::High);
+            s1.drive(Level::High);
+            s2.drive(Level::High);
+            aen_bar.drive(Level::High);
+            vcc.drive(Level::High);
+            scheduler.evaluate_no_wake();
+            res.drive(Level::High);
+
+            // Let it run for BENCH_SECONDS, then fire NMI.
+            auto start = std::chrono::steady_clock::now();
+            std::this_thread::sleep_for(std::chrono::seconds(BENCH_SECONDS));
+            nmi.drive(Level::High);
+
+            // Wait for CPU to halt (NMI handler does HLT).
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            auto end = std::chrono::steady_clock::now();
+
+            double elapsed = std::chrono::duration<double>(end - start).count();
+
+            // Read 64-bit counter from memory.
+            uint64_t count = 0;
+            for (int i = 0; i < 8; ++i)
+                count |= (uint64_t)bus.mem[0x0500 + i] << (i * 8);
+
+            double rate = (elapsed > 0) ? (double)count / elapsed : 0;
+            spdlog::info("  count: {} increments in {:.3f}s ({:.0f} inc/s)",
+                count, elapsed, rate);
+
+            if (!cpu->halted())
+                spdlog::warn("  benchmark timeout -- CPU did not halt");
+
+            // Power off.
+            nmi.drive(Level::Low);
+            res.drive(Level::Low);
+            vcc.drive(Level::HiZ);
+            scheduler.evaluate_no_wake();
+            clk_gen->power_off();
+            cpu->power_off();
+            bc->power_off();
+            pic->power_off();
+            bus.power_off();
+            rom_ic->power_off();
+            xcvr->power_off();
+            io_dec->power_off();
+            nand_ic->power_off();
+            rom_dec->power_off();
+            latch_lo_ic->power_off();
+            latch_mid_ic->power_off();
+            latch_hi_ic->power_off();
+
+            for (auto* sig : all_traces)
+                sig->reset();
+        }
+    }
 
     // --- Run tests (power cycle between each) ---
     int passed = 0, failed = 0;
@@ -665,6 +840,9 @@ int main() {
         bc->power_on();
         xcvr->power_on();
         io_dec->power_on();
+        nand_ic->power_on();
+        rom_dec->power_on();
+        rom_ic->power_on();
         latch_lo_ic->power_on();
         latch_mid_ic->power_on();
         latch_hi_ic->power_on();
@@ -711,8 +889,11 @@ int main() {
         bc->power_off();
         pic->power_off();
         bus.power_off();
+        rom_ic->power_off();
         xcvr->power_off();
         io_dec->power_off();
+        nand_ic->power_off();
+        rom_dec->power_off();
         latch_lo_ic->power_off();
         latch_mid_ic->power_off();
         latch_hi_ic->power_off();
@@ -738,5 +919,6 @@ int main() {
     }
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
+
     return failed > 0 ? 1 : 0;
 }

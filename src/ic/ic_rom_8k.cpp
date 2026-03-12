@@ -5,7 +5,7 @@
 namespace bench {
 
 IC_ROM_8K::IC_ROM_8K(const std::string& label, const std::string& file_path)
-    : FiberComponent(label)
+    : InlineComponent(label)
 {
     if (!file_path.empty()) {
         std::ifstream f(file_path, std::ios::binary);
@@ -50,20 +50,29 @@ void IC_ROM_8K::install(Socket& socket) {
     pin_cs_  = socket.pin_signal(20);  // ~CS
     pin_vcc_ = socket.pin_signal(24);  // VCC
 
-    // Subscribe to chip select
+    // Subscribe to chip select (drives output changes)
     if (pin_cs_) pin_cs_->connect(this);
     if (pin_vcc_) pin_vcc_->connect(this);
 
     spdlog::debug("[{}] installed into socket {}", name(), socket.ref());
 }
 
-void IC_ROM_8K::on_signal_change() {
-    if (pin_cs_) {
-        if (pin_cs_->level() == Level::Low)
-            drive_output();
-        else
-            release_output();
+void IC_ROM_8K::on_power_on() {
+    update_outputs();
+}
+
+void IC_ROM_8K::on_power_off() {
+    if (driving_) {
+        for (int i = 0; i < 8; ++i) {
+            if (pin_d_[i])
+                pin_d_[i]->release();
+        }
+        driving_ = false;
     }
+}
+
+void IC_ROM_8K::on_signal_change() {
+    update_outputs();
 }
 
 uint16_t IC_ROM_8K::read_address() const {
@@ -75,19 +84,23 @@ uint16_t IC_ROM_8K::read_address() const {
     return addr;
 }
 
-void IC_ROM_8K::drive_output() {
-    uint16_t addr = read_address();
-    uint8_t data = rom_[addr & 0x1FFF];
-    for (int i = 0; i < 8; ++i) {
-        if (pin_d_[i])
-            pin_d_[i]->drive((data >> i) & 1 ? Level::High : Level::Low);
-    }
-}
+void IC_ROM_8K::update_outputs() {
+    bool selected = pin_cs_ && pin_cs_->level() == Level::Low;
 
-void IC_ROM_8K::release_output() {
-    for (int i = 0; i < 8; ++i) {
-        if (pin_d_[i])
-            pin_d_[i]->release();
+    if (selected) {
+        uint16_t addr = read_address();
+        uint8_t data = rom_[addr & 0x1FFF];
+        for (int i = 0; i < 8; ++i) {
+            if (pin_d_[i])
+                pin_d_[i]->drive((data >> i) & 1 ? Level::High : Level::Low);
+        }
+        driving_ = true;
+    } else if (driving_) {
+        for (int i = 0; i < 8; ++i) {
+            if (pin_d_[i])
+                pin_d_[i]->release();
+        }
+        driving_ = false;
     }
 }
 
