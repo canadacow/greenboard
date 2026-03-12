@@ -165,6 +165,7 @@ private:
     uint32_t op_source_ = 0, op_dest_ = 0, rm_addr_ = 0;
     uint32_t op_to_addr_ = 0, op_from_addr_ = 0;
     uint32_t i_data0_ = 0, i_data1_ = 0, i_data2_ = 0;
+    int i_imm_offset_ = 2;
     uint32_t scratch_uint_ = 0, scratch2_uint_ = 0;
     int      op_result_ = 0, scratch_int_ = 0;
     uint8_t  scratch_uchar_ = 0;

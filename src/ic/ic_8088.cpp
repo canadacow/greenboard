@@ -534,17 +534,17 @@ void IC_8088::execute() {
         i_reg_ = (i_data0_ >> 3) & 7;
 
         if ((!i_mod_ && i_rm_ == 6) || (i_mod_ == 2)) {
-            // 16-bit displacement at [2,3], immediate at [4,5]
+            // 16-bit displacement at [2,3]; immediate (if any) at [4,...]
             i_data1_ = fetch_word(2);
-            i_data2_ = fetch_word(4);
+            i_imm_offset_ = 4;
         } else if (i_mod_ == 1) {
-            // 8-bit displacement (sign-extended byte 2), immediate at [3,4]
+            // 8-bit displacement (sign-extended byte 2); immediate at [3,...]
             i_data1_ = (int8_t)(i_data0_ >> 8);
-            i_data2_ = fetch_word(3);
+            i_imm_offset_ = 3;
         } else {
-            // No displacement (mod=0 or mod=3): immediate at [2,3]
+            // No displacement (mod=0 or mod=3); immediate at [2,...]
             i_data1_ = fetch_word(2);
-            i_data2_ = i_data1_;
+            i_imm_offset_ = 2;
         }
 
         decode_rm_reg();
@@ -615,7 +615,7 @@ void IC_8088::execute() {
             set_opcode(0x20); // decode like AND for flags
             reg_ip_ += i_w_ + 1;
             uint32_t d = rmem(op_to_addr_);
-            uint32_t s = i_data2_;
+            uint32_t s = i_w_ ? fetch_word(i_imm_offset_) : fetch_byte(i_imm_offset_);
             op_dest_ = d; op_source_ = s;
             op_result_ = i_w_ ? (uint16_t)(d & s) : (uint8_t)(d & s);
             break;
@@ -727,16 +727,17 @@ void IC_8088::execute() {
     }
     case 7: { // ADD|OR|ADC|SBB|AND|SUB|XOR|CMP AL/AX, imm
         rm_addr_ = REGS_BASE;
-        i_data0_ = fetch_word(1);
-        i_data2_ = i_data0_;
         i_mod_ = 3;
         i_reg_ = extra_;
+        i_imm_offset_ = 1;
         reg_ip_--;
     }
     [[fallthrough]];
     case 8: { // ADD|OR|ADC|SBB|AND|SUB|XOR|CMP reg, imm
         op_to_addr_ = rm_addr_;
-        regs16()[REG_SCRATCH] = (i_d_ |= !i_w_) ? (int8_t)(i_data2_ & 0xFF) : (uint16_t)i_data2_;
+        i_d_ |= !i_w_;
+        i_data2_ = i_d_ ? fetch_byte(i_imm_offset_) : fetch_word(i_imm_offset_);
+        regs16()[REG_SCRATCH] = i_d_ ? (int8_t)(i_data2_ & 0xFF) : (uint16_t)i_data2_;
         op_from_addr_ = REGS_BASE + 2 * REG_SCRATCH;
         reg_ip_ += !i_d_ + 1;
         set_opcode(0x08 * (extra_ = i_reg_));
@@ -923,18 +924,23 @@ void IC_8088::execute() {
         break;
     }
     case 14: { // JMP | CALL short/near/far
-        i_data0_ = fetch_word(1);
         reg_ip_ += 3 - i_d_;
-        if (!i_w_) {
-            if (i_d_) { // JMP far
-                i_data2_ = fetch_word(3);
-                reg_ip_ = 0;
-                regs16()[REG_CS] = (uint16_t)i_data2_;
-            } else { // CALL near
-                push16(reg_ip_);
+        if (i_d_ && i_w_) {
+            // JMP short rel8 -- only 1 byte needed
+            reg_ip_ += (int8_t)fetch_byte(1);
+        } else {
+            i_data0_ = fetch_word(1);
+            if (!i_w_) {
+                if (i_d_) { // JMP far
+                    i_data2_ = fetch_word(3);
+                    reg_ip_ = 0;
+                    regs16()[REG_CS] = (uint16_t)i_data2_;
+                } else { // CALL near
+                    push16(reg_ip_);
+                }
             }
+            reg_ip_ += (int16_t)i_data0_;
         }
-        reg_ip_ += (i_d_ && i_w_) ? (int8_t)(i_data0_ & 0xFF) : (int16_t)i_data0_;
         break;
     }
     case 15: { // TEST reg, r/m
@@ -1012,7 +1018,7 @@ void IC_8088::execute() {
         break;
     }
     case 20: { // MOV r/m, imm
-        op_result_ = i_data2_;
+        op_result_ = i_w_ ? fetch_word(i_imm_offset_) : fetch_byte(i_imm_offset_);
         wmem(op_from_addr_, op_result_);
         break;
     }
