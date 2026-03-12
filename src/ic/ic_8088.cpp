@@ -405,6 +405,10 @@ uint8_t IC_8088::fetch_byte(int offset) {
     return prefetch_[offset];
 }
 
+uint16_t IC_8088::fetch_word(int offset) {
+    return fetch_byte(offset) | (fetch_byte(offset + 1) << 8);
+}
+
 void IC_8088::decode_rm_reg() {
     uint32_t tab = 4 * !i_mod_;
 
@@ -515,25 +519,33 @@ void IC_8088::execute() {
     i_w_ = (i_reg4bit_ = raw_opcode_id_ & 7) & 1;
     i_d_ = i_reg4bit_ / 2 & 1;
 
-    // Set up i_data fields from instruction stream
-    i_data0_ = fetch_byte(1) | (fetch_byte(2) << 8);
-    i_data1_ = fetch_byte(2) | (fetch_byte(3) << 8);
-    i_data2_ = fetch_byte(3) | (fetch_byte(4) << 8);
+    // i_data0/1/2 are fetched lazily -- only when the instruction needs them.
+    // The modrm block fetches what the addressing mode requires; non-modrm
+    // cases fetch at point of use. This avoids 4 wasted bus reads for
+    // instructions that don't need operand bytes (NOP, CLC, HLT, etc.).
 
     if (seg_override_en_) seg_override_en_--;
     if (rep_override_en_) rep_override_en_--;
 
     if (i_mod_size_) {
+        i_data0_ = fetch_word(1);
         i_mod_ = (i_data0_ & 0xFF) >> 6;
         i_rm_ = i_data0_ & 7;
         i_reg_ = (i_data0_ >> 3) & 7;
 
-        if ((!i_mod_ && i_rm_ == 6) || (i_mod_ == 2))
-            i_data2_ = fetch_byte(4) | (fetch_byte(5) << 8);
-        else if (i_mod_ != 1)
-            i_data2_ = i_data1_;
-        else
+        if ((!i_mod_ && i_rm_ == 6) || (i_mod_ == 2)) {
+            // 16-bit displacement at [2,3], immediate at [4,5]
+            i_data1_ = fetch_word(2);
+            i_data2_ = fetch_word(4);
+        } else if (i_mod_ == 1) {
+            // 8-bit displacement (sign-extended byte 2), immediate at [3,4]
             i_data1_ = (int8_t)(i_data0_ >> 8);
+            i_data2_ = fetch_word(3);
+        } else {
+            // No displacement (mod=0 or mod=3): immediate at [2,3]
+            i_data1_ = fetch_word(2);
+            i_data2_ = i_data1_;
+        }
 
         decode_rm_reg();
     }
@@ -548,7 +560,7 @@ void IC_8088::execute() {
             uint8_t c = regs8()[TABLE[TABLE_COND_JUMP_DECODE_C][scratch_uchar_]];
             uint8_t d = regs8()[TABLE[TABLE_COND_JUMP_DECODE_D][scratch_uchar_]];
             int cond = i_w_ ^ (a || b || c ^ d);
-            int8_t disp = (int8_t)(i_data0_ & 0xFF);
+            int8_t disp = (int8_t)fetch_byte(1);
             reg_ip_ += disp * cond;
         }
         break;
@@ -557,7 +569,7 @@ void IC_8088::execute() {
         i_w_ = !!(raw_opcode_id_ & 8);
         uint32_t addr = get_reg_addr(i_reg4bit_);
         op_dest_ = rmem(addr);
-        op_source_ = i_data0_;
+        op_source_ = i_w_ ? fetch_word(1) : fetch_byte(1);
         op_result_ = op_source_;
         wmem(addr, op_result_);
         break;
@@ -715,6 +727,7 @@ void IC_8088::execute() {
     }
     case 7: { // ADD|OR|ADC|SBB|AND|SUB|XOR|CMP AL/AX, imm
         rm_addr_ = REGS_BASE;
+        i_data0_ = fetch_word(1);
         i_data2_ = i_data0_;
         i_mod_ = 3;
         i_reg_ = extra_;
@@ -808,6 +821,7 @@ void IC_8088::execute() {
         break;
     }
     case 11: { // MOV AL/AX, [loc]
+        i_data0_ = fetch_word(1);
         i_mod_ = 0; i_reg_ = 0; i_rm_ = 6;
         i_data1_ = i_data0_;
         decode_rm_reg();
@@ -905,13 +919,15 @@ void IC_8088::execute() {
         case 1: scratch_uint_ &= regs8()[FLAG_ZF]; break;  // LOOPZ
         case 3: scratch_uint_ = !++regs16()[REG_CX]; break; // JCXZ
         }
-        reg_ip_ += scratch_uint_ * (int8_t)(i_data0_ & 0xFF);
+        reg_ip_ += scratch_uint_ * (int8_t)fetch_byte(1);
         break;
     }
     case 14: { // JMP | CALL short/near/far
+        i_data0_ = fetch_word(1);
         reg_ip_ += 3 - i_d_;
         if (!i_w_) {
             if (i_d_) { // JMP far
+                i_data2_ = fetch_word(3);
                 reg_ip_ = 0;
                 regs16()[REG_CS] = (uint16_t)i_data2_;
             } else { // CALL near
@@ -992,7 +1008,7 @@ void IC_8088::execute() {
         reg_ip_ = pop16();
         if (extra_) regs16()[REG_CS] = pop16(); // RETF or IRET
         if (extra_ & 2) set_flags(pop16()); // IRET
-        else if (!i_d_) regs16()[REG_SP] += (uint16_t)i_data0_; // RET/RETF imm16
+        else if (!i_d_) regs16()[REG_SP] += fetch_word(1); // RET/RETF imm16
         break;
     }
     case 20: { // MOV r/m, imm
@@ -1001,7 +1017,7 @@ void IC_8088::execute() {
         break;
     }
     case 21: { // IN AL/AX, DX/imm8
-        scratch_uint_ = extra_ ? regs16()[REG_DX] : (uint8_t)i_data0_;
+        scratch_uint_ = extra_ ? regs16()[REG_DX] : fetch_byte(1);
         uint8_t val = io_read_byte((uint16_t)scratch_uint_);
         regs8()[REG_AL] = val;
         if (i_w_) regs8()[REG_AH] = io_read_byte((uint16_t)(scratch_uint_ + 1));
@@ -1009,7 +1025,7 @@ void IC_8088::execute() {
         break;
     }
     case 22: { // OUT DX/imm8, AL/AX
-        scratch_uint_ = extra_ ? regs16()[REG_DX] : (uint8_t)i_data0_;
+        scratch_uint_ = extra_ ? regs16()[REG_DX] : fetch_byte(1);
         io_write_byte((uint16_t)scratch_uint_, regs8()[REG_AL]);
         if (i_w_) io_write_byte((uint16_t)(scratch_uint_ + 1), regs8()[REG_AH]);
         break;
@@ -1073,6 +1089,8 @@ void IC_8088::execute() {
         regs16()[REG_DX] = -(regs16()[REG_AX] >> 15);
         break;
     case 32: // CALL FAR imm16:imm16
+        i_data0_ = fetch_word(1);
+        i_data2_ = fetch_word(3);
         push16(regs16()[REG_CS]);
         push16(reg_ip_ + 5);
         regs16()[REG_CS] = (uint16_t)i_data2_;
@@ -1108,14 +1126,14 @@ void IC_8088::execute() {
         break;
     case 39: // INT imm8
         reg_ip_ += 2;
-        pc_interrupt((uint8_t)i_data0_);
+        pc_interrupt(fetch_byte(1));
         break;
     case 40: // INTO
         ++reg_ip_;
         if (regs8()[FLAG_OF]) pc_interrupt(4);
         break;
     case 41: { // AAM
-        uint8_t divisor = (uint8_t)(i_data0_ & 0xFF);
+        uint8_t divisor = fetch_byte(1);
         if (divisor) {
             regs8()[REG_AH] = regs8()[REG_AL] / divisor;
             op_result_ = regs8()[REG_AL] %= divisor;
@@ -1126,7 +1144,7 @@ void IC_8088::execute() {
     }
     case 42: // AAD
         i_w_ = 0;
-        regs16()[REG_AX] = op_result_ = 0xFF & (regs8()[REG_AL] + (uint8_t)i_data0_ * regs8()[REG_AH]);
+        regs16()[REG_AX] = op_result_ = 0xFF & (regs8()[REG_AL] + fetch_byte(1) * regs8()[REG_AH]);
         break;
     case 43: // SALC
         regs8()[REG_AL] = -regs8()[FLAG_CF];
@@ -1144,7 +1162,7 @@ void IC_8088::execute() {
         break;
     case 47: { // TEST AL/AX, imm
         uint32_t d = i_w_ ? regs16()[REG_AX] : regs8()[REG_AL];
-        uint32_t s = i_data0_;
+        uint32_t s = i_w_ ? fetch_word(1) : fetch_byte(1);
         op_dest_ = d; op_source_ = s;
         op_result_ = d & s;
         break;
