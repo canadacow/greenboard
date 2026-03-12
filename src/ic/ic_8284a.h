@@ -25,7 +25,7 @@ class Scheduler;
 //   Active IC -- its thread IS the crystal oscillator. Spin loop
 //   toggles OSC, divides to CLK/PCLK. On each CLK edge: calls
 //   scheduler->evaluate() to commit signals, eval inline ICs,
-//   wake all async components, and wait for quiescence.
+//   and run all fiber components cooperatively.
 class IC_8284A : public ThreadedComponent {
 public:
     IC_8284A();

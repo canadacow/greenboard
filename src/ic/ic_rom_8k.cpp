@@ -5,7 +5,7 @@
 namespace bench {
 
 IC_ROM_8K::IC_ROM_8K(const std::string& label, const std::string& file_path)
-    : ThreadedComponent(label)
+    : FiberComponent(label)
 {
     if (!file_path.empty()) {
         std::ifstream f(file_path, std::ios::binary);

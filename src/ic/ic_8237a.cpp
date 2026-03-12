@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8237A::IC_8237A() : ThreadedComponent("8237A") {}
+IC_8237A::IC_8237A() : FiberComponent("8237A") {}
 
 void IC_8237A::install(Socket& socket) {
     // Data bus: DB0=pin30 .. DB5=pin23 (skipping pin24,25=DACK), DB4=pin26, DB7=pin21

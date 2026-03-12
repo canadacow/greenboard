@@ -12,7 +12,9 @@ add_executable(bench
     src/core/signal.cpp
     src/core/component.cpp
     src/core/threaded_component.cpp
+    src/core/fiber_component.cpp
     src/core/inline_component.cpp
+    src/host_platform/fiber_win32.cpp
     src/board/socket.cpp
     src/board/isa_slot.cpp
     src/board/passive.cpp
@@ -45,7 +47,9 @@ add_executable(test_8088
     src/core/signal.cpp
     src/core/component.cpp
     src/core/threaded_component.cpp
+    src/core/fiber_component.cpp
     src/core/inline_component.cpp
+    src/host_platform/fiber_win32.cpp
     src/board/socket.cpp
     src/ic/ic_8088.cpp
     src/ic/ic_8288.cpp

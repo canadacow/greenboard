@@ -1,5 +1,5 @@
 #pragma once
-#include "core/threaded_component.h"
+#include "core/fiber_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -39,17 +39,17 @@ namespace bench {
 //   1,0,0 = Opcode fetch  1,0,1 = Memory read
 //   1,1,0 = Memory write  1,1,1 = Passive (no bus cycle)
 //
-// Threading: Active IC. Overrides run() with instruction execution loop.
-//            Blocks on wait_mailbox() until VCC goes High.
+// Threading: Active IC (fiber). Overrides run() with instruction execution loop.
+//            Yields until VCC goes High, then executes instructions.
 //            Each instruction step drives bus signals for memory/IO access.
-class IC_8088 : public ThreadedComponent {
+class IC_8088 : public FiberComponent {
 public:
     IC_8088(uint16_t start_cs = 0xF000, uint16_t start_ip = 0x0100);
 
     void install(Socket& socket);
 
 protected:
-    void run(std::stop_token stop) override;
+    void run() override;
     void on_signal_change() override;
 
 private:
@@ -277,9 +277,6 @@ private:
     bool clk_fell_ = false;
     Level clk_prev_ = Level::HiZ;
     Level nmi_prev_ = Level::HiZ;
-
-    // Cached stop token for CLK spin loops
-    std::stop_token stop_;
 
     // Halted flag -- set when CPU reaches HLT or CS:IP = 0:0
     std::atomic<bool> halted_{false};

@@ -1,5 +1,5 @@
 #pragma once
-#include "core/threaded_component.h"
+#include "core/fiber_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -36,7 +36,7 @@ namespace bench {
 //   Port C lower = output (directly connected to SW2 on Model B)
 //
 // Threading: Reactive IC. Uses default run() -- blocks on mailbox.
-class IC_8255A : public ThreadedComponent {
+class IC_8255A : public FiberComponent {
 public:
     IC_8255A();
 

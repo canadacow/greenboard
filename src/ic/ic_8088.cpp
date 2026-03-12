@@ -48,7 +48,7 @@ static constexpr uint8_t BUS_MEMW    = 6;  // 1,1,0
 static constexpr uint8_t BUS_PASSIVE = 7;  // 1,1,1
 
 IC_8088::IC_8088(uint16_t start_cs, uint16_t start_ip)
-    : ThreadedComponent("8088"), start_cs_(start_cs), start_ip_(start_ip) {}
+    : FiberComponent("8088"), start_cs_(start_cs), start_ip_(start_ip) {}
 
 void IC_8088::install(Socket& socket) {
     for (int i = 0; i < 8; ++i)
@@ -100,15 +100,10 @@ void IC_8088::on_signal_change() {
     }
 }
 
-void IC_8088::run(std::stop_token stop) {
-    stop_ = stop;
-
-    while (!stop.stop_requested()) {
-        wait_mailbox(stop);
-        if (stop.stop_requested()) return;
-
-        if (pin_vcc_ && pin_vcc_->level() == Level::High) break;
-    }
+void IC_8088::run() {
+    // Wait for VCC.
+    while (!(pin_vcc_ && pin_vcc_->level() == Level::High))
+        yield();
     spdlog::info("[8088] VCC detected, waiting for RESET");
 
     // Sample RESET on CLK edges, like the real chip.
@@ -119,12 +114,8 @@ void IC_8088::run(std::stop_token stop) {
     if (pin_reset_ && pin_reset_->level() == Level::High) {
         // RESET is currently asserted -- wait for it to deassert.
         spdlog::info("[8088] RESET asserted -- CS:IP = {:04X}:{:04X}", start_cs_, start_ip_);
-        while (!stop.stop_requested()) {
-            wait_mailbox(stop);
-            if (stop.stop_requested()) return;
-    
-            if (pin_reset_->level() != Level::High) break;
-        }
+        while (pin_reset_ && pin_reset_->level() == Level::High)
+            yield();
     } else {
         // RESET pulse already completed (or never happened).
         spdlog::info("[8088] RESET complete -- CS:IP = {:04X}:{:04X}", start_cs_, start_ip_);
@@ -134,7 +125,7 @@ void IC_8088::run(std::stop_token stop) {
 
     drive_status_passive();
 
-    while (!stop.stop_requested()) {
+    for (;;) {
         if (pin_vcc_ && pin_vcc_->level() != Level::High) break;
         on_signal_change();  // process NMI, CLK edges
         execute();
@@ -196,25 +187,22 @@ void IC_8088::drive_status_passive() {
 void IC_8088::wait_clk_rising() {
     clk_rose_ = false;
     clk_fell_ = false;
-    while (!clk_rose_ && !stop_.stop_requested()) {
-        wait_mailbox(stop_);
+    while (!clk_rose_) {
+        yield();
         on_signal_change();
-
     }
 }
 
 void IC_8088::wait_clk_falling() {
     clk_rose_ = false;
     clk_fell_ = false;
-    while (!clk_fell_ && !stop_.stop_requested()) {
-        wait_mailbox(stop_);
+    while (!clk_fell_) {
+        yield();
         on_signal_change();
-
     }
 }
 
 uint8_t IC_8088::bus_read_byte(uint32_t address) {
-    if (stop_.stop_requested()) return 0;
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
     drive_address(address & 0xFFFFF);
     wait_clk_rising();
@@ -224,8 +212,7 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     release_data();
     wait_clk_rising();
     drive_status_passive();
-    while (pin_ready_ && pin_ready_->level() != Level::High
-           && !stop_.stop_requested()) {
+    while (pin_ready_ && pin_ready_->level() != Level::High) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
@@ -235,7 +222,6 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
 }
 
 void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
-    if (stop_.stop_requested()) return;
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
     drive_address(address & 0xFFFFF);
     wait_clk_rising();
@@ -245,8 +231,7 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     drive_data(value);
     wait_clk_rising();
     drive_status_passive();
-    while (pin_ready_ && pin_ready_->level() != Level::High
-           && !stop_.stop_requested()) {
+    while (pin_ready_ && pin_ready_->level() != Level::High) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
@@ -266,7 +251,6 @@ void IC_8088::bus_write_word(uint32_t address, uint16_t value) {
 }
 
 uint8_t IC_8088::io_read_byte(uint16_t port) {
-    if (stop_.stop_requested()) return 0;
     drive_status((BUS_IOR >> 2) & 1, (BUS_IOR >> 1) & 1, BUS_IOR & 1);
     drive_address(port);
     wait_clk_rising();                      // T1 rise
@@ -276,8 +260,7 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
     release_data();                         // release AD
     wait_clk_rising();
     drive_status_passive();
-    while (pin_ready_ && pin_ready_->level() != Level::High
-           && !stop_.stop_requested()) {
+    while (pin_ready_ && pin_ready_->level() != Level::High) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();
@@ -287,7 +270,6 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
 }
 
 void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
-    if (stop_.stop_requested()) return;
     drive_status((BUS_IOW >> 2) & 1, (BUS_IOW >> 1) & 1, BUS_IOW & 1);
     drive_address(port);
     wait_clk_rising();                      // T1 rise
@@ -297,8 +279,7 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     drive_data(value);                      // drive write data
     wait_clk_rising();
     drive_status_passive();
-    while (pin_ready_ && pin_ready_->level() != Level::High
-           && !stop_.stop_requested()) {
+    while (pin_ready_ && pin_ready_->level() != Level::High) {
         wait_clk_falling(); wait_clk_rising();
     }
     wait_clk_falling();

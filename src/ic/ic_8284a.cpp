@@ -1,5 +1,6 @@
 #include "ic/ic_8284a.h"
 #include "core/scheduler.h"
+#include "host_platform/fiber.h"
 #include <spdlog/spdlog.h>
 #include <thread>
 
@@ -22,12 +23,18 @@ void IC_8284A::install(Socket& socket) {
 }
 
 void IC_8284A::run(std::stop_token stop) {
+    // Convert this thread to a fiber so we can switch to component fibers.
+    Fiber self = fiber_convert_thread();
+
     // Wait for VCC to go High (poll -- nobody wakes us before the loop starts).
     while (!stop.stop_requested()) {
         if (pin_vcc_ && pin_vcc_->level() == Level::High) break;
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    if (stop.stop_requested()) return;
+    if (stop.stop_requested()) {
+        fiber_revert_thread(self);
+        return;
+    }
 
     spdlog::debug("[8284A] VCC is High, oscillator spinning");
 
@@ -81,18 +88,10 @@ void IC_8284A::run(std::stop_token stop) {
                 if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
             }
 
-            // Evaluate inline ICs to fixed-point, wake all async, wait for quiescence.
-            scheduler_->evaluate();
-
-            // Drain our own mailbox and wait for all reactive components
-            // to settle. Must drain inside the loop because signals (RES,
-            // VCC) can arrive for us while we're waiting.
-            while (!stop.stop_requested()) {
-                while (mailbox()->sem.try_acquire())
-                    Signal::ack();
-                if (Signal::pending.load(std::memory_order_acquire) == 0)
-                    break;
-            }
+            // Commit signals, eval inline ICs, run all fiber components.
+            // Each fiber runs until it yields, then control returns here.
+            // Completely synchronous -- no semaphores, no pending counter.
+            scheduler_->evaluate(self);
         }
 
         ++total_ticks;
@@ -107,6 +106,9 @@ void IC_8284A::run(std::stop_token stop) {
     scheduler_->evaluate_no_wake();
 
     spdlog::debug("[8284A] oscillator stopped after {} ticks", total_ticks);
+
+    // Revert back to a plain thread before returning.
+    fiber_revert_thread(self);
 }
 
 } // namespace bench

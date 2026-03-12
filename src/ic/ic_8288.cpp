@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8288::IC_8288() : ThreadedComponent("8288") {}
+IC_8288::IC_8288() : FiberComponent("8288") {}
 
 void IC_8288::on_power_on() {
     state_ = State::Idle;

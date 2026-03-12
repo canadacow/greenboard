@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8255A::IC_8255A() : ThreadedComponent("8255A") {}
+IC_8255A::IC_8255A() : FiberComponent("8255A") {}
 
 void IC_8255A::install(Socket& socket) {
     // Data bus: D0=pin34, D1=pin33, ..., D7=pin27

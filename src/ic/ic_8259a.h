@@ -1,5 +1,5 @@
 #pragma once
-#include "core/threaded_component.h"
+#include "core/fiber_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -27,8 +27,8 @@ namespace bench {
 // 5150 configuration: edge-triggered, single PIC (no cascade), master mode.
 // BIOS init: ICW1=0x13, ICW2=0x08 (IRQ0=INT 08h), ICW4=0x09 (8086 mode).
 //
-// Threading: Reactive IC. Uses default run() -- blocks on mailbox.
-class IC_8259A : public ThreadedComponent {
+// Threading: Reactive IC (fiber). Uses default run() -- yields to scheduler.
+class IC_8259A : public FiberComponent {
 public:
     IC_8259A();
 

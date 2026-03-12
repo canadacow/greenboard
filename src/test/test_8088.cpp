@@ -13,7 +13,7 @@
 // (physical 0xF0123). DS=SS=0 after reset. Results checked at 0x0200+.
 
 #include "core/signal.h"
-#include "core/threaded_component.h"
+#include "core/fiber_component.h"
 #include "core/scheduler.h"
 #include "board/socket.h"
 #include "ic/ic_8088.h"
@@ -39,9 +39,9 @@ using namespace bench;
 // Subscribes to CLK, detects edges, drives data/control for each T-state.
 // Handles memory and generic I/O. PIC chip-select comes from U66 (74S138).
 // =========================================================================
-class BusGlue : public ThreadedComponent {
+class BusGlue : public FiberComponent {
 public:
-    BusGlue() : ThreadedComponent("BusGlue") {}
+    BusGlue() : FiberComponent("BusGlue") {}
 
     Signal** xa = nullptr;       // XA0-XA19 (20 pointers) -- latched address from 74S373s
     Signal** d = nullptr;        // D0-D7 (8 pointers) -- system data bus
@@ -622,8 +622,9 @@ int main() {
     for (int i = 0; i < 8; ++i) bus.pic_ir[i] = irq_arr[i];
     bus.subscribe_clk();
 
-    // Scheduler: commits signals, evals inline ICs, wakes async components.
-    // The 8284A calls scheduler.evaluate() at each CLK edge from its spin loop.
+    // Scheduler: commits signals, evals inline ICs, runs fiber components.
+    // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.
+    // All fiber components run cooperatively on the 8284A's thread.
     Scheduler scheduler;
     Signal::set_scheduler(&scheduler);
     scheduler.register_inline(xcvr);
@@ -631,13 +632,11 @@ int main() {
     scheduler.register_inline(latch_mid_ic);
     scheduler.register_inline(latch_hi_ic);
     scheduler.register_inline(io_dec);
-    // Register ALL threaded components for wake-all (including 8284A -- it
-    // drains its own mailbox after evaluate()).
-    scheduler.register_async(clk_gen->mailbox());
-    scheduler.register_async(cpu->mailbox());
-    scheduler.register_async(bc->mailbox());
-    scheduler.register_async(pic->mailbox());
-    scheduler.register_async(bus.mailbox());
+    // Register all fiber components (everything except the 8284A clock).
+    scheduler.register_fiber(cpu);
+    scheduler.register_fiber(bc);
+    scheduler.register_fiber(pic);
+    scheduler.register_fiber(&bus);
     clk_gen->set_scheduler(&scheduler);
 
     // --- Run tests (power cycle between each) ---
@@ -702,20 +701,21 @@ int main() {
                 spdlog::warn("  timeout -- CPU did not halt within 10s");
         }
 
-        // Power off: drop VCC, then power down ICs.
+        // Power off: drop VCC, stop the clock FIRST (joins the 8284A thread),
+        // then delete fibers (safe -- no more evaluate() calls).
         res.drive(Level::Low);
         vcc.drive(Level::HiZ);
         scheduler.evaluate_no_wake();
-        cpu->power_off();
-        clk_gen->power_off();
-        bus.power_off();
+        clk_gen->power_off();   // stop clock first -- joins 8284A thread
+        cpu->power_off();       // then delete fibers
         bc->power_off();
+        pic->power_off();
+        bus.power_off();
         xcvr->power_off();
         io_dec->power_off();
         latch_lo_ic->power_off();
         latch_mid_ic->power_off();
         latch_hi_ic->power_off();
-        pic->power_off();
 
         // Power loss: every trace on the board discharges.
         for (auto* sig : all_traces)
