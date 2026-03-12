@@ -42,7 +42,7 @@ protected:
 private:
     void update_outputs();
 
-    Pin d_[8];        // D input levels (read)
+    PinBlock<8> d_;   // D input levels (read, contiguous)
     PinBlock<8> q_;   // Q output levels (write, contiguous)
     Pin le_;          // LE (read)
     Pin oe_;          // ~OE (read)

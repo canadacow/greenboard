@@ -8,11 +8,12 @@ namespace bench {
 IC_74S373::IC_74S373() : InlineComponent("74S373") {}
 
 void IC_74S373::install(Socket& socket) {
-    // D inputs (read current)
+    // D inputs (read current) -- must be contiguous pool slots
     static constexpr int d_pins[] = {3, 4, 7, 8, 13, 14, 17, 18};
-    for (int i = 0; i < 8; ++i) {
-        Signal* s = socket.pin_signal(d_pins[i]);
-        if (s) { s->connect(this); d_[i] = s->pin(); }
+    d_ = PinBlock<8>::from_socket(socket, d_pins);
+    for (int pin : d_pins) {
+        Signal* s = socket.pin_signal(pin);
+        if (s) s->connect(this);
     }
 
     // Q outputs (write pending) -- must be contiguous pool slots
@@ -32,26 +33,20 @@ void IC_74S373::install(Socket& socket) {
 }
 
 void IC_74S373::on_power_on() {
-    for (int i = 0; i < 8; ++i)
-        latch_[i] = Level::HiZ;
+    std::memset(latch_, static_cast<uint8_t>(Level::HiZ), 8);
     le_prev_ = Level::HiZ;
 }
 
 void IC_74S373::on_signal_change() {
     Level le = le_.level();
 
-    // LE falling edge: capture D inputs
-    if (le == Level::Low && le_prev_ != Level::Low) {
-        for (int i = 0; i < 8; ++i)
-            latch_[i] = d_[i].level();
-    }
+    // LE falling edge or transparent mode: capture D inputs
+    if (le == Level::Low && le_prev_ != Level::Low)
+        d_.read(latch_);
     le_prev_ = le;
 
-    // Transparent mode (LE High): latch tracks D
-    if (le == Level::High) {
-        for (int i = 0; i < 8; ++i)
-            latch_[i] = d_[i].level();
-    }
+    if (le == Level::High)
+        d_.read(latch_);
 
     update_outputs();
 }
