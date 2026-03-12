@@ -51,21 +51,19 @@ private:
     uint8_t read_data() const;
     int highest_priority_irq(uint8_t reg) const;
 
-    // Data bus pins (D0-D7, active low pin numbers 11..4)
-    Signal* pin_d_[8] = {};   // D0=pin11, D1=pin10, ..., D7=pin4
+    // Data bus pins (D0-D7)
+    Pin d_[8];      // D0=pin11, D1=pin10, ..., D7=pin4
 
     // Input pins
-    Signal* pin_cs_   = nullptr;  // Pin  1: ~CS
-    Signal* pin_wr_   = nullptr;  // Pin  2: ~WR
-    Signal* pin_rd_   = nullptr;  // Pin  3: ~RD
-    Signal* pin_spen_ = nullptr;  // Pin 16: ~SP/~EN
-    Signal* pin_ir_[8] = {};      // Pin 18-25: IR0-IR7
-    Signal* pin_inta_ = nullptr;  // Pin 26: ~INTA
-    Signal* pin_a0_   = nullptr;  // Pin 27: A0
-    Signal* pin_vcc_  = nullptr;  // Pin 28: VCC
+    Pin cs_;        // Pin  1: ~CS
+    Pin wr_;        // Pin  2: ~WR
+    Pin rd_;        // Pin  3: ~RD
+    Pin ir_[8];     // Pin 18-25: IR0-IR7
+    Pin inta_;      // Pin 26: ~INTA
+    Pin a0_;        // Pin 27: A0
 
     // Output pins
-    Signal* pin_int_  = nullptr;  // Pin 17: INT
+    Pin int_;       // Pin 17: INT
 
     // Internal registers
     uint8_t irr_ = 0;    // Interrupt Request Register

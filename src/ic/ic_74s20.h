@@ -44,20 +44,10 @@ private:
     void update_outputs();
 
     // Gate 1: pins 1,2,4,5 -> pin 6
-    Signal* pin_a1_ = nullptr;  // Pin 1
-    Signal* pin_b1_ = nullptr;  // Pin 2
-    Signal* pin_c1_ = nullptr;  // Pin 4
-    Signal* pin_d1_ = nullptr;  // Pin 5
-    Signal* pin_y1_ = nullptr;  // Pin 6
+    Pin a1_, b1_, c1_, d1_, y1_;
 
     // Gate 2: pins 9,10,12,13 -> pin 8
-    Signal* pin_a2_ = nullptr;  // Pin 9
-    Signal* pin_b2_ = nullptr;  // Pin 10
-    Signal* pin_c2_ = nullptr;  // Pin 12
-    Signal* pin_d2_ = nullptr;  // Pin 13
-    Signal* pin_y2_ = nullptr;  // Pin 8
-
-    Signal* pin_vcc_ = nullptr; // Pin 14
+    Pin a2_, b2_, c2_, d2_, y2_;
 };
 
 } // namespace bench

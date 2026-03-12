@@ -43,14 +43,13 @@ private:
     void update_outputs();
     void release_outputs();
 
-    Signal* pin_a_[8] = {};   // A1=pin2 .. A8=pin9
-    Signal* pin_b_[8] = {};   // B1=pin18 .. B8=pin11
+    Pin a_[8];   // A1=pin2 .. A8=pin9
+    Pin b_[8];   // B1=pin18 .. B8=pin11
 
     // Track which side we're currently driving (only release what we drove)
     enum class Driving { None, A, B } driving_ = Driving::None;
-    Signal* pin_g_   = nullptr;  // Pin  1: ~G (enable)
-    Signal* pin_dir_ = nullptr;  // Pin 19: DIR
-    Signal* pin_vcc_ = nullptr;  // Pin 20: VCC
+    Pin g_;    // Pin  1: ~G (enable)
+    Pin dir_;  // Pin 19: DIR
 };
 
 } // namespace bench

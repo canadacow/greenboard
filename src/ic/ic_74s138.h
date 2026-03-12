@@ -48,20 +48,17 @@ private:
     void update_outputs();
 
     // Select inputs
-    Signal* pin_a_   = nullptr;  // Pin 1: A (LSB)
-    Signal* pin_b_   = nullptr;  // Pin 2: B
-    Signal* pin_c_   = nullptr;  // Pin 3: C (MSB)
+    Pin a_;     // Pin 1: A (LSB)
+    Pin b_;     // Pin 2: B
+    Pin c_;     // Pin 3: C (MSB)
 
     // Enable inputs
-    Signal* pin_g2a_ = nullptr;  // Pin 4: ~G2A (active low)
-    Signal* pin_g2b_ = nullptr;  // Pin 5: ~G2B (active low)
-    Signal* pin_g1_  = nullptr;  // Pin 6: G1 (active high)
+    Pin g2a_;   // Pin 4: ~G2A (active low)
+    Pin g2b_;   // Pin 5: ~G2B (active low)
+    Pin g1_;    // Pin 6: G1 (active high)
 
     // Outputs (~Y0 through ~Y7, active low)
-    // Index 0 = ~Y0 (pin 15), index 7 = ~Y7 (pin 7)
-    Signal* pin_y_[8] = {};
-
-    Signal* pin_vcc_ = nullptr;  // Pin 16: VCC
+    Pin y_[8];
 };
 
 } // namespace bench

@@ -7,53 +7,43 @@ IC_74S138::IC_74S138() : InlineComponent("74S138") {}
 
 void IC_74S138::install(Socket& socket) {
     // Select inputs
-    pin_a_ = socket.pin_signal(1);
-    pin_b_ = socket.pin_signal(2);
-    pin_c_ = socket.pin_signal(3);
+    auto pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        return s ? s->pin() : Pin{};
+    };
+    auto connect_pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+        return s ? s->pin() : Pin{};
+    };
 
-    // Enable inputs
-    pin_g2a_ = socket.pin_signal(4);   // ~G2A (active low)
-    pin_g2b_ = socket.pin_signal(5);   // ~G2B (active low)
-    pin_g1_  = socket.pin_signal(6);   // G1 (active high)
+    a_   = connect_pin(1);
+    b_   = connect_pin(2);
+    c_   = connect_pin(3);
+    g2a_ = connect_pin(4);
+    g2b_ = connect_pin(5);
+    g1_  = connect_pin(6);
 
     // Outputs: ~Y0=pin15, ~Y1=pin14, ..., ~Y7=pin7
-    pin_y_[0] = socket.pin_signal(15);
-    pin_y_[1] = socket.pin_signal(14);
-    pin_y_[2] = socket.pin_signal(13);
-    pin_y_[3] = socket.pin_signal(12);
-    pin_y_[4] = socket.pin_signal(11);
-    pin_y_[5] = socket.pin_signal(10);
-    pin_y_[6] = socket.pin_signal(9);
-    pin_y_[7] = socket.pin_signal(7);
+    static constexpr int y_pins[] = {15, 14, 13, 12, 11, 10, 9, 7};
+    for (int i = 0; i < 8; ++i)
+        y_[i] = pin(y_pins[i]);
 
-    pin_vcc_ = socket.pin_signal(16);
-
-    // Subscribe to all inputs.
-    if (pin_a_)   pin_a_->connect(this);
-    if (pin_b_)   pin_b_->connect(this);
-    if (pin_c_)   pin_c_->connect(this);
-    if (pin_g2a_) pin_g2a_->connect(this);
-    if (pin_g2b_) pin_g2b_->connect(this);
-    if (pin_g1_)  pin_g1_->connect(this);
-    if (pin_vcc_) pin_vcc_->connect(this);
+    // VCC
+    Signal* vcc = socket.pin_signal(16);
+    if (vcc) vcc->connect(this);
 
     spdlog::debug("[74S138] installed into socket {}", socket.ref());
 }
 
 void IC_74S138::on_power_on() {
-    // All outputs High (inactive) on power-up.
-    for (int i = 0; i < 8; ++i) {
-        if (pin_y_[i])
-            pin_y_[i]->drive(Level::High);
-    }
+    for (int i = 0; i < 8; ++i)
+        y_[i].drive(Level::High);
 }
 
 void IC_74S138::on_power_off() {
-    // Release all outputs.
-    for (int i = 0; i < 8; ++i) {
-        if (pin_y_[i])
-            pin_y_[i]->release();
-    }
+    for (int i = 0; i < 8; ++i)
+        y_[i].release();
 }
 
 void IC_74S138::on_signal_change() {
@@ -61,30 +51,22 @@ void IC_74S138::on_signal_change() {
 }
 
 void IC_74S138::update_outputs() {
-    // Check enables: G1=High, ~G2A=Low, ~G2B=Low
     bool enabled =
-        (pin_g1_  && pin_g1_->level()  == Level::High) &&
-        (pin_g2a_ && pin_g2a_->level() == Level::Low) &&
-        (pin_g2b_ && pin_g2b_->level() == Level::Low);
+        g1_.level()  == Level::High &&
+        g2a_.level() == Level::Low &&
+        g2b_.level() == Level::Low;
 
     if (enabled) {
-        // Decode CBA select lines
         int sel = 0;
-        if (pin_a_ && pin_a_->level() == Level::High) sel |= 1;
-        if (pin_b_ && pin_b_->level() == Level::High) sel |= 2;
-        if (pin_c_ && pin_c_->level() == Level::High) sel |= 4;
+        if (a_.level() == Level::High) sel |= 1;
+        if (b_.level() == Level::High) sel |= 2;
+        if (c_.level() == Level::High) sel |= 4;
 
-        // Selected output goes Low, all others High.
-        for (int i = 0; i < 8; ++i) {
-            if (pin_y_[i])
-                pin_y_[i]->drive(i == sel ? Level::Low : Level::High);
-        }
+        for (int i = 0; i < 8; ++i)
+            y_[i].drive(i == sel ? Level::Low : Level::High);
     } else {
-        // All outputs High (inactive).
-        for (int i = 0; i < 8; ++i) {
-            if (pin_y_[i])
-                pin_y_[i]->drive(Level::High);
-        }
+        for (int i = 0; i < 8; ++i)
+            y_[i].drive(Level::High);
     }
 }
 

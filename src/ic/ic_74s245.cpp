@@ -10,74 +10,59 @@ void IC_74S245::on_power_on() {
 }
 
 void IC_74S245::install(Socket& socket) {
+    auto pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        return s ? s->pin() : Pin{};
+    };
+    auto connect_pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+        return s ? s->pin() : Pin{};
+    };
+
     // A side: A1=pin2 .. A8=pin9
     for (int i = 0; i < 8; ++i)
-        pin_a_[i] = socket.pin_signal(2 + i);
+        a_[i] = connect_pin(2 + i);
 
-    // B side: B1=pin18, B2=pin17, ..., B8=pin11 (reversed)
+    // B side: B1=pin18, B2=pin17, ..., B8=pin11
     for (int i = 0; i < 8; ++i)
-        pin_b_[i] = socket.pin_signal(18 - i);
+        b_[i] = connect_pin(18 - i);
 
-    // Control
-    pin_g_   = socket.pin_signal(1);   // ~G
-    pin_dir_ = socket.pin_signal(19);  // DIR
-    pin_vcc_ = socket.pin_signal(20);  // VCC
+    g_   = connect_pin(1);   // ~G
+    dir_ = connect_pin(19);  // DIR
 
-    // Subscribe to control signals
-    if (pin_g_)   pin_g_->connect(this);
-    if (pin_dir_) pin_dir_->connect(this);
-    if (pin_vcc_) pin_vcc_->connect(this);
-
-    // Subscribe to all data pins (both sides)
-    for (int i = 0; i < 8; ++i) {
-        if (pin_a_[i]) pin_a_[i]->connect(this);
-        if (pin_b_[i]) pin_b_[i]->connect(this);
-    }
+    Signal* vcc = socket.pin_signal(20);
+    if (vcc) vcc->connect(this);
 
     spdlog::debug("[74S245] installed into socket {}", socket.ref());
 }
 
 void IC_74S245::on_signal_change() {
-    bool enabled = pin_g_ && pin_g_->level() == Level::Low;
-
-    if (!enabled) {
+    if (g_.level() != Level::Low) {
         release_outputs();
         return;
     }
-
     update_outputs();
 }
 
 void IC_74S245::update_outputs() {
-    bool a_to_b = pin_dir_ && pin_dir_->level() == Level::High;
-
-    if (a_to_b) {
-        // Drive B from A. Only release A if we were previously driving it.
+    if (dir_.level() == Level::High) {
+        // A -> B: release A if we were driving it
         if (driving_ == Driving::A) {
             for (int i = 0; i < 8; ++i)
-                if (pin_a_[i]) pin_a_[i]->release();
+                a_[i].release();
         }
-        uint8_t a_val = 0;
         for (int i = 0; i < 8; ++i)
-            if (pin_a_[i] && pin_a_[i]->level() == Level::High) a_val |= (1 << i);
-        for (int i = 0; i < 8; ++i) {
-            if (pin_b_[i])
-                pin_b_[i]->drive(pin_a_[i] ? pin_a_[i]->level() : Level::HiZ);
-        }
+            b_[i].drive(a_[i].level());
         driving_ = Driving::B;
     } else {
-        // Drive A from B. Only release B if we were previously driving it.
+        // B -> A: release B if we were driving it
         if (driving_ == Driving::B) {
             for (int i = 0; i < 8; ++i)
-                if (pin_b_[i]) pin_b_[i]->release();
+                b_[i].release();
         }
-        uint8_t b_val = 0;
         for (int i = 0; i < 8; ++i)
-            if (pin_b_[i] && pin_b_[i]->level() == Level::High) b_val |= (1 << i);
-        for (int i = 0; i < 8; ++i) {
-            if (pin_a_[i])
-                pin_a_[i]->drive(pin_b_[i] ? pin_b_[i]->level() : Level::HiZ);
-        }
+            a_[i].drive(b_[i].level());
         driving_ = Driving::A;
     }
 }
@@ -85,12 +70,10 @@ void IC_74S245::update_outputs() {
 void IC_74S245::release_outputs() {
     switch (driving_) {
         case Driving::A:
-            for (int i = 0; i < 8; ++i)
-                if (pin_a_[i]) pin_a_[i]->release();
+            for (int i = 0; i < 8; ++i) a_[i].release();
             break;
         case Driving::B:
-            for (int i = 0; i < 8; ++i)
-                if (pin_b_[i]) pin_b_[i]->release();
+            for (int i = 0; i < 8; ++i) b_[i].release();
             break;
         case Driving::None:
             break;
