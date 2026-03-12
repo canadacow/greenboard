@@ -622,7 +622,8 @@ int main() {
     for (int i = 0; i < 8; ++i) bus.pic_ir[i] = irq_arr[i];
     bus.subscribe_clk();
 
-    // Scheduler: central CLK-edge evaluator for inline ICs.
+    // Scheduler: commits signals, evals inline ICs, wakes async components.
+    // The 8284A calls scheduler.evaluate() at each CLK edge from its spin loop.
     Scheduler scheduler;
     Signal::set_scheduler(&scheduler);
     scheduler.register_inline(xcvr);
@@ -630,12 +631,14 @@ int main() {
     scheduler.register_inline(latch_mid_ic);
     scheduler.register_inline(latch_hi_ic);
     scheduler.register_inline(io_dec);
-    // Register ALL threaded components for wake-all.
+    // Register ALL threaded components for wake-all (including 8284A -- it
+    // drains its own mailbox after evaluate()).
     scheduler.register_async(clk_gen->mailbox());
     scheduler.register_async(cpu->mailbox());
     scheduler.register_async(bc->mailbox());
     scheduler.register_async(pic->mailbox());
     scheduler.register_async(bus.mailbox());
+    clk_gen->set_scheduler(&scheduler);
 
     // --- Run tests (power cycle between each) ---
     int passed = 0, failed = 0;
@@ -679,15 +682,16 @@ int main() {
         aen_bar.drive(Level::High);  // No DMA -- CPU always owns bus
         vcc.drive(Level::High);
         // Commit VCC (and other initial drives) so ICs see them on first wake.
-        scheduler.evaluate();
+        // No async wake -- 8284A's run() is polling VCC directly.
+        scheduler.evaluate_no_wake();
         spdlog::debug("VCC driven High, pending={}", Signal::pending.load());
 
         // Drive RES (power good) -- 8284A deasserts RESET on next CLK fall.
         res.drive(Level::High);
         spdlog::debug("RES driven High, pending={}", Signal::pending.load());
 
-        // Start the scheduler -- it runs its own thread now.
-        scheduler.start();
+        // 8284A's thread is already running (power_on above), polling for VCC.
+        // Now that VCC is committed, it will start oscillating.
 
         // Wait for CPU to halt, with 10s safety timeout
         {
@@ -698,11 +702,10 @@ int main() {
                 spdlog::warn("  timeout -- CPU did not halt within 10s");
         }
 
-        // Power off: stop the scheduler, then power down ICs.
-        scheduler.stop();
+        // Power off: drop VCC, then power down ICs.
         res.drive(Level::Low);
         vcc.drive(Level::HiZ);
-        scheduler.evaluate();
+        scheduler.evaluate_no_wake();
         cpu->power_off();
         clk_gen->power_off();
         bus.power_off();

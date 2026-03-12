@@ -3,24 +3,21 @@
 #include "core/mailbox.h"
 #include "core/inline_component.h"
 #include <atomic>
-#include <thread>
 #include <cassert>
-#include <spdlog/spdlog.h>
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace bench {
 
-// Central clock: commits signals, evaluates inline ICs, wakes all
-// async components, waits for quiescence, repeats.
+// Central synchronous evaluator for inline (combinational) ICs.
 //
-// One tick = one evaluation cycle. Every registered async component
-// is woken unconditionally each tick. No per-signal subscriber
-// tracking -- pending count is deterministic.
+// Called by the 8284A at each CLK edge. Commits dirty signals,
+// evaluates inline ICs to fixed-point, wakes all registered async
+// components, and waits for quiescence.
+//
+// Wake-all model: every evaluate() wakes every registered async
+// component unconditionally. No per-signal subscriber tracking.
 //
 // Thread safety: mark_dirty() is MPSC-safe (multiple producers via
-// atomic fetch_add). The run loop is the sole consumer.
+// atomic fetch_add). evaluate() must be called from a single thread.
 class Scheduler {
 public:
     void register_inline(InlineComponent* ic) {
@@ -40,52 +37,26 @@ public:
         dirty_[idx] = sig;
     }
 
-    // Start the scheduler thread.
-    void start() {
-        if (thread_.joinable()) return;
-        thread_ = std::jthread([this](std::stop_token stop) {
-#ifdef _WIN32
-            SetThreadDescription(GetCurrentThread(), L"Scheduler");
-#endif
-            run(stop);
-        });
-        spdlog::debug("[Scheduler] started");
-    }
-
-    // Stop the scheduler thread.
-    void stop() {
-        if (!thread_.joinable()) return;
-        thread_.request_stop();
-        thread_.join();
-        spdlog::debug("[Scheduler] stopped");
-    }
-
-    // Single-shot evaluate for use by the main thread (e.g. driving
-    // VCC at startup). Does NOT wake async components or wait for
-    // quiescence -- just commits dirty signals and runs inline ICs.
+    // Commit + eval inlines + wake all async. Does NOT wait for
+    // quiescence -- the caller (8284A) provides that via its drain loop.
     void evaluate() {
+        commit_and_eval_inlines();
+
+        // Wake ALL registered async components.
+        if (async_count_ > 0) {
+            Signal::pending.fetch_add(async_count_, std::memory_order_release);
+            for (int i = 0; i < async_count_; ++i)
+                asyncs_[i]->wake();
+        }
+    }
+
+    // Commit + eval inlines only. No async wake.
+    // Used by the main thread (e.g. VCC at startup).
+    void evaluate_no_wake() {
         commit_and_eval_inlines();
     }
 
 private:
-    void run(std::stop_token stop) {
-        while (!stop.stop_requested()) {
-            // Commit + inline fixed-point.
-            commit_and_eval_inlines();
-
-            // Wake ALL registered async components, wait for quiescence.
-            if (async_count_ > 0) {
-                Signal::pending.fetch_add(async_count_, std::memory_order_release);
-                for (int i = 0; i < async_count_; ++i)
-                    asyncs_[i]->wake();
-
-                while (Signal::pending.load(std::memory_order_acquire) > 0
-                       && !stop.stop_requested())
-                    ;
-            }
-        }
-    }
-
     void commit_and_eval_inlines() {
         // Phase 1: Commit all dirty signals.
         int n_dirty = dirty_count_.load(std::memory_order_relaxed);
@@ -132,8 +103,6 @@ private:
 
     Signal* dirty_[MAX_DIRTY] = {};
     std::atomic<int> dirty_count_{0};
-
-    std::jthread thread_;
 };
 
 } // namespace bench

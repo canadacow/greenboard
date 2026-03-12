@@ -1,5 +1,7 @@
 #include "ic/ic_8284a.h"
+#include "core/scheduler.h"
 #include <spdlog/spdlog.h>
+#include <thread>
 
 namespace bench {
 
@@ -19,86 +21,92 @@ void IC_8284A::install(Socket& socket) {
     spdlog::debug("[8284A] installed into socket {}", socket.ref());
 }
 
-void IC_8284A::on_power_on() {
-    running_ = false;
-    osc_count_ = 0;
-    clk_state_ = false;
-    pclk_state_ = false;
-    osc_state_ = false;
-    total_ticks_ = 0;
-}
-
-void IC_8284A::on_power_off() {
-    if (running_) {
-        if (pin_osc_)   pin_osc_->release();
-        if (pin_clk_)   pin_clk_->release();
-        if (pin_pclk_)  pin_pclk_->release();
-        if (pin_ready_) pin_ready_->release();
-        if (pin_reset_) pin_reset_->release();
-        spdlog::debug("[8284A] oscillator stopped after {} ticks", total_ticks_);
+void IC_8284A::run(std::stop_token stop) {
+    // Wait for VCC to go High (poll -- nobody wakes us before the loop starts).
+    while (!stop.stop_requested()) {
+        if (pin_vcc_ && pin_vcc_->level() == Level::High) break;
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    running_ = false;
-}
+    if (stop.stop_requested()) return;
 
-void IC_8284A::on_signal_change() {
-    bool vcc_high = pin_vcc_ && pin_vcc_->level() == Level::High;
+    spdlog::debug("[8284A] VCC is High, oscillator spinning");
 
-    // Not yet running -- wait for VCC.
-    if (!running_) {
-        if (!vcc_high) return;
-        running_ = true;
-        // Assert RESET on power-up (RES starts low from RC delay).
-        if (pin_reset_) pin_reset_->drive(Level::High);
-        spdlog::debug("[8284A] VCC is High, oscillator spinning");
-        return;  // First real tick on next wake.
-    }
+    // Assert RESET on power-up (RES starts low from RC delay).
+    if (pin_reset_) pin_reset_->drive(Level::High);
 
-    // VCC dropped -- stop.
-    if (!vcc_high) {
-        spdlog::debug("[8284A] VCC dropped, oscillator stopped after {} ticks", total_ticks_);
-        if (pin_osc_)   pin_osc_->release();
-        if (pin_clk_)   pin_clk_->release();
-        if (pin_pclk_)  pin_pclk_->release();
-        if (pin_ready_) pin_ready_->release();
-        if (pin_reset_) pin_reset_->release();
-        running_ = false;
-        return;
-    }
+    // Oscillator state.
+    int osc_count = 0;
+    bool clk_state = false;
+    bool pclk_state = false;
+    bool osc_state = false;
+    uint64_t total_ticks = 0;
 
-    // --- One OSC half-period tick ---
-    osc_state_ = !osc_state_;
-    if (pin_osc_) pin_osc_->drive(osc_state_ ? Level::High : Level::Low);
-
-    // Divide by 3 for CLK.
-    // 6 OSC half-periods = 1 CLK cycle.
-    // CLK high for 2 OSC half-periods, low for 4 (33% duty cycle).
-    osc_count_ = (osc_count_ + 1) % 6;
-    bool new_clk = (osc_count_ < 2);
-    if (new_clk != clk_state_) {
-        clk_state_ = new_clk;
-        if (pin_clk_) pin_clk_->drive(clk_state_ ? Level::High : Level::Low);
-
-        // On CLK falling edge: update READY and RESET (synchronized to CLK).
-        if (!clk_state_) {
-            bool ready = true;
-            bool aen1 = pin_aen1_ && pin_aen1_->level() == Level::Low;
-            if (aen1)
-                ready = pin_rdy1_ && pin_rdy1_->level() == Level::High;
-            if (pin_ready_) pin_ready_->drive(ready ? Level::High : Level::Low);
-
-            // RESET: inverted and synchronized RES input.
-            bool res = pin_res_ && pin_res_->level() == Level::High;
-            if (pin_reset_) pin_reset_->drive(res ? Level::Low : Level::High);
+    // --- Spin loop: this IS the crystal oscillator ---
+    while (!stop.stop_requested()) {
+        // Check VCC each tick.
+        if (pin_vcc_ && pin_vcc_->level() != Level::High) {
+            spdlog::debug("[8284A] VCC dropped, oscillator stopped after {} ticks", total_ticks);
+            break;
         }
 
-        // Divide CLK by 2 for PCLK (on CLK rising edge).
-        if (clk_state_) {
-            pclk_state_ = !pclk_state_;
-            if (pin_pclk_) pin_pclk_->drive(pclk_state_ ? Level::High : Level::Low);
+        // Toggle OSC.
+        osc_state = !osc_state;
+        if (pin_osc_) pin_osc_->drive(osc_state ? Level::High : Level::Low);
+
+        // Divide by 3 for CLK.
+        // 6 OSC half-periods = 1 CLK cycle.
+        // CLK high for 2 OSC half-periods, low for 4 (33% duty cycle).
+        osc_count = (osc_count + 1) % 6;
+        bool new_clk = (osc_count < 2);
+        if (new_clk != clk_state) {
+            clk_state = new_clk;
+            if (pin_clk_) pin_clk_->drive(clk_state ? Level::High : Level::Low);
+
+            // On CLK falling edge: update READY and RESET (synchronized to CLK).
+            if (!clk_state) {
+                bool ready = true;
+                bool aen1 = pin_aen1_ && pin_aen1_->level() == Level::Low;
+                if (aen1)
+                    ready = pin_rdy1_ && pin_rdy1_->level() == Level::High;
+                if (pin_ready_) pin_ready_->drive(ready ? Level::High : Level::Low);
+
+                // RESET: inverted and synchronized RES input.
+                bool res = pin_res_ && pin_res_->level() == Level::High;
+                if (pin_reset_) pin_reset_->drive(res ? Level::Low : Level::High);
+            }
+
+            // Divide CLK by 2 for PCLK (on CLK rising edge).
+            if (clk_state) {
+                pclk_state = !pclk_state;
+                if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
+            }
+
+            // Evaluate inline ICs to fixed-point, wake all async, wait for quiescence.
+            scheduler_->evaluate();
+
+            // Drain our own mailbox and wait for all reactive components
+            // to settle. Must drain inside the loop because signals (RES,
+            // VCC) can arrive for us while we're waiting.
+            while (!stop.stop_requested()) {
+                while (mailbox()->sem.try_acquire())
+                    Signal::ack();
+                if (Signal::pending.load(std::memory_order_acquire) == 0)
+                    break;
+            }
         }
+
+        ++total_ticks;
     }
 
-    ++total_ticks_;
+    // Power down: release all outputs.
+    if (pin_osc_)   pin_osc_->release();
+    if (pin_clk_)   pin_clk_->release();
+    if (pin_pclk_)  pin_pclk_->release();
+    if (pin_ready_) pin_ready_->release();
+    if (pin_reset_) pin_reset_->release();
+    scheduler_->evaluate_no_wake();
+
+    spdlog::debug("[8284A] oscillator stopped after {} ticks", total_ticks);
 }
 
 } // namespace bench
