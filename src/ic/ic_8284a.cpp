@@ -84,6 +84,7 @@ void IC_8284A::run(std::stop_token stop) {
 
             // Divide CLK by 2 for PCLK (on CLK rising edge).
             if (clk_state) {
+                ++clk_cycles_;
                 pclk_state = !pclk_state;
                 if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
             }

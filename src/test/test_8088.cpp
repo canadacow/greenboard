@@ -786,8 +786,12 @@ int main() {
                 count |= (uint64_t)bus.mem[0x0500 + i] << (i * 8);
 
             double rate = (elapsed > 0) ? (double)count / elapsed : 0;
+            uint64_t cycles = clk_gen->clk_cycles();
+            double mhz = (elapsed > 0) ? (double)cycles / elapsed / 1e6 : 0;
             spdlog::info("  count: {} increments in {:.3f}s ({:.0f} inc/s)",
                 count, elapsed, rate);
+            spdlog::info("  CLK: {} cycles ({:.3f} MHz, target 4.77 MHz)",
+                cycles, mhz);
 
             if (!cpu->halted())
                 spdlog::warn("  benchmark timeout -- CPU did not halt");

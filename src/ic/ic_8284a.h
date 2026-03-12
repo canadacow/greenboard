@@ -33,6 +33,7 @@ public:
     void install(Socket& socket);
 
     void set_scheduler(Scheduler* s) { scheduler_ = s; }
+    uint64_t clk_cycles() const { return clk_cycles_; }
 
 protected:
     void run(std::stop_token stop) override;
@@ -52,6 +53,7 @@ private:
     Signal* pin_vcc_   = nullptr;
 
     Scheduler* scheduler_ = nullptr;
+    uint64_t clk_cycles_ = 0;
 };
 
 } // namespace bench
