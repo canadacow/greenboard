@@ -80,7 +80,6 @@ bool ThreadedComponent::stop_requested() const {
 }
 
 void ThreadedComponent::subscribe_to(Signal& sig) {
-    sig.add_async(mailbox_);
     connected_signals_.push_back(&sig);
 }
 

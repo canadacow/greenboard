@@ -1,10 +1,8 @@
 #pragma once
 #include "core/types.h"
-#include "core/mailbox.h"
 #include <string>
 #include <vector>
 #include <memory>
-#include <mutex>
 #include <atomic>
 
 namespace bench {
@@ -19,10 +17,7 @@ class Scheduler;
 //   - drive() writes to pending_ and marks the signal dirty.
 //   - level() reads from level_ (committed value).
 //   - Scheduler::evaluate() commits pending -> level at each CLK edge,
-//     evaluates inline ICs to fixed-point, and wakes async subscribers.
-//
-// For signals that do not feed inline ICs (no Scheduler), drive()
-// writes directly to level_ and wakes async subscribers immediately.
+//     evaluates inline ICs to fixed-point, and wakes all async components.
 class Signal {
 public:
     explicit Signal(std::string name);
@@ -49,9 +44,6 @@ public:
     void connect(Component* c);
     void disconnect(Component* c);
 
-    // Type-specific subscriber registration (called by subscribe_to()).
-    void add_async(Mailbox* mb);
-
     // Commit pending_ -> level_. Returns true if the level changed.
     bool commit();
 
@@ -65,11 +57,6 @@ public:
         while (pending.load(std::memory_order_acquire) > 0)
             ;
     }
-    static void wait_quiescent(std::stop_token& stop) {
-        while (pending.load(std::memory_order_acquire) > 0
-               && !stop.stop_requested())
-            ;
-    }
 
 private:
     std::string name_;
@@ -77,11 +64,6 @@ private:
     std::atomic<Level> pending_{Level::HiZ};
     std::atomic<bool> dirty_{false};
     Level pull_ = Level::HiZ;
-
-    // Async subscribers: threaded ICs woken via mailbox.
-    std::vector<Mailbox*> subscribers_;
-
-    std::mutex sub_mutex_;
 
     static Scheduler* scheduler_;
 

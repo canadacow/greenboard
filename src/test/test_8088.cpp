@@ -266,7 +266,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::trace);
+    spdlog::set_level(spdlog::level::info);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -630,7 +630,12 @@ int main() {
     scheduler.register_inline(latch_mid_ic);
     scheduler.register_inline(latch_hi_ic);
     scheduler.register_inline(io_dec);
-    clk_gen->set_scheduler(&scheduler);
+    // Register ALL threaded components for wake-all.
+    scheduler.register_async(clk_gen->mailbox());
+    scheduler.register_async(cpu->mailbox());
+    scheduler.register_async(bc->mailbox());
+    scheduler.register_async(pic->mailbox());
+    scheduler.register_async(bus.mailbox());
 
     // --- Run tests (power cycle between each) ---
     int passed = 0, failed = 0;
@@ -673,16 +678,16 @@ int main() {
         s2.drive(Level::High);
         aen_bar.drive(Level::High);  // No DMA -- CPU always owns bus
         vcc.drive(Level::High);
+        // Commit VCC (and other initial drives) so ICs see them on first wake.
         scheduler.evaluate();
         spdlog::debug("VCC driven High, pending={}", Signal::pending.load());
-
-        // Brief delay for 8284A to start oscillating and assert RESET.
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        spdlog::debug("After 5ms delay, pending={}", Signal::pending.load());
 
         // Drive RES (power good) -- 8284A deasserts RESET on next CLK fall.
         res.drive(Level::High);
         spdlog::debug("RES driven High, pending={}", Signal::pending.load());
+
+        // Start the scheduler -- it runs its own thread now.
+        scheduler.start();
 
         // Wait for CPU to halt, with 10s safety timeout
         {
@@ -693,7 +698,8 @@ int main() {
                 spdlog::warn("  timeout -- CPU did not halt within 10s");
         }
 
-        // Power off: drop VCC, ICs detect and exit.
+        // Power off: stop the scheduler, then power down ICs.
+        scheduler.stop();
         res.drive(Level::Low);
         vcc.drive(Level::HiZ);
         scheduler.evaluate();

@@ -60,11 +60,6 @@ void Signal::disconnect(Component* c) {
     // InlineComponents don't disconnect individually.
 }
 
-void Signal::add_async(Mailbox* mb) {
-    std::lock_guard<std::mutex> lock(sub_mutex_);
-    subscribers_.push_back(mb);
-}
-
 // --- Bus ---
 
 Bus::Bus(const std::string& prefix, int width) {
