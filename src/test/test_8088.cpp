@@ -40,6 +40,19 @@
 
 using namespace bench;
 
+// Throwaway: no-op fiber for measuring fiber dispatch overhead.
+class NoopFiber : public FiberComponent {
+public:
+    NoopFiber() : FiberComponent("noop") {}
+protected:
+    void run() override {
+        for (;;) yield();
+    }
+    void on_power_on() override {}
+    void on_power_off() override {}
+    void on_signal_change() override {}
+};
+
 // =========================================================================
 // BusGlue: reactive Component -- address decode + memory.
 // Subscribes to CLK, detects edges, drives data/control for each T-state.
@@ -731,6 +744,10 @@ int main() {
     scheduler.register_callback(&bus);
     // Register fiber components (everything except the 8284A clock).
     scheduler.register_fiber(cpu);
+    // Throwaway: measure fiber dispatch overhead with a no-op fiber.
+    NoopFiber noop_fiber;
+    noop_fiber.power_on();
+    scheduler.register_fiber(&noop_fiber);
     clk_gen->set_scheduler(&scheduler);
 
     #define RUN_BENCHMARK
