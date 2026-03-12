@@ -39,62 +39,50 @@ void IC_8284A::run(std::stop_token stop) {
     // Assert RESET on power-up (RES starts low from RC delay).
     if (pin_reset_) pin_reset_->drive(Level::High);
 
-    // Oscillator state.
-    int osc_count = 0;
-    bool clk_state = false;
+    // Clock state.
     bool pclk_state = false;
-    bool osc_state = false;
-    uint64_t total_ticks = 0;
+    uint64_t clk_ticks = 0;
 
-    // --- Spin loop: this IS the crystal oscillator ---
+    // --- Spin loop: one iteration = one full CLK cycle (rise + fall) ---
+    // The real 8284A divides a 14.318 MHz crystal by 3 to produce CLK,
+    // toggling OSC each tick and only changing CLK every 3rd toggle.
+    // That means 4 out of 6 ticks per CLK cycle do nothing but increment
+    // a counter -- and nothing on the board observes OSC directly.
+    // So we skip the divide-by-3 and just strobe CLK high/low.
     while (!stop.stop_requested()) {
-        // Check VCC each tick.
+        // Check VCC each cycle.
         if (pin_vcc_ && pin_vcc_->level() != Level::High) {
-            spdlog::debug("[8284A] VCC dropped, oscillator stopped after {} ticks", total_ticks);
+            spdlog::debug("[8284A] VCC dropped, oscillator stopped after {} CLK cycles", clk_ticks);
             break;
         }
 
-        // Toggle OSC.
-        osc_state = !osc_state;
-        if (pin_osc_) pin_osc_->drive(osc_state ? Level::High : Level::Low);
+        // --- CLK rising edge ---
+        if (pin_clk_) pin_clk_->drive(Level::High);
 
-        // Divide by 3 for CLK.
-        // 6 OSC half-periods = 1 CLK cycle.
-        // CLK high for 2 OSC half-periods, low for 4 (33% duty cycle).
-        osc_count = (osc_count + 1) % 6;
-        bool new_clk = (osc_count < 2);
-        if (new_clk != clk_state) {
-            clk_state = new_clk;
+        // PCLK toggles on CLK rising edge (CLK / 2).
+        ++clk_cycles_;
+        pclk_state = !pclk_state;
+        if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
 
-            if (pin_clk_) pin_clk_->drive(clk_state ? Level::High : Level::Low);
+        scheduler_->evaluate(self);
 
-            // On CLK falling edge: update READY and RESET (synchronized to CLK).
-            if (!clk_state) {
-                bool ready = true;
-                bool aen1 = pin_aen1_ && pin_aen1_->level() == Level::Low;
-                if (aen1)
-                    ready = pin_rdy1_ && pin_rdy1_->level() == Level::High;
-                if (pin_ready_) pin_ready_->drive(ready ? Level::High : Level::Low);
+        // --- CLK falling edge ---
+        if (pin_clk_) pin_clk_->drive(Level::Low);
 
-                // RESET: inverted and synchronized RES input.
-                bool res = pin_res_ && pin_res_->level() == Level::High;
-                if (pin_reset_) pin_reset_->drive(res ? Level::Low : Level::High);
-            }
+        // READY and RESET are synchronized to CLK falling edge.
+        bool ready = true;
+        bool aen1 = pin_aen1_ && pin_aen1_->level() == Level::Low;
+        if (aen1)
+            ready = pin_rdy1_ && pin_rdy1_->level() == Level::High;
+        if (pin_ready_) pin_ready_->drive(ready ? Level::High : Level::Low);
 
-            // Divide CLK by 2 for PCLK (on CLK rising edge).
-            if (clk_state) {
-                ++clk_cycles_;
-                pclk_state = !pclk_state;
-                if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
-            }
+        // RESET: inverted and synchronized RES input.
+        bool res = pin_res_ && pin_res_->level() == Level::High;
+        if (pin_reset_) pin_reset_->drive(res ? Level::Low : Level::High);
 
-            // Commit signals, eval inline ICs, run all fiber components.
-            // Each fiber runs until it yields, then control returns here.
-            // Completely synchronous -- no semaphores, no pending counter.
-            scheduler_->evaluate(self);
-        }
+        scheduler_->evaluate(self);
 
-        ++total_ticks;
+        ++clk_ticks;
     }
 
     // Power down: release all outputs.
@@ -105,7 +93,7 @@ void IC_8284A::run(std::stop_token stop) {
     if (pin_reset_) pin_reset_->release();
     scheduler_->evaluate_no_wake();
 
-    spdlog::debug("[8284A] oscillator stopped after {} ticks", total_ticks);
+    spdlog::debug("[8284A] oscillator stopped after {} CLK cycles", clk_ticks);
 
     // Revert back to a plain thread before returning.
     fiber_revert_thread(self);
