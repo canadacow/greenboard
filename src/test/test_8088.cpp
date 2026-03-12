@@ -14,7 +14,7 @@
 
 #include "core/signal.h"
 #include "core/threaded_component.h"
-#include "core/inline_component.h"
+#include "core/scheduler.h"
 #include "board/socket.h"
 #include "ic/ic_8088.h"
 #include "ic/ic_8288.h"
@@ -112,20 +112,14 @@ private:
     }
 
     void drive_d(uint8_t val) {
-        auto& ic = d[0]->get_inline();
-        ic.begin_transaction();
         for (int i = 0; i < 8; ++i)
             if (d[i])
                 d[i]->drive((val >> i) & 1 ? Level::High : Level::Low);
-        ic.commit_transaction();
     }
 
     void release_d() {
-        auto& ic = d[0]->get_inline();
-        ic.begin_transaction();
         for (int i = 0; i < 8; ++i)
             if (d[i]) d[i]->release();
-        ic.commit_transaction();
     }
 
     bool is_read_cycle()  { return cycle_type == 0 || cycle_type == 1 || cycle_type == 4 || cycle_type == 5; }
@@ -297,7 +291,6 @@ int main() {
 
     // Test table
     std::vector<TestCase> tests = {
-#if 1
         {"MOV/XCHG", "test_mov.bin", {
             {0x0500, 0x1234, "MOV imm16"},
             {0x0502, 0x5678, "MOV reg-reg"},
@@ -387,7 +380,6 @@ int main() {
             {0x0508, 0x0001, "JMP FAR imm"},
             {0x050A, 0x2000, "CS after far call"},
         }},
-#endif
         {"I/O (PIC ports)", "test_io.bin", {
             {0x0500, 0x00AB, "OUT imm8 / IN imm8 byte"},
             {0x0502, 0x00CD, "OUT DX / IN DX byte"},
@@ -398,7 +390,6 @@ int main() {
             {0x050C, 0x0001, "EOI clears ISR"},
             {0x050E, 0x0001, "I/O doesn't touch memory"},
         }},
-#if 1
         {"DIV/IDIV", "test_div.bin", {
             {0x0500, 0x0003, "DIV byte quot"},
             {0x0502, 0x0001, "DIV byte rem"},
@@ -418,7 +409,6 @@ int main() {
             {0x050A, 0x0021, "AH=09 last char '!'"},
             {0x050C, 0x002A, "AH=4C exit code 42"},
         } },
-#endif
         {"IRQ (advanced)", "test_irq.bin", {
             {0x0500, 0x0001, "IRQ1 fires (INT 9)"},
             {0x0502, 0x0001, "Priority: IRQ0 first"},
@@ -651,6 +641,16 @@ int main() {
     for (int i = 0; i < 8; ++i) bus.pic_ir[i] = irq_arr[i];
     bus.subscribe_clk();
 
+    // Scheduler: central CLK-edge evaluator for inline ICs.
+    Scheduler scheduler;
+    Signal::set_scheduler(&scheduler);
+    scheduler.register_inline(xcvr);
+    scheduler.register_inline(latch_lo_ic);
+    scheduler.register_inline(latch_mid_ic);
+    scheduler.register_inline(latch_hi_ic);
+    scheduler.register_inline(io_dec);
+    clk_gen->set_scheduler(&scheduler);
+
     // --- Run tests (power cycle between each) ---
     int passed = 0, failed = 0;
 
@@ -691,9 +691,8 @@ int main() {
         s1.drive(Level::High);
         s2.drive(Level::High);
         aen_bar.drive(Level::High);  // No DMA -- CPU always owns bus
-        spdlog::debug("Pre-VCC signals driven, pending={}", Signal::pending.load());
-
         vcc.drive(Level::High);
+        scheduler.evaluate();
         spdlog::debug("VCC driven High, pending={}", Signal::pending.load());
 
         // Brief delay for 8284A to start oscillating and assert RESET.
@@ -716,6 +715,7 @@ int main() {
         // Power off: drop VCC, ICs detect and exit.
         res.drive(Level::Low);
         vcc.drive(Level::HiZ);
+        scheduler.evaluate();
         cpu->power_off();
         clk_gen->power_off();
         bus.power_off();

@@ -1,4 +1,5 @@
 #include "ic/ic_8284a.h"
+#include "core/scheduler.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -71,6 +72,7 @@ void IC_8284A::run(std::stop_token stop) {
         bool new_clk = (osc_count < 2);
         if (new_clk != clk_state) {
             clk_state = new_clk;
+
             if (pin_clk_) pin_clk_->drive(clk_state ? Level::High : Level::Low);
 
             // On CLK falling edge: update READY and RESET (synchronized to CLK).
@@ -94,6 +96,9 @@ void IC_8284A::run(std::stop_token stop) {
                 if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
             }
 
+            // Evaluate all inline ICs to fixed-point, then wake async subscribers.
+            scheduler_->evaluate();
+
             // Drain our own mailbox and wait for all reactive components
             // to settle. Must drain inside the loop because signals (RES,
             // VCC) can arrive for us while we're waiting.
@@ -114,6 +119,7 @@ void IC_8284A::run(std::stop_token stop) {
     if (pin_pclk_)  pin_pclk_->release();
     if (pin_ready_) pin_ready_->release();
     if (pin_reset_) pin_reset_->release();
+    scheduler_->evaluate();
 
     spdlog::debug("[8284A] oscillator stopped");
 }

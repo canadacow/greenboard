@@ -4,6 +4,8 @@
 
 namespace bench {
 
+class Scheduler;
+
 // Intel 8284A Clock Generator / Driver.
 //
 // 18-pin DIP. Generates the master clock for the IBM PC 5150.
@@ -40,6 +42,9 @@ public:
     // Reads pin signals and subscribes to inputs.
     void install(Socket& socket);
 
+    // Set the scheduler for CLK-edge evaluation of inline ICs.
+    void set_scheduler(Scheduler* s) { scheduler_ = s; }
+
 protected:
     void run(std::stop_token stop) override;
 
@@ -56,6 +61,8 @@ private:
     Signal* pin_rdy1_  = nullptr;   // Pin  4: RDY1
     Signal* pin_aen1_  = nullptr;   // Pin  3: ~AEN1
     Signal* pin_vcc_   = nullptr;   // Pin 18: VCC
+
+    Scheduler* scheduler_ = nullptr;
 };
 
 } // namespace bench

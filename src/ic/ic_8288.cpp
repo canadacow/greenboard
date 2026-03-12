@@ -1,5 +1,4 @@
 #include "ic/ic_8288.h"
-#include "core/inline_component.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -123,12 +122,9 @@ void IC_8288::on_clk_rising() {
     // If ~AEN is active (Low), DMA owns the bus -- 8288 is inhibited.
     if (pin_aen_ && pin_aen_->level() == Level::Low) {
         if (state_ != State::Idle) {
-            auto& ic = pin_ale_->get_inline();
-            ic.begin_transaction();
             release_command();
             if (pin_ale_) pin_ale_->drive(Level::Low);
             if (pin_den_) pin_den_->drive(Level::High);  // ~DEN deasserted
-            ic.commit_transaction();
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
         }
@@ -170,11 +166,8 @@ void IC_8288::on_clk_rising() {
 
                 // T1: Assert ALE, set DT/~R direction.
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
-                auto& ic = pin_ale_->get_inline();
-                ic.begin_transaction();
                 pin_ale_->drive(Level::High);
                 if (pin_dtr_) pin_dtr_->drive(is_write ? Level::High : Level::Low);
-                ic.commit_transaction();
                 spdlog::trace("[8288] Idle->T1 cycle={} DT/~R={}", cycle_name(bus), is_write ? "TX" : "RX");
             }
             break;
@@ -187,10 +180,7 @@ void IC_8288::on_clk_rising() {
             // ~DEN and command strobe are deferred to T2 CLK fall to avoid
             // bus contention: the 74S245 must not drive AD while the 74S373
             // is capturing the address from AD.
-            auto& ic = pin_ale_->get_inline();
-            ic.begin_transaction();
             pin_ale_->drive(Level::Low);
-            ic.commit_transaction();
             spdlog::trace("[8288] T1->T2 ALE=Low (latches capture), cmd deferred");
             break;
         }
@@ -203,11 +193,8 @@ void IC_8288::on_clk_rising() {
 
         case State::T3: {
             // T4: Deassert commands, deassert ~DEN, back to idle.
-            auto& ic = pin_den_->get_inline();
-            ic.begin_transaction();
             release_command();
             pin_den_->drive(Level::High);  // ~DEN deasserted
-            ic.commit_transaction();
             spdlog::trace("[8288] T3->Idle ~DEN=High (disabled)");
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
@@ -222,13 +209,10 @@ void IC_8288::on_clk_falling() {
     // before the 74S245 transceiver enables and drives the AD bus.
     if (state_ == State::T2 && pin_den_ && pin_den_->level() != Level::Low) {
         bool cen = !pin_cen_ || pin_cen_->level() == Level::High;
-        auto& ic = pin_den_->get_inline();
-        ic.begin_transaction();
         if (cen) {
             drive_command(cycle_);
         }
         pin_den_->drive(Level::Low);
-        ic.commit_transaction();
         spdlog::trace("[8288] T2_FALL ~DEN=Low (enabled), cmd active");
     }
 }

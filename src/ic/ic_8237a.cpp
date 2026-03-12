@@ -1,5 +1,4 @@
 #include "ic/ic_8237a.h"
-#include "core/inline_component.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -312,33 +311,18 @@ void IC_8237A::on_clk_falling() {
     if (pin_aen_) pin_aen_->drive(Level::High);
 
     // Drive address on A0-A7 (lower 8 bits of current address)
-    {
-        auto& ic = pin_a_[0]->get_inline();
-        ic.begin_transaction();
-        for (int i = 0; i < 8; ++i) {
-            if (pin_a_[i])
-                pin_a_[i]->drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
-        }
-        ic.commit_transaction();
+    for (int i = 0; i < 8; ++i) {
+        if (pin_a_[i])
+            pin_a_[i]->drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
     }
 
     // Strobe upper address onto data bus (for 74LS373 latch)
-    {
-        auto& ic = pin_db_[0]->get_inline();
-        ic.begin_transaction();
-        if (pin_adstb_) pin_adstb_->drive(Level::High);
-        for (int i = 0; i < 8; ++i) {
-            if (pin_db_[i])
-                pin_db_[i]->drive((ch.current_address >> (i + 8)) & 1 ? Level::High : Level::Low);
-        }
-        ic.commit_transaction();
+    if (pin_adstb_) pin_adstb_->drive(Level::High);
+    for (int i = 0; i < 8; ++i) {
+        if (pin_db_[i])
+            pin_db_[i]->drive((ch.current_address >> (i + 8)) & 1 ? Level::High : Level::Low);
     }
-    {
-        auto& ic = pin_adstb_->get_inline();
-        ic.begin_transaction();
-        pin_adstb_->drive(Level::Low);
-        ic.commit_transaction();
-    }
+    if (pin_adstb_) pin_adstb_->drive(Level::Low);
 
     // Drive appropriate memory strobe based on transfer type
     uint8_t transfer_type = (ch.mode >> 2) & 0x03;
@@ -410,23 +394,17 @@ void IC_8237A::on_clk_falling() {
 }
 
 void IC_8237A::drive_data(uint8_t value) {
-    auto& ic = pin_db_[0]->get_inline();
-    ic.begin_transaction();
     for (int i = 0; i < 8; ++i) {
         if (pin_db_[i])
             pin_db_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
     }
-    ic.commit_transaction();
 }
 
 void IC_8237A::release_data() {
-    auto& ic = pin_db_[0]->get_inline();
-    ic.begin_transaction();
     for (int i = 0; i < 8; ++i) {
         if (pin_db_[i])
             pin_db_[i]->release();
     }
-    ic.commit_transaction();
 }
 
 uint8_t IC_8237A::read_data() const {

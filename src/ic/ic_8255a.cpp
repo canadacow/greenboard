@@ -1,5 +1,4 @@
 #include "ic/ic_8255a.h"
-#include "core/inline_component.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -253,23 +252,17 @@ void IC_8255A::write_port_c(uint8_t value) {
 }
 
 void IC_8255A::drive_data(uint8_t value) {
-    auto& ic = pin_d_[0]->get_inline();
-    ic.begin_transaction();
     for (int i = 0; i < 8; ++i) {
         if (pin_d_[i])
             pin_d_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
     }
-    ic.commit_transaction();
 }
 
 void IC_8255A::release_data() {
-    auto& ic = pin_d_[0]->get_inline();
-    ic.begin_transaction();
     for (int i = 0; i < 8; ++i) {
         if (pin_d_[i])
             pin_d_[i]->release();
     }
-    ic.commit_transaction();
 }
 
 uint8_t IC_8255A::read_data() const {

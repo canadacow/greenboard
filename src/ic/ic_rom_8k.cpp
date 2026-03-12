@@ -1,5 +1,4 @@
 #include "ic/ic_rom_8k.h"
-#include "core/inline_component.h"
 #include <spdlog/spdlog.h>
 #include <fstream>
 
@@ -79,23 +78,17 @@ uint16_t IC_ROM_8K::read_address() const {
 void IC_ROM_8K::drive_output() {
     uint16_t addr = read_address();
     uint8_t data = rom_[addr & 0x1FFF];
-    auto& ic = pin_d_[0]->get_inline();
-    ic.begin_transaction();
     for (int i = 0; i < 8; ++i) {
         if (pin_d_[i])
             pin_d_[i]->drive((data >> i) & 1 ? Level::High : Level::Low);
     }
-    ic.commit_transaction();
 }
 
 void IC_ROM_8K::release_output() {
-    auto& ic = pin_d_[0]->get_inline();
-    ic.begin_transaction();
     for (int i = 0; i < 8; ++i) {
         if (pin_d_[i])
             pin_d_[i]->release();
     }
-    ic.commit_transaction();
 }
 
 } // namespace bench

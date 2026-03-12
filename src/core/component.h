@@ -15,8 +15,7 @@ class Signal;
 //     Has its own thread and mailbox. Woken asynchronously by signal changes.
 //
 //   InlineComponent -- combinational logic (74S373, 74S138, 74S245).
-//     No thread. Executes synchronously in the caller's context when an
-//     input signal changes. Must only be driven inside a Signal transaction.
+//     No thread. Evaluated synchronously by the Scheduler at each CLK edge.
 //
 class Component {
 public:

@@ -1,6 +1,7 @@
 #include "core/signal.h"
 #include "core/component.h"
 #include "core/inline_component.h"
+#include "core/scheduler.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 
@@ -9,45 +10,20 @@ namespace bench {
 // --- Signal ---
 
 std::atomic<int> Signal::pending{0};
+Scheduler* Signal::scheduler_ = nullptr;
 
 Signal::Signal(std::string name) : name_(std::move(name)) {}
 
-static const char* lvl_str(Level l) {
-    switch (l) {
-    case Level::Low: return "Low";
-    case Level::High: return "High";
-    case Level::HiZ: return "HiZ";
-    }
-    return "?";
+Level Signal::level() const {
+    return level_.load(std::memory_order_acquire);
 }
 
 void Signal::drive(Level lvl) {
-    Level old = level_.load(std::memory_order_acquire);
+    Level old = pending_.load(std::memory_order_acquire);
     if (lvl == old) return;
-    level_.store(lvl, std::memory_order_release);
-
-    spdlog::trace("[SIG] {} {} -> {} async={} sync={}", name_,
-        lvl_str(old), lvl_str(lvl), subscribers_.size(), sync_subscribers_.size());
-
-    // Sync propagation: inline components run immediately in caller's thread.
-    for (auto* ic : sync_subscribers_) {
-        if (ic->in_sync_) continue;  // re-entrancy guard
-        ic->in_sync_ = true;
-        ic->on_signal_change();
-        ic->in_sync_ = false;
-    }
-
-    // Async propagation: defer wakes if a transaction is active.
-    auto* txn = InlineComponent::active_transaction();
-    if (txn) {
-        for (auto* mb : subscribers_)
-            txn->defer_wake(mb);
-    } else {
-        for (auto* mb : subscribers_) {
-            pending.fetch_add(1, std::memory_order_release);
-            mb->wake();
-        }
-    }
+    pending_.store(lvl, std::memory_order_release);
+    if (!dirty_.exchange(true, std::memory_order_relaxed))
+        scheduler_->mark_dirty(this);
 }
 
 void Signal::release() {
@@ -56,6 +32,8 @@ void Signal::release() {
 
 void Signal::reset() {
     level_.store(Level::HiZ, std::memory_order_release);
+    pending_.store(Level::HiZ, std::memory_order_release);
+    dirty_.store(false, std::memory_order_relaxed);
 }
 
 void Signal::set_pull(Level pull) {
@@ -65,36 +43,26 @@ void Signal::set_pull(Level pull) {
     }
 }
 
+bool Signal::commit() {
+    Level p = pending_.load(std::memory_order_acquire);
+    Level c = level_.load(std::memory_order_acquire);
+    if (p == c) return false;
+    level_.store(p, std::memory_order_release);
+    return true;
+}
+
 void Signal::connect(Component* c) {
     c->subscribe_to(*this);
 }
 
 void Signal::disconnect(Component* c) {
-    std::lock_guard<std::mutex> lock(sub_mutex_);
-    {
-        auto* ic = dynamic_cast<InlineComponent*>(c);
-        if (ic) {
-            sync_subscribers_.erase(
-                std::remove(sync_subscribers_.begin(), sync_subscribers_.end(), ic),
-                sync_subscribers_.end());
-            return;
-        }
-    }
+    // Only async subscribers need disconnect for now.
+    // InlineComponents don't disconnect individually.
 }
 
 void Signal::add_async(Mailbox* mb) {
     std::lock_guard<std::mutex> lock(sub_mutex_);
     subscribers_.push_back(mb);
-}
-
-void Signal::add_sync(InlineComponent* ic) {
-    std::lock_guard<std::mutex> lock(sub_mutex_);
-    sync_subscribers_.push_back(ic);
-}
-
-InlineComponent& Signal::get_inline() const {
-    assert(!sync_subscribers_.empty() && "no InlineComponent subscriber on this signal");
-    return *sync_subscribers_[0];
 }
 
 // --- Bus ---

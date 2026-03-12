@@ -11,31 +11,34 @@ namespace bench {
 
 class Component;
 class InlineComponent;
+class Scheduler;
 
 // A single named signal line -- a wire/trace on the motherboard.
 //
-// drive() updates the level and propagates to subscribers:
-//   1. Sync (InlineComponent): called inline, immediately, in the caller's thread.
-//   2. Async (ThreadedComponent): woken via mailbox semaphore.
+// Double-buffered model:
+//   - drive() writes to pending_ and marks the signal dirty.
+//   - level() reads from level_ (committed value).
+//   - Scheduler::evaluate() commits pending -> level at each CLK edge,
+//     evaluates inline ICs to fixed-point, and wakes async subscribers.
 //
-// If sync subscribers exist, drive() asserts that a transaction is active.
-// This enforces that combinational propagation always completes before
-// any async subscriber wakes.
+// For signals that do not feed inline ICs (no Scheduler), drive()
+// writes directly to level_ and wakes async subscribers immediately.
 class Signal {
 public:
     explicit Signal(std::string name);
 
     const std::string& name() const { return name_; }
-    Level level() const { return level_.load(std::memory_order_acquire); }
 
-    // Drive the signal to a new level. Notifies all subscribers.
+    // Read the committed signal level.
+    Level level() const;
+
+    // Drive the signal to a new level (writes to pending_).
     void drive(Level lvl);
 
     // Release the signal (go Hi-Z, or to pull level if set).
     void release();
 
     // Set a pull-up (High) or pull-down (Low) resistor on this signal.
-    // When all drivers release, the signal settles to this level.
     void set_pull(Level pull);
     Level pull() const { return pull_; }
 
@@ -43,20 +46,19 @@ public:
     void reset();
 
     // Subscribe/unsubscribe a component to signal change events.
-    // Routes through Component::subscribe_to() for type-safe dispatch.
     void connect(Component* c);
     void disconnect(Component* c);
 
     // Type-specific subscriber registration (called by subscribe_to()).
     void add_async(Mailbox* mb);
-    void add_sync(InlineComponent* ic);
 
-    // Returns the first InlineComponent subscriber.
-    // Asserts if none -- the caller must know the topology.
-    InlineComponent& get_inline() const;
+    // Commit pending_ -> level_. Returns true if the level changed.
+    bool commit();
 
-    // Global pending-signal counter. Incremented by drive() per subscriber,
-    // decremented by ack(). Clock must not advance until quiescent.
+    // Set the global scheduler (call once at init).
+    static void set_scheduler(Scheduler* s) { scheduler_ = s; }
+
+    // Global pending-signal counter.
     static std::atomic<int> pending;
     static void ack() { pending.fetch_sub(1, std::memory_order_release); }
     static void wait_quiescent() {
@@ -72,15 +74,19 @@ public:
 private:
     std::string name_;
     std::atomic<Level> level_{Level::HiZ};
-    Level pull_ = Level::HiZ;  // default: no pull, floats
+    std::atomic<Level> pending_{Level::HiZ};
+    std::atomic<bool> dirty_{false};
+    Level pull_ = Level::HiZ;
 
     // Async subscribers: threaded ICs woken via mailbox.
     std::vector<Mailbox*> subscribers_;
 
-    // Sync subscribers: inline ICs called in caller's thread.
-    std::vector<InlineComponent*> sync_subscribers_;
+    std::mutex sub_mutex_;
 
-    std::mutex sub_mutex_;  // only used by connect/disconnect (setup time)
+    static Scheduler* scheduler_;
+
+    friend class Scheduler;
+    friend class InlineComponent;
 };
 
 // A bundle of N named signal lines (e.g. address bus SA0..SA19).
@@ -92,13 +98,11 @@ public:
     Signal& operator[](int i) { return *lines_[i]; }
     const Signal& operator[](int i) const { return *lines_[i]; }
 
-    // Convenience: drive/release/reset all lines.
     void drive(uint32_t value);
     void release();
     void reset();
     uint32_t read() const;
 
-    // Connect/disconnect a component to all lines in this bus.
     void connect(Component* c);
     void disconnect(Component* c);
 
