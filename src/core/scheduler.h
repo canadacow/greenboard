@@ -63,7 +63,7 @@ private:
 
         for (int i = 0; i < n_dirty; ++i) {
             Signal* sig = dirty_[i];
-            sig->dirty_.store(false, std::memory_order_relaxed);
+            sig->dirty_ = false;
             sig->commit();
         }
         dirty_count_.store(0, std::memory_order_relaxed);
@@ -81,7 +81,7 @@ private:
             bool any_changed = false;
             for (int i = 0; i < new_dirty; ++i) {
                 Signal* sig = dirty_[i];
-                sig->dirty_.store(false, std::memory_order_relaxed);
+                sig->dirty_ = false;
                 if (sig->commit())
                     any_changed = true;
             }

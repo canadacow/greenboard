@@ -25,7 +25,7 @@ public:
     const std::string& name() const { return name_; }
 
     // Read the committed signal level.
-    Level level() const;
+    Level level() const { return level_; }
 
     // Drive the signal to a new level (writes to pending_).
     void drive(Level lvl);
@@ -60,9 +60,9 @@ public:
 
 private:
     std::string name_;
-    std::atomic<Level> level_{Level::HiZ};
-    std::atomic<Level> pending_{Level::HiZ};
-    std::atomic<bool> dirty_{false};
+    Level level_ = Level::HiZ;
+    Level pending_ = Level::HiZ;
+    bool dirty_ = false;
     Level pull_ = Level::HiZ;
 
     static Scheduler* scheduler_;

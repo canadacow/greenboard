@@ -14,16 +14,13 @@ Scheduler* Signal::scheduler_ = nullptr;
 
 Signal::Signal(std::string name) : name_(std::move(name)) {}
 
-Level Signal::level() const {
-    return level_.load(std::memory_order_acquire);
-}
-
 void Signal::drive(Level lvl) {
-    Level old = pending_.load(std::memory_order_acquire);
-    if (lvl == old) return;
-    pending_.store(lvl, std::memory_order_release);
-    if (!dirty_.exchange(true, std::memory_order_relaxed))
+    if (lvl == pending_) return;
+    pending_ = lvl;
+    if (!dirty_) {
+        dirty_ = true;
         scheduler_->mark_dirty(this);
+    }
 }
 
 void Signal::release() {
@@ -31,23 +28,21 @@ void Signal::release() {
 }
 
 void Signal::reset() {
-    level_.store(Level::HiZ, std::memory_order_release);
-    pending_.store(Level::HiZ, std::memory_order_release);
-    dirty_.store(false, std::memory_order_relaxed);
+    level_ = Level::HiZ;
+    pending_ = Level::HiZ;
+    dirty_ = false;
 }
 
 void Signal::set_pull(Level pull) {
     pull_ = pull;
-    if (level_.load(std::memory_order_acquire) == Level::HiZ && pull != Level::HiZ) {
+    if (level_ == Level::HiZ && pull != Level::HiZ) {
         drive(pull);
     }
 }
 
 bool Signal::commit() {
-    Level p = pending_.load(std::memory_order_acquire);
-    Level c = level_.load(std::memory_order_acquire);
-    if (p == c) return false;
-    level_.store(p, std::memory_order_release);
+    if (pending_ == level_) return false;
+    level_ = pending_;
     return true;
 }
 
