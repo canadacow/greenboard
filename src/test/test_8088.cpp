@@ -16,6 +16,7 @@
 // (physical 0xF0123). DS=SS=0 after reset. Results checked at 0x0200+.
 
 #include "core/signal.h"
+#include "core/callback_component.h"
 #include "core/fiber_component.h"
 #include "core/scheduler.h"
 #include "board/socket.h"
@@ -44,9 +45,9 @@ using namespace bench;
 // Subscribes to CLK, detects edges, drives data/control for each T-state.
 // Handles memory and generic I/O. PIC chip-select comes from U66 (74S138).
 // =========================================================================
-class BusGlue : public FiberComponent {
+class BusGlue : public CallbackComponent {
 public:
-    BusGlue() : FiberComponent("BusGlue") {}
+    BusGlue() : CallbackComponent("BusGlue") {}
 
     Signal** xa = nullptr;       // XA0-XA19 (20 pointers) -- latched address from 74S373s
     Signal** d = nullptr;        // D0-D7 (8 pointers) -- system data bus
@@ -724,10 +725,10 @@ int main() {
     scheduler.register_inline(rom_ic);
     // Register callback components (no fiber overhead).
     scheduler.register_callback(pic);
+    scheduler.register_callback(bc);
+    scheduler.register_callback(&bus);
     // Register fiber components (everything except the 8284A clock).
     scheduler.register_fiber(cpu);
-    scheduler.register_fiber(bc);
-    scheduler.register_fiber(&bus);
     clk_gen->set_scheduler(&scheduler);
 
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

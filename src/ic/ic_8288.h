@@ -1,5 +1,5 @@
 #pragma once
-#include "core/fiber_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -48,9 +48,8 @@ namespace bench {
 //   T3: Command stays active
 //   T4: Command deasserted, DEN deasserted, back to idle
 //
-// Threading: Reactive IC (fiber). Uses default run() -- yields to scheduler,
-// dispatches on_signal_change() for CLK edges.
-class IC_8288 : public FiberComponent {
+// Callback IC -- never yields, completes all work in on_signal_change().
+class IC_8288 : public CallbackComponent {
 public:
     IC_8288();
 
