@@ -1,5 +1,6 @@
 #pragma once
 #include "core/signal.h"
+#include "core/callback_component.h"
 #include "core/fiber_component.h"
 #include "core/inline_component.h"
 #include <cassert>
@@ -21,14 +22,23 @@ public:
         inlines_[inline_count_++] = ic;
     }
 
+    void register_callback(CallbackComponent* cc) {
+        assert(callback_count_ < MAX_CALLBACKS && "Scheduler: too many callback ICs");
+        callbacks_[callback_count_++] = cc;
+    }
+
     void register_fiber(FiberComponent* fc) {
         assert(fiber_count_ < MAX_FIBERS && "Scheduler: too many fiber components");
         fibers_[fiber_count_++] = fc;
     }
 
-    // Commit + eval inlines + resume all fibers.
+    // Commit + eval inlines + call callbacks + resume fibers.
     void evaluate(Fiber caller) {
         commit_and_eval_inlines();
+        for (int i = 0; i < callback_count_; ++i) {
+            if (callbacks_[i]->is_powered())
+                callbacks_[i]->on_signal_change();
+        }
         for (int i = 0; i < fiber_count_; ++i)
             fibers_[i]->resume(caller);
     }
@@ -54,10 +64,14 @@ private:
     }
 
     static constexpr int MAX_INLINES = 32;
+    static constexpr int MAX_CALLBACKS = 32;
     static constexpr int MAX_FIBERS = 256;
 
     InlineComponent* inlines_[MAX_INLINES] = {};
     int inline_count_ = 0;
+
+    CallbackComponent* callbacks_[MAX_CALLBACKS] = {};
+    int callback_count_ = 0;
 
     FiberComponent* fibers_[MAX_FIBERS] = {};
     int fiber_count_ = 0;

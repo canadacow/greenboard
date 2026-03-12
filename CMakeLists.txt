@@ -14,6 +14,7 @@ add_executable(bench
     src/core/threaded_component.cpp
     src/core/fiber_component.cpp
     src/core/inline_component.cpp
+    src/core/callback_component.cpp
     src/host_platform/fiber_win32.cpp
     src/board/socket.cpp
     src/board/isa_slot.cpp
@@ -57,6 +58,7 @@ add_executable(test_8088
     src/core/threaded_component.cpp
     src/core/fiber_component.cpp
     src/core/inline_component.cpp
+    src/core/callback_component.cpp
     src/host_platform/fiber_win32.cpp
     src/board/socket.cpp
     src/ic/ic_8088.cpp

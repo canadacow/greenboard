@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8259A::IC_8259A() : FiberComponent("8259A") {}
+IC_8259A::IC_8259A() : CallbackComponent("8259A") {}
 
 void IC_8259A::install(Socket& socket) {
     // Data bus: D7=pin4, D6=pin5, ..., D0=pin11

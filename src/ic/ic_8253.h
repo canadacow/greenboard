@@ -1,5 +1,5 @@
 #pragma once
-#include "core/fiber_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -54,9 +54,8 @@ namespace bench {
 //   Ch1: Mode 2, count 18       -> ~66 kHz DRAM refresh DMA requests
 //   Ch2: Mode 3, count varies   -> speaker tone frequency
 //
-// Threading: Reactive IC. Uses default run() -- blocks on mailbox,
-// dispatches on_signal_change() for CLK falling edges and bus operations.
-class IC_8253 : public FiberComponent {
+// Callback IC -- never yields, completes all work in on_signal_change().
+class IC_8253 : public CallbackComponent {
 public:
     IC_8253();
 

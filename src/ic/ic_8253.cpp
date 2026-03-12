@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8253::IC_8253() : FiberComponent("8253") {}
+IC_8253::IC_8253() : CallbackComponent("8253") {}
 
 void IC_8253::install(Socket& socket) {
     // Data bus D0-D7 (active during ~CS + ~RD or ~WR).

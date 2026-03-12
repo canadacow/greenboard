@@ -1,5 +1,5 @@
 #pragma once
-#include "core/fiber_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -37,8 +37,8 @@ namespace bench {
 //   CH0: DRAM refresh (auto-init, single transfer, DREQ0 from PIT ch1)
 //   CH1-CH3: available for ISA peripherals
 //
-// Threading: Reactive IC. Uses default run() -- blocks on mailbox.
-class IC_8237A : public FiberComponent {
+// Callback IC -- never yields, completes all work in on_signal_change().
+class IC_8237A : public CallbackComponent {
 public:
     IC_8237A();
 

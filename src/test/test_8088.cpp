@@ -722,10 +722,11 @@ int main() {
     scheduler.register_inline(nand_ic);
     scheduler.register_inline(rom_dec);
     scheduler.register_inline(rom_ic);
-    // Register all fiber components (everything except the 8284A clock).
+    // Register callback components (no fiber overhead).
+    scheduler.register_callback(pic);
+    // Register fiber components (everything except the 8284A clock).
     scheduler.register_fiber(cpu);
     scheduler.register_fiber(bc);
-    scheduler.register_fiber(pic);
     scheduler.register_fiber(&bus);
     clk_gen->set_scheduler(&scheduler);
 

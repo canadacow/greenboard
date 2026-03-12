@@ -1,5 +1,5 @@
 #pragma once
-#include "core/fiber_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -35,8 +35,8 @@ namespace bench {
 //   Port C upper = input (PCK, IO_CH_CK, T/C2, CASS_DATA_IN)
 //   Port C lower = output (directly connected to SW2 on Model B)
 //
-// Threading: Reactive IC. Uses default run() -- blocks on mailbox.
-class IC_8255A : public FiberComponent {
+// Callback IC -- never yields, completes all work in on_signal_change().
+class IC_8255A : public CallbackComponent {
 public:
     IC_8255A();
 
