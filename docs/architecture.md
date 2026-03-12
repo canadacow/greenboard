@@ -30,15 +30,23 @@ void  fiber_switch(Fiber target);       // switch to target fiber
 ```
 Component (abstract base)
   +-- ThreadedComponent    -- 8284A only (owns an OS thread)
-  +-- FiberComponent       -- all other ICs (cooperative fibers)
+  +-- InlineComponent      -- combinational logic (74S373, 74S138, 74S245, 74S20)
+  +-- CallbackComponent    -- clocked/reactive ICs (8288, 8259A, 8253, 8255A, 8237A)
+  +-- FiberComponent       -- ICs that suspend mid-operation (8088)
 ```
 
-**FiberComponent** (`src/core/fiber_component.h`):
-- `power_on()`: Creates a fiber. First `resume()` enters `run()`.
-- `power_off()`: Calls `on_power_off()`, deletes the fiber.
-- `resume(caller)`: Switches to the fiber. The fiber runs until it calls `yield()`.
-- Default `run()`: Calls `on_power_on()`, then loops `yield(); on_signal_change();`.
-- Active ICs (8088) override `run()` with their own execution loop.
+Three evaluation tiers, in order:
+
+1. **InlineComponent** (`src/core/inline_component.h`): Combinational logic. Evaluated in a fixed-point loop after signal commit -- called repeatedly until outputs stabilize. No fiber, no context switch. Used for 74-series glue logic.
+
+2. **CallbackComponent** (`src/core/callback_component.h`): Clocked/reactive ICs that complete all work in a single `on_signal_change()` call. Invoked once per `evaluate()` via direct function call -- no fiber overhead. Used for ICs that react to clock edges and bus signals but never need to suspend mid-operation (8288, 8259A, 8253, 8255A, 8237A).
+
+3. **FiberComponent** (`src/core/fiber_component.h`): ICs that need to suspend mid-operation via `yield()`. Context switch on every `evaluate()`. Reserved for the 8088 CPU, which yields at each T-state boundary.
+   - `power_on()`: Creates a fiber. First `resume()` enters `run()`.
+   - `power_off()`: Calls `on_power_off()`, deletes the fiber.
+   - `resume(caller)`: Switches to the fiber. The fiber runs until it calls `yield()`.
+   - Default `run()`: Calls `on_power_on()`, then loops `yield(); on_signal_change();`.
+   - Active ICs (8088) override `run()` with their own execution loop.
 
 ### Scheduler (`src/core/scheduler.h`)
 
@@ -46,16 +54,21 @@ Lightweight, non-owning. Called by the 8284A at each CLK edge.
 
 ```
 evaluate(Fiber caller):
-  1. Commit all dirty signals (pending -> level)
-  2. Resume every registered fiber component in order
+  1. SignalPool::commit() -- AVX2 SIMD copy of pending[] -> current[]
+  2. Fixed-point inline IC evaluation (repeat until no signal changes)
+  3. Call on_signal_change() on every registered CallbackComponent
+  4. Resume every registered FiberComponent (context switch)
 ```
 
-### Double-Buffered Signals
+### SignalPool and Double-Buffered Signals
 
-Signals are double-buffered to prevent mid-cycle glitches:
-- `drive(lvl)` writes to `pending_` and marks the signal dirty.
-- `level()` reads the committed `level_`.
-- `commit()` copies `pending_` to `level_`. Called by the Scheduler.
+All signals are backed by a global `SignalPool` -- two contiguous, 64-byte-aligned arrays of `Level` (enum class : uint8_t). Each `Signal` holds pointers into these arrays.
+
+- `drive(lvl)`: Writes to `SignalPool::pending[idx]`. Single comparison + store, zero bookkeeping.
+- `level()`: Reads from `SignalPool::current[idx]`.
+- `SignalPool::commit()`: AVX2 SIMD loop -- compares and copies 32 bytes at a time (16 iterations for 512 signals). Returns true if anything changed. No per-signal dirty tracking.
+
+Double-buffering prevents mid-cycle glitches: an IC driving a signal during evaluation doesn't affect other ICs reading that signal until the next commit.
 
 ### Shutdown Order
 
@@ -89,12 +102,11 @@ Implemented in `src/core/signal.h`:
 
 ## VCC-Driven Power
 
-Fibers don't execute until the board is powered on. The pattern is:
-1. `power_on()` creates the fiber. First `resume()` enters `run()`.
-2. The default `run()` calls `on_power_on()` then loops on `yield(); on_signal_change();`.
+Components don't execute until the board is powered on. The pattern is:
+1. `power_on()` initializes the component (creates fiber for FiberComponent, sets powered flag for others).
+2. `Motherboard::power_on()` drives VCC High. The scheduler commits it and evaluates all components.
 3. Active ICs (8088) override `run()` and `yield()` in a loop waiting for VCC High.
-4. `Motherboard::power_on()` drives VCC High. The scheduler commits it and resumes fibers.
-5. `Motherboard::power_off()` drives VCC Low. ICs detect VCC drop and exit their run loops.
+4. `Motherboard::power_off()` drives VCC Low. ICs detect VCC drop and exit their run loops.
 
 ## IC Install / Insert Pattern
 
@@ -124,6 +136,24 @@ A virtual test instrument for verifying board wiring:
 - **READY** (pin 5): Synchronized to CLK falling edge. RDY1 gated by ~AEN1.
 
 Its thread converts to a fiber (`fiber_convert_thread()`) so it can switch to component fibers during `evaluate()`. Reverts back to a plain thread before returning.
+
+## Performance
+
+Key optimizations and their measured impact (64-bit increment benchmark, 5-second NMI-timed run):
+
+| Change | inc/s | Speedup |
+|--------|------:|--------:|
+| Baseline (atomics, dirty tracking, all fibers) | 4,722 | 1.0x |
+| Remove atomics from Signal (single-threaded hot path) | 7,695 | 1.6x |
+| SignalPool (contiguous arrays, no dirty tracking) + AVX2 commit | 9,801 | 2.1x |
+| CallbackComponent (eliminate fiber context switches for 8288/PIC) | 11,643 | 2.5x |
+| Convert all non-yielding ICs to callback (8288, 8259A, 8253, 8255A, 8237A, BusGlue) | 18,377 | 3.9x |
+
+Design principles:
+- **No per-signal overhead**: `drive()` is a single comparison + store. No dirty flags, no subscriber notification, no atomic ops.
+- **Brute-force commit**: Copy all 512 signals every tick via SIMD rather than tracking which changed. Cache-friendly and branch-free.
+- **Minimize context switches**: Only the 8088 needs fibers. Everything else is a direct function call.
+- **AVX2 (not AVX-512)**: Intel hybrid architectures (Alder Lake through Arrow Lake) disable AVX-512 when E-cores are present.
 
 ## Future
 
