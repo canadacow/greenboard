@@ -83,6 +83,14 @@ void IC_8088::install(Socket& socket) {
     pin_vcc_   = connect_pin(31);
     pin_lock_  = pin(29);
     pin_rqgt0_ = pin(30);
+
+    // Pin directions for wiring visualization.
+    for (int i = 0; i < 8; ++i) { declare_input(pin_ad_[i]); declare_output(pin_ad_[i]); }
+    for (int i = 0; i < 12; ++i) declare_output(pin_a_upper_[i]);
+    declare_output(pin_s0_); declare_output(pin_s1_); declare_output(pin_s2_);
+    declare_output(pin_qs0_); declare_output(pin_qs1_); declare_output(pin_lock_);
+    declare_input(pin_clk_); declare_input(pin_reset_); declare_input(pin_ready_);
+    declare_input(pin_intr_); declare_input(pin_nmi_); declare_input(pin_test_);
 }
 
 void IC_8088::on_signal_change(bool /*rising*/, bool /*falling*/) {

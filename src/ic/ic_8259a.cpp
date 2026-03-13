@@ -37,6 +37,13 @@ void IC_8259A::install(Socket& socket) {
     // VCC
     Signal* vcc = socket.pin_signal(28);
     if (vcc) vcc->connect(this);
+
+    // Pin directions for wiring visualization.
+    declare_input(cs_); declare_input(wr_); declare_input(rd_);
+    declare_input(inta_); declare_input(a0_);
+    for (int i = 0; i < 8; ++i) declare_input(ir_[i]);
+    for (int i = 0; i < 8; ++i) { declare_input(d_[i]); declare_output(d_[i]); }
+    declare_output(int_);
 }
 
 void IC_8259A::on_power_on() {

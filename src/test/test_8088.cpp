@@ -96,6 +96,14 @@ public:
         for (int i = 0; i < 4; ++i) dram_cas[i] = cas_sigs[i]->pin();
         dram_we = we.pin();
         dram_connected = true;
+
+        // Pin directions for dependency graph.
+        // BusGlue reads DRAM DOUT (via MD), drives DRAM control signals.
+        for (int i = 0; i < 8; ++i) declare_input(dram_md[i]);   // reads MD (DRAM output)
+        for (int i = 0; i < 8; ++i) declare_output(dram_ma[i]);  // drives MA
+        declare_output(dram_ras);
+        for (int i = 0; i < 4; ++i) declare_output(dram_cas[i]);
+        declare_output(dram_we);
     }
 
     // T-state machine
@@ -906,6 +914,11 @@ int main() {
     scheduler.register_callback(&bus);
     // Register fiber components (everything except the 8284A clock).
     scheduler.register_fiber(cpu);
+    // Register threaded components for visualization only.
+    scheduler.register_visual(clk_gen);
+    // Resolve callback dependency graph (DRAM outputs -> BusGlue inputs).
+    // Must be called after all register_*() calls so dump_dot sees everything.
+    scheduler.resolve();
     // Throwaway: measure fiber dispatch overhead with a no-op fiber.
     //NoopFiber noop_fiber;
     //noop_fiber.power_on();
@@ -913,7 +926,7 @@ int main() {
     clk_gen->set_scheduler(&scheduler);
     cpu->set_scheduler(&scheduler);
 
-    #define RUN_BENCHMARK
+    //#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

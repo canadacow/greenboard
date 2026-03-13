@@ -30,6 +30,11 @@ void IC_74S373::install(Socket& socket) {
     if (le) { le->connect(this); le_ = le->pin(); }
     if (oe) { oe->connect(this); oe_ = oe->pin(); }
     if (vcc) vcc->connect(this);
+
+    // Pin directions for wiring visualization.
+    for (int i = 0; i < 8; ++i) declare_input(d_[i]);
+    declare_input(le_); declare_input(oe_);
+    for (int i = 0; i < 8; ++i) declare_output(q_[i]);
 }
 
 void IC_74S373::on_power_on() {

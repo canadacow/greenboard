@@ -33,6 +33,12 @@ void IC_74S20::install(Socket& socket) {
     // VCC
     Signal* vcc = socket.pin_signal(14);
     if (vcc) vcc->connect(this);
+
+    // Pin directions for wiring visualization.
+    declare_input(a1_); declare_input(b1_); declare_input(c1_); declare_input(d1_);
+    declare_output(y1_);
+    declare_input(a2_); declare_input(b2_); declare_input(c2_); declare_input(d2_);
+    declare_output(y2_);
 }
 
 void IC_74S20::on_power_on() {

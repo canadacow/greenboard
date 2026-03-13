@@ -41,6 +41,13 @@ void IC_8288::install(Socket& socket) {
 
     Signal* vcc = socket.pin_signal(20);
     if (vcc) vcc->connect(this);
+
+    // Pin directions for wiring visualization.
+    declare_input(pin_clk_); declare_input(pin_s0_); declare_input(pin_s1_);
+    declare_input(pin_s2_); declare_input(pin_cen_); declare_input(pin_aen_);
+    declare_output(pin_ale_); declare_output(pin_den_); declare_output(pin_dtr_);
+    declare_output(pin_memr_); declare_output(pin_memw_);
+    declare_output(pin_ior_); declare_output(pin_iow_); declare_output(pin_inta_);
 }
 
 void IC_8288::on_signal_change(bool rising, bool falling) {

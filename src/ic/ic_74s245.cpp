@@ -33,6 +33,11 @@ void IC_74S245::install(Socket& socket) {
 
     Signal* vcc = socket.pin_signal(20);
     if (vcc) vcc->connect(this);
+
+    // Pin directions for wiring visualization.
+    declare_input(g_); declare_input(dir_);
+    for (int i = 0; i < 8; ++i) { declare_input(a_[i]); declare_output(a_[i]); }
+    for (int i = 0; i < 8; ++i) { declare_input(b_[i]); declare_output(b_[i]); }
 }
 
 void IC_74S245::on_signal_change(bool /*rising*/, bool /*falling*/) {

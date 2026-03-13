@@ -52,7 +52,15 @@ void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank
         bank.dout[8] = pin(sockets[0], 14);            // Parity DOUT
     }
 
-    spdlog::debug("[DRAM] installed 4 banks x 9 chips = 256KB");
+    // Pin directions for wiring visualization.
+    for (int i = 0; i < 8; ++i) declare_input(pin_a_[i]);   // MA0-MA7
+    declare_input(pin_we_);                                   // ~WE
+    for (int b = 0; b < 4; ++b) {
+        declare_input(banks_[b].ras);                         // ~RAS
+        declare_input(banks_[b].cas);                         // ~CAS
+        for (int i = 0; i < 9; ++i) declare_input(banks_[b].din[i]);   // DIN
+        for (int i = 0; i < 9; ++i) declare_output(banks_[b].dout[i]); // DOUT
+    }
 }
 
 void IC_DRAM_256K::on_power_on() {

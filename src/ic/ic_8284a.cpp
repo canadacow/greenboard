@@ -23,6 +23,11 @@ void IC_8284A::install(Socket& socket) {
     pin_rdy1_  = pin(4);   // RDY1 input
     pin_aen1_  = pin(3);   // ~AEN1 input
     pin_vcc_   = pin(18);  // VCC
+
+    // Pin directions for wiring visualization.
+    declare_input(pin_res_); declare_input(pin_rdy1_); declare_input(pin_aen1_);
+    declare_output(pin_osc_); declare_output(pin_clk_); declare_output(pin_pclk_);
+    declare_output(pin_ready_); declare_output(pin_reset_);
 }
 
 void IC_8284A::run(std::stop_token stop) {

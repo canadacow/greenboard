@@ -41,6 +41,11 @@ void IC_ROM_8K::install(Socket& socket) {
 
     pin_cs_  = connect_pin(20);
     pin_vcc_ = connect_pin(24);
+
+    // Pin directions for wiring visualization.
+    for (int i = 0; i < 13; ++i) declare_input(pin_a_[i]);
+    declare_input(pin_cs_);
+    for (int i = 0; i < 8; ++i) declare_output(pin_d_[i]);
 }
 
 void IC_ROM_8K::on_power_on() {

@@ -32,6 +32,11 @@ void IC_74S138::install(Socket& socket) {
     // VCC
     Signal* vcc = socket.pin_signal(16);
     if (vcc) vcc->connect(this);
+
+    // Pin directions for wiring visualization.
+    declare_input(a_); declare_input(b_); declare_input(c_);
+    declare_input(g2a_); declare_input(g2b_); declare_input(g1_);
+    for (int i = 0; i < 8; ++i) declare_output(y_[i]);
 }
 
 void IC_74S138::on_power_on() {
