@@ -34,6 +34,11 @@ void IC_74S175::install(Socket& socket) {
     pin_nq_[1] = pin(6);
     pin_nq_[2] = pin(11);
     pin_nq_[3] = pin(13);
+
+    // Pin directions for wiring visualization.
+    declare_input(pin_clr_); declare_input(pin_clk_);
+    for (int i = 0; i < 4; ++i) declare_input(pin_d_[i]);
+    for (int i = 0; i < 4; ++i) { declare_output(pin_q_[i]); declare_output(pin_nq_[i]); }
 }
 
 void IC_74S175::on_signal_change(bool rising, bool /*falling*/) {

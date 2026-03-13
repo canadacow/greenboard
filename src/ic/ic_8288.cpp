@@ -8,6 +8,7 @@ IC_8288::IC_8288() : BusControllerComponent("8288") { set_description("Bus Contr
 void IC_8288::on_power_on() {
     state_ = State::Idle;
     cycle_ = BusCycle::Passive;
+    t2_cmd_issued_ = false;
 }
 
 void IC_8288::install(Socket& socket) {
@@ -103,6 +104,7 @@ void IC_8288::on_clk_rising() {
             pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
+            t2_cmd_issued_ = false;
         }
         return;
     }
@@ -136,6 +138,7 @@ void IC_8288::on_clk_rising() {
         case State::T2:
             // T3: Commands stay active. Nothing changes.
             state_ = State::T3;
+            t2_cmd_issued_ = false;
             break;
 
         case State::T3: {
@@ -153,7 +156,8 @@ void IC_8288::on_clk_falling() {
     // Deferred from T2 CLK rise: assert ~DEN and command strobe.
     // This gives the 74S373 a full half-cycle to capture the address
     // before the 74S245 transceiver enables and drives the AD bus.
-    if (state_ == State::T2 && pin_den_.level() != Level::Low) {
+    if (state_ == State::T2 && !t2_cmd_issued_) {
+        t2_cmd_issued_ = true;
         bool cen = pin_cen_.level() == Level::High;
         if (cen) {
             // drive_command

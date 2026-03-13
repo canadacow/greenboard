@@ -46,6 +46,17 @@ void IC_8237A::install(Socket& socket) {
     pin_memw_  = pin(4);
     pin_adstb_ = pin(8);
     pin_aen_   = pin(9);
+
+    // Pin directions for wiring visualization.
+    for (int i = 0; i < 8; ++i) { declare_input(pin_db_[i]); declare_output(pin_db_[i]); }
+    for (int i = 0; i < 8; ++i) { declare_input(pin_a_[i]); declare_output(pin_a_[i]); }
+    declare_input(pin_ior_); declare_input(pin_iow_); declare_input(pin_cs_);
+    declare_input(pin_clk_); declare_input(pin_reset_); declare_input(pin_hlda_);
+    for (int i = 0; i < 4; ++i) declare_input(pin_dreq_[i]);
+    declare_output(pin_hrq_); declare_output(pin_eop_);
+    for (int i = 0; i < 4; ++i) declare_output(pin_dack_[i]);
+    declare_output(pin_memr_); declare_output(pin_memw_);
+    declare_output(pin_adstb_); declare_output(pin_aen_);
 }
 
 void IC_8237A::on_signal_change(bool rising, bool /*falling*/) {

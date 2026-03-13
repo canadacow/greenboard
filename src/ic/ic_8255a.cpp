@@ -53,6 +53,14 @@ void IC_8255A::install(Socket& socket) {
     pin_a1_    = pin(8);
     pin_reset_ = connect_pin(35);
     pin_vcc_   = connect_pin(26);
+
+    // Pin directions for wiring visualization.
+    for (int i = 0; i < 8; ++i) { declare_input(pin_d_[i]); declare_output(pin_d_[i]); }
+    for (int i = 0; i < 8; ++i) { declare_input(pin_pa_[i]); declare_output(pin_pa_[i]); }
+    for (int i = 0; i < 8; ++i) { declare_input(pin_pb_[i]); declare_output(pin_pb_[i]); }
+    for (int i = 0; i < 8; ++i) { declare_input(pin_pc_[i]); declare_output(pin_pc_[i]); }
+    declare_input(pin_cs_); declare_input(pin_rd_); declare_input(pin_wr_);
+    declare_input(pin_a0_); declare_input(pin_a1_); declare_input(pin_reset_);
 }
 
 void IC_8255A::on_signal_change(bool rising, bool /*falling*/) {

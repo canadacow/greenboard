@@ -94,6 +94,7 @@ private:
     // Internal state
     State state_ = State::Idle;
     BusCycle cycle_ = BusCycle::Passive;
+    bool t2_cmd_issued_ = false;
 };
 
 } // namespace bench

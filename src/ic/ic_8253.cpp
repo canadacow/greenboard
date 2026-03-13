@@ -43,6 +43,13 @@ void IC_8253::install(Socket& socket) {
     pin_rd_  = connect_pin(22);      // ~RD
     pin_wr_  = connect_pin(23);      // ~WR
     pin_vcc_ = connect_pin(24);      // VCC
+
+    // Pin directions for wiring visualization.
+    for (int i = 0; i < 8; ++i) { declare_input(pin_data_[i]); declare_output(pin_data_[i]); }
+    for (int i = 0; i < 3; ++i) { declare_input(pin_clk_[i]); declare_input(pin_gate_[i]); }
+    for (int i = 0; i < 3; ++i) declare_output(pin_out_[i]);
+    declare_input(pin_a0_); declare_input(pin_a1_); declare_input(pin_cs_);
+    declare_input(pin_rd_); declare_input(pin_wr_);
 }
 
 void IC_8253::on_signal_change(bool rising, bool /*falling*/) {
