@@ -18,7 +18,7 @@
 ;   [0506] = 0xB000   16-bit byte sum of 8K ROM
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 ; ---- Test 1: Verify identity string ----
 
@@ -35,12 +35,12 @@ org 0x0123
     xor ah, ah
     push ax                 ; save for later
 
-    ; Set DS=F000 so we can address the expected string embedded in our code.
-    mov ax, 0xF000
+    ; Set DS=0100 so we can address the expected string embedded in our code.
+    mov ax, 0x0100
     mov ds, ax
 
     ; Compare 22 bytes: DS:SI (expected) vs ES:DI (ROM at FE00:0000).
-    mov si, expected_string ; offset within F000 segment (NASM org 0x0123)
+    mov si, expected_string ; offset within 0100 segment (NASM org 0x0100)
     xor di, di              ; ES:0000 = physical FE000
     mov cx, 22
     cld

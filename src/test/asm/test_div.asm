@@ -13,7 +13,7 @@
 ;   [050E] = 0x0001   DIV overflow: INT 0 handler ran
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 ; Set up stack
 mov ax, 0x0000
@@ -34,7 +34,7 @@ mov word [0x050E], 0x0000
 ; Install INT 0 handler (divide error)
 ; =====================================================================
 mov word [0x00], handler_div0
-mov word [0x02], 0xF000
+mov word [0x02], 0x0100
 
 ; =====================================================================
 ; Test 1 & 2: DIV byte -- 10 / 3

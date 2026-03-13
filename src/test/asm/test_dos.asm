@@ -19,7 +19,7 @@
 ;   [050C] = 0x002A   AH=4C exit code = 42 (0x2A)
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 mov ax, 0x0000
 mov ss, ax
@@ -37,7 +37,7 @@ mov word [0x050C], 0x0000
 
 ; Install INT 21h handler
 mov word [0x21*4], int21_handler
-mov word [0x21*4+2], 0xF000
+mov word [0x21*4+2], 0x0100
 
 ; =====================================================================
 ; Test 1: AH=02h single character output -- print "Hello"
@@ -79,9 +79,9 @@ mov word [0x05F2], 0x0000
 cld
 push ds
 push es
-mov ax, 0xF000
+mov ax, 0x0100
 mov ds, ax
-mov si, hello_str              ; source: F000:hello_str
+mov si, hello_str              ; source: 0100:hello_str
 mov ax, 0
 mov es, ax
 mov di, 0x0400                 ; dest: 0000:0400

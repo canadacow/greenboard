@@ -15,7 +15,7 @@
 ;   [0512] = 0x0030   SHL AX, CL (CL=4): 0x0003 << 4 = 0x0030
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 mov ax, 0x0000
 mov ss, ax

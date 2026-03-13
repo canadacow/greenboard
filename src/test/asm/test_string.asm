@@ -13,7 +13,7 @@
 ;   [050E] = 0x0001   STD reverses direction
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 ; Set up segments and stack
 mov ax, 0x0000

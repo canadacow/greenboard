@@ -12,8 +12,8 @@
 // The 8259A PIC is real -- signal-level interrupt handling.
 // BusGlue is a reactive Component: memory + generic I/O, subscribes to CLK.
 //
-// Each test is a flat binary assembled by NASM, loaded at F000:0123
-// (physical 0xF0123). DS=SS=0 after reset. Results checked at 0x0200+.
+// Each test is a flat binary assembled by NASM, loaded at 0100:0100
+// (physical 0x01100) in DRAM. DS=SS=0 after reset. Results checked at 0x0500+.
 
 #include "core/signal.h"
 #include "core/callback_component.h"
@@ -66,7 +66,6 @@ public:
     Pin xa[20];                  // XA0-XA19 -- latched address from 74S373s
     Pin d[8];                    // D0-D7 -- system data bus
     Pin pin_s0, pin_s1, pin_s2;
-    std::unique_ptr<uint8_t[]> mem = std::make_unique<uint8_t[]>(1 << 20);
     std::unique_ptr<uint8_t[]> io  = std::make_unique<uint8_t[]>(1 << 16);
 
     // DRAM interface pins -- BusGlue replaces the address MUX (74S158)
@@ -163,8 +162,6 @@ private:
     bool is_inta_cycle()  { return cycle_type == 0; }
     // PIC ports 0x20-0x21 are handled by U66 (74S138) -> PIC ~CS. BusGlue skips them.
     bool is_hw_decoded(uint32_t addr) { return (addr & 0xFFFF) >= 0x20 && (addr & 0xFFFF) <= 0x3F; }
-    // ROM range served by real IC_ROM_8K chips. BusGlue must not drive data here.
-    bool is_rom_range(uint32_t addr) { return addr >= 0xFE000 && addr <= 0xFFFFF; }
     // DRAM range: first 256KB (4 banks x 64KB).
     bool is_dram_range(uint32_t addr) { return dram_connected && addr < 0x40000; }
 
@@ -295,11 +292,6 @@ private:
                 } else if (is_io_cycle()) {
                     uint8_t val = io_read(cycle_addr & 0xFFFF);
                     drive_d(val);
-                } else if (is_rom_range(cycle_addr & 0xFFFFF)) {
-                    // ROM chip drives the data bus -- BusGlue stays off.
-                } else {
-                    uint8_t val = mem[cycle_addr & 0xFFFFF];
-                    drive_d(val);
                 }
             } else if (is_write_cycle()) {
                 if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
@@ -307,11 +299,7 @@ private:
                 } else if (is_io_cycle()) {
                     uint8_t val = read_d();
                     io_write(cycle_addr & 0xFFFF, val);
-                } else {
-                    uint8_t val = read_d();
-                    mem[cycle_addr & 0xFFFFF] = val;
                 }
-            } else {
             }
             break;
 
@@ -376,7 +364,7 @@ struct TestCase {
     std::vector<Expect> expects;
 };
 
-static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) {
+static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, uint32_t mem_size) {
     std::ifstream f(path, std::ios::binary);
     if (!f) {
         spdlog::error("  cannot open {}", path);
@@ -385,7 +373,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
     f.seekg(0, std::ios::end);
     auto size = f.tellg();
     f.seekg(0);
-    if (load_addr + size > (1 << 20)) {
+    if (load_addr + size > mem_size) {
         spdlog::error("  binary too large: {} bytes at 0x{:05X}", (int)size, load_addr);
         return false;
     }
@@ -650,7 +638,7 @@ int main() {
     cpu_socket.wire(29, cpu_lock); cpu_socket.wire(30, rqgt0);
     cpu_socket.wire(24, qs1); cpu_socket.wire(25, qs0);
     cpu_socket.wire(26, s0); cpu_socket.wire(27, s1); cpu_socket.wire(28, s2);
-    auto* cpu = cpu_socket.emplace<IC_8088>(0xF000, 0x0123);
+    auto* cpu = cpu_socket.emplace<IC_8088>(0x0100, 0x0100);
 
     // U6: 8288 Bus Controller
     Socket bc_socket{"U6", "8288", 20};
@@ -941,13 +929,12 @@ int main() {
     constexpr int BENCH_SECONDS = 5;
     spdlog::info("--- Benchmark: 64-bit increment ({} seconds) ---", BENCH_SECONDS);
     {
-        std::memset(bus.mem.get(), 0xF4, 1 << 20);
         std::memset(bus.io.get(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
         bus.reset();
 
         std::string path = std::string(ASM_TEST_DIR) + "/test_bench64.bin";
-        if (!load_bin(path, bus.mem.get(), 0xF0123)) {
+        if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) {
             spdlog::error("  benchmark skipped -- cannot load binary");
         } else {
             cpu->clear_halt();
@@ -1036,20 +1023,19 @@ int main() {
     for (auto& tc : tests) {
         spdlog::info("--- {} ---", tc.name);
 
-        // Reset memory, I/O space, DRAM, and BusGlue state
-        std::memset(bus.mem.get(), 0xF4, 1 << 20);
+        // Reset I/O space, DRAM, and BusGlue state
         std::memset(bus.io.get(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
         bus.reset();
 
-        // Load binary
+        // Load binary into DRAM at 0100:0100 (physical 0x01100)
         std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;
-        if (!load_bin(path, bus.mem.get(), 0xF0123)) { ++failed; continue; }
+        if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) { ++failed; continue; }
 
         // Verify load
-        spdlog::trace("  mem[F0123..F012A] = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
-            bus.mem[0xF0123], bus.mem[0xF0124], bus.mem[0xF0125], bus.mem[0xF0126],
-            bus.mem[0xF0127], bus.mem[0xF0128], bus.mem[0xF0129], bus.mem[0xF012A]);
+        spdlog::trace("  dram[01100..01107] = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+            dram.data()[0x1100], dram.data()[0x1101], dram.data()[0x1102], dram.data()[0x1103],
+            dram.data()[0x1104], dram.data()[0x1105], dram.data()[0x1106], dram.data()[0x1107]);
 
         // Seat all ICs (threads start, block on wait_mailbox).
         cpu->clear_halt();

@@ -17,7 +17,7 @@
 ;   [050C] = 0x0002   Nested HW interrupts: both handlers ran
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 mov ax, 0x0000
 mov ss, ax
@@ -39,11 +39,11 @@ mov word [0x0600], 0       ; order index (for priority test)
 
 ; Install IRQ handlers: INT 8 (IRQ0), INT 9 (IRQ1), INT 10 (IRQ2)
 mov word [8*4],    irq0_handler
-mov word [8*4+2],  0xF000
+mov word [8*4+2],  0x0100
 mov word [9*4],    irq1_handler
-mov word [9*4+2],  0xF000
+mov word [9*4+2],  0x0100
 mov word [10*4],   irq2_handler
-mov word [10*4+2], 0xF000
+mov word [10*4+2], 0x0100
 
 ; Initialize PIC: edge-triggered, single, ICW4
 mov al, 0x13

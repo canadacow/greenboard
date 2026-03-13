@@ -1,6 +1,6 @@
 ; test_bench64.asm -- 64-bit increment benchmark.
 ;
-; Loaded at F000:0123 (physical 0xF0123). DS=SS=0 after reset.
+; Loaded at 0100:0100 (physical 0x01100). DS=SS=0 after reset.
 ;
 ; Increments a 64-bit counter at [0x0500]-[0x0507] in a tight loop.
 ; The test harness fires NMI after a wall-time delay to halt execution.
@@ -14,13 +14,13 @@
 ;   [0506] = high word
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 ; Install NMI handler (INT 2) at vector 0x0008.
     xor ax, ax
     mov ds, ax
     mov word [0x0008], nmi_handler
-    mov word [0x000A], 0xF000
+    mov word [0x000A], 0x0100
 
 ; Zero the 64-bit counter.
     mov word [0x0500], 0

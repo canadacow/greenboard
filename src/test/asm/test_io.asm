@@ -18,7 +18,7 @@
 ;   [050E] = 0x0001   I/O write doesn't corrupt memory
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 mov ax, 0x0000
 mov ds, ax
@@ -73,7 +73,7 @@ mov [0x0504], ax          ; expect 0xBEEF
 ; Install INT 8 handler (IRQ0 with base vector 0x08)
 ; IVT entry at 4 * 8 = 0x0020
 mov word [0x0020], irq0_handler
-mov word [0x0022], 0xF000
+mov word [0x0022], 0x0100
 
 ; Initialize PIC: ICW1 -> ICW2 -> ICW4
 mov al, 0x13              ; ICW1: edge-triggered, single, ICW4 needed

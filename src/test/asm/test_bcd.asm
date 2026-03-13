@@ -22,7 +22,7 @@
 ;   [0516] = 0x0001   LDS loads pointer (segment:offset)
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 mov ax, 0x0000
 mov ds, ax

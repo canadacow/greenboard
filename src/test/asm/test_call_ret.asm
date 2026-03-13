@@ -9,7 +9,7 @@
 ;   [0506] = 0xBEEF   PUSH reg / POP cross-reg
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 ; Set up stack
 mov ax, 0x0000

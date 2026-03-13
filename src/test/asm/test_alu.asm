@@ -17,7 +17,7 @@
 ;   [0516] = 0x00FE   SBB
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 ; ADD
 mov ax, 0x0030

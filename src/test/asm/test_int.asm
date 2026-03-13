@@ -14,7 +14,7 @@
 ;   [050A] = 0x0003   Nested INT: handler calls INT again
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 ; Set up stack
 mov ax, 0x0000
@@ -31,29 +31,29 @@ mov word [0x050A], 0x0000
 
 ; =====================================================================
 ; Install IVT entries.
-; All handlers live in segment F000. Offsets are relative to org 0x0123
+; All handlers live in segment 0100. Offsets are relative to org 0x0100
 ; so the handler address = org_offset.
 ; =====================================================================
 
 ; INT 0x40 -> handler_40
 mov word [0x40*4], handler_40
-mov word [0x40*4+2], 0xF000
+mov word [0x40*4+2], 0x0100
 
 ; INT 3 -> handler_bp
 mov word [0x03*4], handler_bp
-mov word [0x03*4+2], 0xF000
+mov word [0x03*4+2], 0x0100
 
 ; INT 4 (overflow) -> handler_ovf
 mov word [0x04*4], handler_ovf
-mov word [0x04*4+2], 0xF000
+mov word [0x04*4+2], 0x0100
 
 ; INT 0x41 -> handler_41 (for nested test)
 mov word [0x41*4], handler_41
-mov word [0x41*4+2], 0xF000
+mov word [0x41*4+2], 0x0100
 
 ; INT 0x42 -> handler_42 (inner handler for nested test)
 mov word [0x42*4], handler_42
-mov word [0x42*4+2], 0xF000
+mov word [0x42*4+2], 0x0100
 
 ; =====================================================================
 ; Test 1: INT 0x40 -- basic software interrupt
@@ -108,7 +108,7 @@ mov [0x0508], ax         ; expect 0x0001
 ; =====================================================================
 ; Re-point INT 0x40 to a "add 1" handler for nesting
 mov word [0x40*4], handler_inc
-mov word [0x40*4+2], 0xF000
+mov word [0x40*4+2], 0x0100
 int 0x41
 ; handler_41: [050A]+=1, then INT 0x42
 ; handler_42: [050A]+=1, then INT 0x40

@@ -1,5 +1,5 @@
 ; test_mov.asm -- MOV and data movement tests (original test, plus extras)
-; Loaded at F000:0123 (physical 0xF0123). DS=0 after reset.
+; Loaded at 0100:0100 (physical 0x01100). DS=0 after reset.
 ;
 ; Expected results:
 ;   [0500] = 0x1234   MOV imm -> reg -> mem
@@ -9,7 +9,7 @@
 ;   [0508] = 0x9ABC   XCHG (other half)
 
 cpu 8086
-org 0x0123
+org 0x0100
 
 ; MOV imm16 to AX, store to memory
 mov ax, 0x1234
