@@ -6,58 +6,61 @@ namespace bench {
 IC_8255A::IC_8255A() : CallbackComponent("8255A") {}
 
 void IC_8255A::install(Socket& socket) {
+    auto pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        return s ? s->pin() : Pin{};
+    };
+    auto connect_pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+        return s ? s->pin() : Pin{};
+    };
+
     // Data bus: D0=pin34, D1=pin33, ..., D7=pin27
     for (int i = 0; i < 8; ++i)
-        pin_d_[i] = socket.pin_signal(34 - i);
+        pin_d_[i] = pin(34 - i);
 
     // Port A: PA0=pin4, PA1=pin3, PA2=pin2, PA3=pin1, PA4=pin40, PA5=pin39, PA6=pin38, PA7=pin37
-    pin_pa_[0] = socket.pin_signal(4);
-    pin_pa_[1] = socket.pin_signal(3);
-    pin_pa_[2] = socket.pin_signal(2);
-    pin_pa_[3] = socket.pin_signal(1);
-    pin_pa_[4] = socket.pin_signal(40);
-    pin_pa_[5] = socket.pin_signal(39);
-    pin_pa_[6] = socket.pin_signal(38);
-    pin_pa_[7] = socket.pin_signal(37);
+    pin_pa_[0] = pin(4);
+    pin_pa_[1] = pin(3);
+    pin_pa_[2] = pin(2);
+    pin_pa_[3] = pin(1);
+    pin_pa_[4] = pin(40);
+    pin_pa_[5] = pin(39);
+    pin_pa_[6] = pin(38);
+    pin_pa_[7] = pin(37);
 
     // Port B: PB0=pin18 .. PB7=pin25
     for (int i = 0; i < 8; ++i)
-        pin_pb_[i] = socket.pin_signal(18 + i);
+        pin_pb_[i] = pin(18 + i);
 
     // Port C: PC0=pin14, PC1=pin15, PC2=pin16, PC3=pin17
     //         PC4=pin13, PC5=pin12, PC6=pin11, PC7=pin10
-    pin_pc_[0] = socket.pin_signal(14);
-    pin_pc_[1] = socket.pin_signal(15);
-    pin_pc_[2] = socket.pin_signal(16);
-    pin_pc_[3] = socket.pin_signal(17);
-    pin_pc_[4] = socket.pin_signal(13);
-    pin_pc_[5] = socket.pin_signal(12);
-    pin_pc_[6] = socket.pin_signal(11);
-    pin_pc_[7] = socket.pin_signal(10);
+    pin_pc_[0] = pin(14);
+    pin_pc_[1] = pin(15);
+    pin_pc_[2] = pin(16);
+    pin_pc_[3] = pin(17);
+    pin_pc_[4] = pin(13);
+    pin_pc_[5] = pin(12);
+    pin_pc_[6] = pin(11);
+    pin_pc_[7] = pin(10);
 
     // Control pins
-    pin_cs_    = socket.pin_signal(6);   // ~CS
-    pin_rd_    = socket.pin_signal(5);   // ~RD
-    pin_wr_    = socket.pin_signal(36);  // ~WR
-    pin_a0_    = socket.pin_signal(9);   // A0
-    pin_a1_    = socket.pin_signal(8);   // A1
-    pin_reset_ = socket.pin_signal(35);  // RESET
-    pin_vcc_   = socket.pin_signal(26);  // VCC
-
-    // Subscribe to control signals
-    if (pin_cs_)    pin_cs_->connect(this);
-    if (pin_wr_)    pin_wr_->connect(this);
-    if (pin_rd_)    pin_rd_->connect(this);
-    if (pin_reset_) pin_reset_->connect(this);
-    if (pin_vcc_)   pin_vcc_->connect(this);
+    pin_cs_    = connect_pin(6);
+    pin_rd_    = connect_pin(5);
+    pin_wr_    = connect_pin(36);
+    pin_a0_    = pin(9);
+    pin_a1_    = pin(8);
+    pin_reset_ = connect_pin(35);
+    pin_vcc_   = connect_pin(26);
 }
 
 void IC_8255A::on_signal_change(bool rising, bool /*falling*/) {
     if (!rising) return;  // compute once per cycle
-    Level reset_cur = pin_reset_ ? pin_reset_->level() : Level::HiZ;
-    Level wr_cur = pin_wr_ ? pin_wr_->level() : Level::HiZ;
-    Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;
-    Level rd_cur = pin_rd_ ? pin_rd_->level() : Level::HiZ;
+    Level reset_cur = pin_reset_.level();
+    Level wr_cur = pin_wr_.level();
+    Level cs_cur = pin_cs_.level();
+    Level rd_cur = pin_rd_.level();
 
     // RESET rising edge
     if (reset_cur == Level::High && reset_prev_ != Level::High)
@@ -99,9 +102,9 @@ void IC_8255A::on_reset() {
 
     // Release all port pins (go HiZ since all are now inputs)
     for (int i = 0; i < 8; ++i) {
-        if (pin_pa_[i]) pin_pa_[i]->release();
-        if (pin_pb_[i]) pin_pb_[i]->release();
-        if (pin_pc_[i]) pin_pc_[i]->release();
+        pin_pa_[i].release();
+        pin_pb_[i].release();
+        pin_pc_[i].release();
     }
 
     spdlog::debug("[8255A] reset -- all ports input");
@@ -109,8 +112,8 @@ void IC_8255A::on_reset() {
 
 void IC_8255A::on_bus_write() {
     uint8_t data = read_data();
-    bool a0 = pin_a0_ && pin_a0_->level() == Level::High;
-    bool a1 = pin_a1_ && pin_a1_->level() == Level::High;
+    bool a0 = pin_a0_.level() == Level::High;
+    bool a1 = pin_a1_.level() == Level::High;
     int port = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
     switch (port) {
@@ -146,11 +149,11 @@ void IC_8255A::on_bus_write() {
                 // Drive output ports, release input ports
                 if (!pa_input_) write_port_a(0); else {
                     for (int i = 0; i < 8; ++i)
-                        if (pin_pa_[i]) pin_pa_[i]->release();
+                        pin_pa_[i].release();
                 }
                 if (!pb_input_) write_port_b(0); else {
                     for (int i = 0; i < 8; ++i)
-                        if (pin_pb_[i]) pin_pb_[i]->release();
+                        pin_pb_[i].release();
                 }
                 write_port_c(0);  // handles mixed input/output
 
@@ -174,8 +177,8 @@ void IC_8255A::on_bus_write() {
 }
 
 void IC_8255A::on_bus_read() {
-    bool a0 = pin_a0_ && pin_a0_->level() == Level::High;
-    bool a1 = pin_a1_ && pin_a1_->level() == Level::High;
+    bool a0 = pin_a0_.level() == Level::High;
+    bool a1 = pin_a1_.level() == Level::High;
     int port = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
     switch (port) {
@@ -189,7 +192,7 @@ void IC_8255A::on_bus_read() {
 uint8_t IC_8255A::read_port_a() const {
     uint8_t val = 0;
     for (int i = 0; i < 8; ++i) {
-        if (pin_pa_[i] && pin_pa_[i]->level() == Level::High)
+        if (pin_pa_[i].level() == Level::High)
             val |= (1 << i);
     }
     return val;
@@ -198,7 +201,7 @@ uint8_t IC_8255A::read_port_a() const {
 uint8_t IC_8255A::read_port_b() const {
     uint8_t val = 0;
     for (int i = 0; i < 8; ++i) {
-        if (pin_pb_[i] && pin_pb_[i]->level() == Level::High)
+        if (pin_pb_[i].level() == Level::High)
             val |= (1 << i);
     }
     return val;
@@ -210,7 +213,7 @@ uint8_t IC_8255A::read_port_c() const {
         bool is_input = (i >= 4) ? pc_upper_input_ : pc_lower_input_;
         if (is_input) {
             // Input: read pin level
-            if (pin_pc_[i] && pin_pc_[i]->level() == Level::High)
+            if (pin_pc_[i].level() == Level::High)
                 val |= (1 << i);
         } else {
             // Output: return latch value
@@ -222,52 +225,48 @@ uint8_t IC_8255A::read_port_c() const {
 
 void IC_8255A::write_port_a(uint8_t value) {
     for (int i = 0; i < 8; ++i) {
-        if (pin_pa_[i])
-            pin_pa_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
+        pin_pa_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
     }
 }
 
 void IC_8255A::write_port_b(uint8_t value) {
     for (int i = 0; i < 8; ++i) {
-        if (pin_pb_[i])
-            pin_pb_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
+        pin_pb_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
     }
 }
 
 void IC_8255A::write_port_c(uint8_t value) {
     // Port C has split direction: upper and lower nibbles independent
     for (int i = 0; i < 4; ++i) {
-        if (!pc_lower_input_ && pin_pc_[i])
-            pin_pc_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
-        else if (pc_lower_input_ && pin_pc_[i])
-            pin_pc_[i]->release();
+        if (!pc_lower_input_)
+            pin_pc_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
+        else if (pc_lower_input_)
+            pin_pc_[i].release();
     }
     for (int i = 4; i < 8; ++i) {
-        if (!pc_upper_input_ && pin_pc_[i])
-            pin_pc_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
-        else if (pc_upper_input_ && pin_pc_[i])
-            pin_pc_[i]->release();
+        if (!pc_upper_input_)
+            pin_pc_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
+        else if (pc_upper_input_)
+            pin_pc_[i].release();
     }
 }
 
 void IC_8255A::drive_data(uint8_t value) {
     for (int i = 0; i < 8; ++i) {
-        if (pin_d_[i])
-            pin_d_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
+        pin_d_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
     }
 }
 
 void IC_8255A::release_data() {
     for (int i = 0; i < 8; ++i) {
-        if (pin_d_[i])
-            pin_d_[i]->release();
+        pin_d_[i].release();
     }
 }
 
 uint8_t IC_8255A::read_data() const {
     uint8_t val = 0;
     for (int i = 0; i < 8; ++i) {
-        if (pin_d_[i] && pin_d_[i]->level() == Level::High)
+        if (pin_d_[i].level() == Level::High)
             val |= (1 << i);
     }
     return val;

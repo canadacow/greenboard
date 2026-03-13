@@ -110,18 +110,18 @@ private:
     Channel channels_[3];
 
     // Output pins (we drive these)
-    Signal* pin_out_[3] = {};     // Pins 10, 13, 17: OUT0, OUT1, OUT2
+    Pin pin_out_[3];     // Pins 10, 13, 17: OUT0, OUT1, OUT2
 
     // Input pins
-    Signal* pin_clk_[3] = {};     // Pins 9, 15, 18: CLK0, CLK1, CLK2
-    Signal* pin_gate_[3] = {};    // Pins 11, 14, 16: GATE0, GATE1, GATE2
-    Signal* pin_data_[8] = {};    // Pins 8-1: D0-D7
-    Signal* pin_a0_ = nullptr;    // Pin 19: A0
-    Signal* pin_a1_ = nullptr;    // Pin 20: A1
-    Signal* pin_cs_ = nullptr;    // Pin 21: ~CS
-    Signal* pin_rd_ = nullptr;    // Pin 22: ~RD
-    Signal* pin_wr_ = nullptr;    // Pin 23: ~WR
-    Signal* pin_vcc_ = nullptr;   // Pin 24: VCC
+    Pin pin_clk_[3];     // Pins 9, 15, 18: CLK0, CLK1, CLK2
+    Pin pin_gate_[3];    // Pins 11, 14, 16: GATE0, GATE1, GATE2
+    Pin pin_data_[8];    // Pins 8-1: D0-D7
+    Pin pin_a0_;         // Pin 19: A0
+    Pin pin_a1_;         // Pin 20: A1
+    Pin pin_cs_;         // Pin 21: ~CS
+    Pin pin_rd_;         // Pin 22: ~RD
+    Pin pin_wr_;         // Pin 23: ~WR
+    Pin pin_vcc_;        // Pin 24: VCC
 
     // Edge tracking
     Level gate_prev_[3] = {Level::HiZ, Level::HiZ, Level::HiZ};

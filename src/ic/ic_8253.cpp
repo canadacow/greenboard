@@ -6,73 +6,71 @@ namespace bench {
 IC_8253::IC_8253() : CallbackComponent("8253") {}
 
 void IC_8253::install(Socket& socket) {
+    auto pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        return s ? s->pin() : Pin{};
+    };
+    auto connect_pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+        return s ? s->pin() : Pin{};
+    };
+
     // Data bus D0-D7 (active during ~CS + ~RD or ~WR).
     // Pin 8=D0, Pin 7=D1, ... Pin 1=D7.
     for (int i = 0; i < 8; ++i)
-        pin_data_[i] = socket.pin_signal(8 - i);
+        pin_data_[i] = pin(8 - i);
 
     // Counter clock inputs.
-    pin_clk_[0] = socket.pin_signal(9);    // CLK0
-    pin_clk_[1] = socket.pin_signal(15);   // CLK1
-    pin_clk_[2] = socket.pin_signal(18);   // CLK2
+    pin_clk_[0] = connect_pin(9);    // CLK0
+    pin_clk_[1] = connect_pin(15);   // CLK1
+    pin_clk_[2] = connect_pin(18);   // CLK2
 
     // Counter outputs.
-    pin_out_[0] = socket.pin_signal(10);   // OUT0 -> IRQ0
-    pin_out_[1] = socket.pin_signal(13);   // OUT1 -> DMA refresh
-    pin_out_[2] = socket.pin_signal(17);   // OUT2 -> speaker
+    pin_out_[0] = pin(10);   // OUT0 -> IRQ0
+    pin_out_[1] = pin(13);   // OUT1 -> DMA refresh
+    pin_out_[2] = pin(17);   // OUT2 -> speaker
 
     // Counter gate inputs.
-    pin_gate_[0] = socket.pin_signal(11);  // GATE0 (tied to +5V)
-    pin_gate_[1] = socket.pin_signal(14);  // GATE1 (tied to +5V)
-    pin_gate_[2] = socket.pin_signal(16);  // GATE2 (PPI PB0)
+    pin_gate_[0] = connect_pin(11);  // GATE0 (tied to +5V)
+    pin_gate_[1] = connect_pin(14);  // GATE1 (tied to +5V)
+    pin_gate_[2] = connect_pin(16);  // GATE2 (PPI PB0)
 
     // Address and control.
-    pin_a0_  = socket.pin_signal(19);      // A0
-    pin_a1_  = socket.pin_signal(20);      // A1
-    pin_cs_  = socket.pin_signal(21);      // ~CS
-    pin_rd_  = socket.pin_signal(22);      // ~RD
-    pin_wr_  = socket.pin_signal(23);      // ~WR
-    pin_vcc_ = socket.pin_signal(24);      // VCC
-
-    // Subscribe to inputs.
-    for (int i = 0; i < 3; ++i) {
-        if (pin_clk_[i])  pin_clk_[i]->connect(this);
-        if (pin_gate_[i]) pin_gate_[i]->connect(this);
-    }
-    if (pin_rd_)  pin_rd_->connect(this);
-    if (pin_wr_)  pin_wr_->connect(this);
-    if (pin_vcc_) pin_vcc_->connect(this);
+    pin_a0_  = pin(19);      // A0
+    pin_a1_  = pin(20);      // A1
+    pin_cs_  = pin(21);      // ~CS
+    pin_rd_  = connect_pin(22);      // ~RD
+    pin_wr_  = connect_pin(23);      // ~WR
+    pin_vcc_ = connect_pin(24);      // VCC
 }
 
 void IC_8253::on_signal_change(bool rising, bool /*falling*/) {
     if (!rising) return;  // compute once per cycle
     // Single-tick model: decrement each tick.
     for (int i = 0; i < 3; ++i) {
-        if (pin_clk_[i])
-            on_clk_falling(i);
+        on_clk_falling(i);
     }
 
     // GATE level changes.
     for (int i = 0; i < 3; ++i) {
-        if (pin_gate_[i]) {
-            Level cur = pin_gate_[i]->level();
-            if (cur != gate_prev_[i])
-                on_gate_change(i, cur == Level::High);
-            gate_prev_[i] = cur;
-        }
+        Level cur = pin_gate_[i].level();
+        if (cur != gate_prev_[i])
+            on_gate_change(i, cur == Level::High);
+        gate_prev_[i] = cur;
     }
 
     // ~WR falling edge: CPU writes to PIT.
-    if (pin_wr_) {
-        Level cur = pin_wr_->level();
+    {
+        Level cur = pin_wr_.level();
         if (cur == Level::Low && wr_prev_ != Level::Low)
             on_write_falling();
         wr_prev_ = cur;
     }
 
     // ~RD falling edge: CPU reads from PIT.
-    if (pin_rd_) {
-        Level cur = pin_rd_->level();
+    {
+        Level cur = pin_rd_.level();
         if (cur == Level::Low && rd_prev_ != Level::Low)
             on_read_falling();
         rd_prev_ = cur;
@@ -85,18 +83,18 @@ void IC_8253::on_signal_change(bool rising, bool /*falling*/) {
 
 void IC_8253::on_write_falling() {
     // Only respond if chip-selected.
-    if (!pin_cs_ || pin_cs_->level() != Level::Low) return;
+    if (pin_cs_.level() != Level::Low) return;
 
     // Read data bus.
     uint8_t data = 0;
     for (int i = 0; i < 8; ++i) {
-        if (pin_data_[i] && pin_data_[i]->level() == Level::High)
+        if (pin_data_[i].level() == Level::High)
             data |= (1 << i);
     }
 
     // Decode address.
-    bool a0 = pin_a0_ && pin_a0_->level() == Level::High;
-    bool a1 = pin_a1_ && pin_a1_->level() == Level::High;
+    bool a0 = pin_a0_.level() == Level::High;
+    bool a1 = pin_a1_.level() == Level::High;
     int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
     if (addr == 3) {
@@ -107,10 +105,10 @@ void IC_8253::on_write_falling() {
 }
 
 void IC_8253::on_read_falling() {
-    if (!pin_cs_ || pin_cs_->level() != Level::Low) return;
+    if (pin_cs_.level() != Level::Low) return;
 
-    bool a0 = pin_a0_ && pin_a0_->level() == Level::High;
-    bool a1 = pin_a1_ && pin_a1_->level() == Level::High;
+    bool a0 = pin_a0_.level() == Level::High;
+    bool a1 = pin_a1_.level() == Level::High;
     int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
     if (addr >= 3) return;  // Control word is write-only.
@@ -119,8 +117,7 @@ void IC_8253::on_read_falling() {
 
     // Drive data bus.
     for (int i = 0; i < 8; ++i) {
-        if (pin_data_[i])
-            pin_data_[i]->drive((data & (1 << i)) ? Level::High : Level::Low);
+        pin_data_[i].drive((data & (1 << i)) ? Level::High : Level::Low);
     }
 }
 
@@ -448,8 +445,7 @@ void IC_8253::on_clk_falling(int ch) {
 // =========================================================================
 
 void IC_8253::update_out(int ch) {
-    if (pin_out_[ch])
-        pin_out_[ch]->drive(channels_[ch].out ? Level::High : Level::Low);
+    pin_out_[ch].drive(channels_[ch].out ? Level::High : Level::Low);
 }
 
 } // namespace bench

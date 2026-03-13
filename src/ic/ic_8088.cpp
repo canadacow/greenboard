@@ -52,47 +52,50 @@ IC_8088::IC_8088(uint16_t start_cs, uint16_t start_ip)
     : FiberComponent("8088"), start_cs_(start_cs), start_ip_(start_ip) {}
 
 void IC_8088::install(Socket& socket) {
+    auto pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        return s ? s->pin() : Pin{};
+    };
+    auto connect_pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+        return s ? s->pin() : Pin{};
+    };
+
     for (int i = 0; i < 8; ++i)
-        pin_ad_[i] = socket.pin_signal(16 - i);
+        pin_ad_[i] = pin(16 - i);
     for (int i = 0; i < 7; ++i)
-        pin_a_upper_[i] = socket.pin_signal(8 - i);
+        pin_a_upper_[i] = pin(8 - i);
     for (int i = 0; i < 5; ++i)
-        pin_a_upper_[7 + i] = socket.pin_signal(39 - i);
+        pin_a_upper_[7 + i] = pin(39 - i);
 
-    pin_s0_ = socket.pin_signal(26);
-    pin_s1_ = socket.pin_signal(27);
-    pin_s2_ = socket.pin_signal(28);
-    pin_qs0_ = socket.pin_signal(25);
-    pin_qs1_ = socket.pin_signal(24);
-    pin_clk_   = socket.pin_signal(19);
-    pin_reset_ = socket.pin_signal(21);
-    pin_ready_ = socket.pin_signal(22);
-    pin_intr_  = socket.pin_signal(18);
-    pin_nmi_   = socket.pin_signal(17);
-    pin_test_  = socket.pin_signal(23);
-    pin_vcc_   = socket.pin_signal(31);
-    pin_lock_  = socket.pin_signal(29);
-    pin_rqgt0_ = socket.pin_signal(30);
-
-    if (pin_clk_)   pin_clk_->connect(this);
-    if (pin_reset_) pin_reset_->connect(this);
-    if (pin_nmi_)   pin_nmi_->connect(this);
-    if (pin_vcc_)   pin_vcc_->connect(this);
+    pin_s0_ = pin(26);
+    pin_s1_ = pin(27);
+    pin_s2_ = pin(28);
+    pin_qs0_ = pin(25);
+    pin_qs1_ = pin(24);
+    pin_clk_   = connect_pin(19);
+    pin_reset_ = connect_pin(21);
+    pin_ready_ = pin(22);
+    pin_intr_  = pin(18);
+    pin_nmi_   = connect_pin(17);
+    pin_test_  = pin(23);
+    pin_vcc_   = connect_pin(31);
+    pin_lock_  = pin(29);
+    pin_rqgt0_ = pin(30);
 }
 
 void IC_8088::on_signal_change(bool /*rising*/, bool /*falling*/) {
     // NMI rising edge detection
-    if (pin_nmi_) {
-        Level cur = pin_nmi_->level();
-        if (cur == Level::High && nmi_prev_ != Level::High)
-            nmi_pending_ = true;
-        nmi_prev_ = cur;
-    }
+    Level cur = pin_nmi_.level();
+    if (cur == Level::High && nmi_prev_ != Level::High)
+        nmi_pending_ = true;
+    nmi_prev_ = cur;
 }
 
 void IC_8088::run() {
     // Wait for VCC.
-    while (!(pin_vcc_ && pin_vcc_->level() == Level::High))
+    while (pin_vcc_.level() != Level::High)
         yield();
     spdlog::info("[8088] VCC detected, waiting for RESET");
 
@@ -101,10 +104,10 @@ void IC_8088::run() {
     // If we missed the pulse entirely (RESET already Low), proceed immediately.
     cpu_reset();
 
-    if (pin_reset_ && pin_reset_->level() == Level::High) {
+    if (pin_reset_.level() == Level::High) {
         // RESET is currently asserted -- wait for it to deassert.
         spdlog::info("[8088] RESET asserted -- CS:IP = {:04X}:{:04X}", start_cs_, start_ip_);
-        while (pin_reset_ && pin_reset_->level() == Level::High)
+        while (pin_reset_.level() == Level::High)
             yield();
     } else {
         // RESET pulse already completed (or never happened).
@@ -116,7 +119,7 @@ void IC_8088::run() {
     drive_status_passive();
 
     for (;;) {
-        if (pin_vcc_ && pin_vcc_->level() != Level::High) break;
+        if (pin_vcc_.level() != Level::High) break;
         on_signal_change(true, true);  // process NMI
         execute();
     }
@@ -124,10 +127,10 @@ void IC_8088::run() {
     drive_status_passive();
     release_data();
     for (int i = 0; i < 12; ++i)
-        if (pin_a_upper_[i]) pin_a_upper_[i]->release();
-    if (pin_lock_) pin_lock_->release();
-    if (pin_qs0_) pin_qs0_->release();
-    if (pin_qs1_) pin_qs1_->release();
+        pin_a_upper_[i].release();
+    pin_lock_.release();
+    pin_qs0_.release();
+    pin_qs1_.release();
 }
 
 // ========================================================================
@@ -136,42 +139,39 @@ void IC_8088::run() {
 
 void IC_8088::drive_address(uint32_t address) {
     for (int i = 0; i < 8; ++i)
-        if (pin_ad_[i])
-            pin_ad_[i]->drive((address >> i) & 1 ? Level::High : Level::Low);
+        pin_ad_[i].drive((address >> i) & 1 ? Level::High : Level::Low);
     for (int i = 0; i < 12; ++i)
-        if (pin_a_upper_[i])
-            pin_a_upper_[i]->drive((address >> (i + 8)) & 1 ? Level::High : Level::Low);
+        pin_a_upper_[i].drive((address >> (i + 8)) & 1 ? Level::High : Level::Low);
 }
 
 void IC_8088::drive_data(uint8_t value) {
     for (int i = 0; i < 8; ++i)
-        if (pin_ad_[i])
-            pin_ad_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
+        pin_ad_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
 }
 
 uint8_t IC_8088::read_data() {
     uint8_t val = 0;
     for (int i = 0; i < 8; ++i)
-        if (pin_ad_[i] && pin_ad_[i]->level() == Level::High)
+        if (pin_ad_[i].level() == Level::High)
             val |= (1 << i);
     return val;
 }
 
 void IC_8088::release_data() {
     for (int i = 0; i < 8; ++i)
-        if (pin_ad_[i]) pin_ad_[i]->release();
+        pin_ad_[i].release();
 }
 
 void IC_8088::drive_status(uint8_t s2, uint8_t s1, uint8_t s0) {
-    if (pin_s0_) pin_s0_->drive(s0 ? Level::High : Level::Low);
-    if (pin_s1_) pin_s1_->drive(s1 ? Level::High : Level::Low);
-    if (pin_s2_) pin_s2_->drive(s2 ? Level::High : Level::Low);
+    pin_s0_.drive(s0 ? Level::High : Level::Low);
+    pin_s1_.drive(s1 ? Level::High : Level::Low);
+    pin_s2_.drive(s2 ? Level::High : Level::Low);
 }
 
 void IC_8088::drive_status_passive() {
-    if (pin_s0_) pin_s0_->drive(Level::High);
-    if (pin_s1_) pin_s1_->drive(Level::High);
-    if (pin_s2_) pin_s2_->drive(Level::High);
+    pin_s0_.drive(Level::High);
+    pin_s1_.drive(Level::High);
+    pin_s2_.drive(Level::High);
 }
 
 void IC_8088::full_wait_clk() {
@@ -207,7 +207,7 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     full_wait_clk();                                             // T2
 
     // Tw -- wait states while READY is low
-    while (pin_ready_ && pin_ready_->level() != Level::High) {
+    while (pin_ready_.level() != Level::High) {
         full_wait_clk();                                         // Tw
     }
 
@@ -234,7 +234,7 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     full_wait_clk();                                             // T2
 
     // Tw -- wait states while READY is low
-    while (pin_ready_ && pin_ready_->level() != Level::High) {
+    while (pin_ready_.level() != Level::High) {
         full_wait_clk();                                         // Tw
     }
 
@@ -270,7 +270,7 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
     full_wait_clk();                                             // T2
 
     // Tw -- wait states while READY is low
-    while (pin_ready_ && pin_ready_->level() != Level::High) {
+    while (pin_ready_.level() != Level::High) {
         full_wait_clk();                                         // Tw
     }
 
@@ -297,7 +297,7 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     full_wait_clk();                                             // T2
 
     // Tw -- wait states while READY is low
-    while (pin_ready_ && pin_ready_->level() != Level::High) {
+    while (pin_ready_.level() != Level::High) {
         full_wait_clk();                                         // Tw
     }
 
@@ -1213,7 +1213,7 @@ void IC_8088::execute() {
         if (nmi_pending_) {
             nmi_pending_ = false;
             pc_interrupt(2);
-        } else if (pin_intr_ && pin_intr_->level() == Level::High) {
+        } else if (pin_intr_.level() == Level::High) {
             // INTA bus cycle: two back-to-back INTA pulses.
             // Each pulse is a full 4-T-state bus cycle, same as bus_read_byte.
 

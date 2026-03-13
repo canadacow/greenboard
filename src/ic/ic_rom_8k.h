@@ -46,10 +46,10 @@ private:
 
     std::array<uint8_t, 8192> rom_{};
 
-    Signal* pin_a_[13] = {};  // A0(pin8)..A12(pin21)
-    Signal* pin_d_[8]  = {};  // D0(pin9)..D7(pin17)
-    Signal* pin_cs_    = nullptr;  // Pin 20: ~CS
-    Signal* pin_vcc_   = nullptr;  // Pin 24: VCC
+    Pin pin_a_[13];  // A0(pin8)..A12(pin21)
+    Pin pin_d_[8];   // D0(pin9)..D7(pin17)
+    Pin pin_cs_;     // Pin 20: ~CS
+    Pin pin_vcc_;    // Pin 24: VCC
     bool    driving_   = false;    // true when outputs are being driven
 };
 

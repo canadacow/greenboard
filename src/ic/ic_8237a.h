@@ -58,32 +58,32 @@ private:
     uint8_t read_data() const;
 
     // Data bus pins: DB0=pin30, DB1=pin29, ..., DB5=pin23, DB4=pin26, ..., DB7=pin21
-    Signal* pin_db_[8] = {};
+    Pin pin_db_[8];
 
     // Address pins (directly connected to bus for register select)
-    Signal* pin_a_[8] = {};   // A0=pin32 .. A3=pin35, A4=pin37 .. A7=pin40
+    Pin pin_a_[8];   // A0=pin32 .. A3=pin35, A4=pin37 .. A7=pin40
 
     // Control inputs
-    Signal* pin_ior_   = nullptr;  // Pin  1: ~IOR
-    Signal* pin_iow_   = nullptr;  // Pin  2: ~IOW
-    Signal* pin_cs_    = nullptr;  // Pin 11: ~CS
-    Signal* pin_clk_   = nullptr;  // Pin 12: CLK
-    Signal* pin_reset_ = nullptr;  // Pin 13: RESET
-    Signal* pin_ready_ = nullptr;  // Pin  6: READY
-    Signal* pin_hlda_  = nullptr;  // Pin  7: HLDA
-    Signal* pin_eop_   = nullptr;  // Pin 36: ~EOP
-    Signal* pin_vcc_   = nullptr;  // Pin  5: VCC
+    Pin pin_ior_;    // Pin  1: ~IOR
+    Pin pin_iow_;    // Pin  2: ~IOW
+    Pin pin_cs_;     // Pin 11: ~CS
+    Pin pin_clk_;    // Pin 12: CLK
+    Pin pin_reset_;  // Pin 13: RESET
+    Pin pin_ready_;  // Pin  6: READY
+    Pin pin_hlda_;   // Pin  7: HLDA
+    Pin pin_eop_;    // Pin 36: ~EOP
+    Pin pin_vcc_;    // Pin  5: VCC
 
     // DREQ inputs
-    Signal* pin_dreq_[4] = {};  // DREQ0=pin19, DREQ1=pin18, DREQ2=pin17, DREQ3=pin16
+    Pin pin_dreq_[4];  // DREQ0=pin19, DREQ1=pin18, DREQ2=pin17, DREQ3=pin16
 
     // Outputs
-    Signal* pin_hrq_   = nullptr;  // Pin 10: HRQ
-    Signal* pin_dack_[4] = {};     // DACK0=pin25, DACK1=pin24, DACK2=pin14, DACK3=pin15
-    Signal* pin_memr_  = nullptr;  // Pin  3: ~MEMR
-    Signal* pin_memw_  = nullptr;  // Pin  4: ~MEMW
-    Signal* pin_adstb_ = nullptr;  // Pin  8: ADSTB
-    Signal* pin_aen_   = nullptr;  // Pin  9: AEN
+    Pin pin_hrq_;      // Pin 10: HRQ
+    Pin pin_dack_[4];  // DACK0=pin25, DACK1=pin24, DACK2=pin14, DACK3=pin15
+    Pin pin_memr_;     // Pin  3: ~MEMR
+    Pin pin_memw_;     // Pin  4: ~MEMW
+    Pin pin_adstb_;    // Pin  8: ADSTB
+    Pin pin_aen_;      // Pin  9: AEN
 
     // Channel state
     struct Channel {

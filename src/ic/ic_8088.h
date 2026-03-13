@@ -114,35 +114,35 @@ private:
     int prefetch_len_ = 0;
     uint32_t prefetch_base_ = 0;
 
-    // --- Pin pointers ---
+    // --- Pin handles ---
 
     // Multiplexed address/data: AD0=pin16 .. AD7=pin9
-    Signal* pin_ad_[8] = {};
+    Pin pin_ad_[8];
 
     // Upper address: A8=pin8 .. A14=pin2, A15=pin39 .. A19=pin35
-    Signal* pin_a_upper_[12] = {};  // A8..A19
+    Pin pin_a_upper_[12];  // A8..A19
 
     // Status outputs to 8288
-    Signal* pin_s0_  = nullptr;   // Pin 26: ~S0
-    Signal* pin_s1_  = nullptr;   // Pin 27: ~S1
-    Signal* pin_s2_  = nullptr;   // Pin 28: ~S2
+    Pin pin_s0_;    // Pin 26: ~S0
+    Pin pin_s1_;    // Pin 27: ~S1
+    Pin pin_s2_;    // Pin 28: ~S2
 
     // Queue status outputs
-    Signal* pin_qs0_ = nullptr;   // Pin 25: QS0
-    Signal* pin_qs1_ = nullptr;   // Pin 24: QS1
+    Pin pin_qs0_;   // Pin 25: QS0
+    Pin pin_qs1_;   // Pin 24: QS1
 
     // Control inputs
-    Signal* pin_clk_   = nullptr; // Pin 19: CLK
-    Signal* pin_reset_ = nullptr; // Pin 21: RESET
-    Signal* pin_ready_ = nullptr; // Pin 22: READY
-    Signal* pin_intr_  = nullptr; // Pin 18: INTR
-    Signal* pin_nmi_   = nullptr; // Pin 17: NMI
-    Signal* pin_test_  = nullptr; // Pin 23: ~TEST
-    Signal* pin_vcc_   = nullptr; // Pin 31/40: VCC
+    Pin pin_clk_;   // Pin 19: CLK
+    Pin pin_reset_; // Pin 21: RESET
+    Pin pin_ready_; // Pin 22: READY
+    Pin pin_intr_;  // Pin 18: INTR
+    Pin pin_nmi_;   // Pin 17: NMI
+    Pin pin_test_;  // Pin 23: ~TEST
+    Pin pin_vcc_;   // Pin 31/40: VCC
 
     // Outputs
-    Signal* pin_lock_  = nullptr; // Pin 29: ~LOCK
-    Signal* pin_rqgt0_ = nullptr; // Pin 30: ~RQ/~GT0
+    Pin pin_lock_;  // Pin 29: ~LOCK
+    Pin pin_rqgt0_; // Pin 30: ~RQ/~GT0
 
     // --- CPU state (from 8086tiny, adapted) ---
 

@@ -62,19 +62,21 @@ class BusGlue : public CallbackComponent {
 public:
     BusGlue() : CallbackComponent("BusGlue") {}
 
-    Signal** xa = nullptr;       // XA0-XA19 (20 pointers) -- latched address from 74S373s
-    Signal** d = nullptr;        // D0-D7 (8 pointers) -- system data bus
-    Signal* s0 = nullptr;
-    Signal* s1 = nullptr;
-    Signal* s2 = nullptr;
-    Signal* pin_clk = nullptr;   // CLK input (subscribe to this)
+    Pin xa[20];                  // XA0-XA19 -- latched address from 74S373s
+    Pin d[8];                    // D0-D7 -- system data bus
+    Pin pin_s0, pin_s1, pin_s2;
     std::unique_ptr<uint8_t[]> mem = std::make_unique<uint8_t[]>(1 << 20);
     std::unique_ptr<uint8_t[]> io  = std::make_unique<uint8_t[]>(1 << 16);
 
     Signal* pic_ir[8] = {};       // IR0-IR7 (for test trigger port 0xF0)
 
-    void subscribe_clk() {
-        if (pin_clk) pin_clk->connect(this);
+    void init(Signal* xa_sigs[], Signal* d_sigs[], Signal& s0, Signal& s1, Signal& s2, Signal& clk) {
+        for (int i = 0; i < 20; ++i) xa[i] = xa_sigs[i]->pin();
+        for (int i = 0; i < 8; ++i)  d[i]  = d_sigs[i]->pin();
+        pin_s0 = s0.pin();
+        pin_s1 = s1.pin();
+        pin_s2 = s2.pin();
+        clk.connect(this);
     }
 
     // T-state machine
@@ -99,16 +101,16 @@ protected:
 
 private:
     uint8_t decode_status() {
-        uint8_t v2 = (s2->level() == Level::High) ? 1 : 0;
-        uint8_t v1 = (s1->level() == Level::High) ? 1 : 0;
-        uint8_t v0 = (s0->level() == Level::High) ? 1 : 0;
+        uint8_t v2 = (pin_s2.level() == Level::High) ? 1 : 0;
+        uint8_t v1 = (pin_s1.level() == Level::High) ? 1 : 0;
+        uint8_t v0 = (pin_s0.level() == Level::High) ? 1 : 0;
         return (v2 << 2) | (v1 << 1) | v0;
     }
 
     uint32_t read_address() {
         uint32_t addr = 0;
         for (int i = 0; i < 20; ++i)
-            if (xa[i] && xa[i]->level() == Level::High)
+            if (xa[i].level() == Level::High)
                 addr |= (1u << i);
         return addr;
     }
@@ -116,20 +118,19 @@ private:
     uint8_t read_d() {
         uint8_t val = 0;
         for (int i = 0; i < 8; ++i)
-            if (d[i] && d[i]->level() == Level::High)
+            if (d[i].level() == Level::High)
                 val |= (1u << i);
         return val;
     }
 
     void drive_d(uint8_t val) {
         for (int i = 0; i < 8; ++i)
-            if (d[i])
-                d[i]->drive((val >> i) & 1 ? Level::High : Level::Low);
+            d[i].drive((val >> i) & 1 ? Level::High : Level::Low);
     }
 
     void release_d() {
         for (int i = 0; i < 8; ++i)
-            if (d[i]) d[i]->release();
+            d[i].release();
     }
 
     bool is_read_cycle()  { return cycle_type == 0 || cycle_type == 1 || cycle_type == 4 || cycle_type == 5; }
@@ -718,14 +719,8 @@ int main() {
     for (int i = 0; i < 8; ++i)  d_ptrs[i] = d_arr[i];
 
     BusGlue bus;
-    bus.xa = xa_ptrs;
-    bus.d = d_ptrs;
-    bus.s0 = &s0;
-    bus.s1 = &s1;
-    bus.s2 = &s2;
-    bus.pin_clk = &clk;
+    bus.init(xa_ptrs, d_ptrs, s0, s1, s2, clk);
     for (int i = 0; i < 8; ++i) bus.pic_ir[i] = irq_arr[i];
-    bus.subscribe_clk();
 
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
     // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.

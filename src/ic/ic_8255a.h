@@ -60,26 +60,26 @@ private:
     void write_port_c(uint8_t value);
 
     // Data bus pins D0-D7
-    Signal* pin_d_[8] = {};
+    Pin pin_d_[8];
 
     // Port A pins (PA0=pin4, PA1=pin3, PA2=pin2, PA3=pin1, PA4=pin40, ..., PA7=pin37)
-    Signal* pin_pa_[8] = {};
+    Pin pin_pa_[8];
 
     // Port B pins (PB0=pin18 .. PB7=pin25)
-    Signal* pin_pb_[8] = {};
+    Pin pin_pb_[8];
 
     // Port C pins (PC0=pin14, PC1=pin15, PC2=pin16, PC3=pin17,
     //              PC4=pin13, PC5=pin12, PC6=pin11, PC7=pin10)
-    Signal* pin_pc_[8] = {};
+    Pin pin_pc_[8];
 
     // Control pins
-    Signal* pin_cs_    = nullptr;  // Pin  6: ~CS
-    Signal* pin_rd_    = nullptr;  // Pin  5: ~RD
-    Signal* pin_wr_    = nullptr;  // Pin 36: ~WR
-    Signal* pin_a0_    = nullptr;  // Pin  9: A0
-    Signal* pin_a1_    = nullptr;  // Pin  8: A1
-    Signal* pin_reset_ = nullptr;  // Pin 35: RESET
-    Signal* pin_vcc_   = nullptr;  // Pin 26: VCC
+    Pin pin_cs_;     // Pin  6: ~CS
+    Pin pin_rd_;     // Pin  5: ~RD
+    Pin pin_wr_;     // Pin 36: ~WR
+    Pin pin_a0_;     // Pin  9: A0
+    Pin pin_a1_;     // Pin  8: A1
+    Pin pin_reset_;  // Pin 35: RESET
+    Pin pin_vcc_;    // Pin 26: VCC
 
     // Internal state
     uint8_t control_ = 0x9B;  // default: all ports input

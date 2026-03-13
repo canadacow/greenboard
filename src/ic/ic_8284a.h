@@ -40,17 +40,17 @@ protected:
 
 private:
     // Output pins
-    Signal* pin_osc_   = nullptr;
-    Signal* pin_clk_   = nullptr;
-    Signal* pin_pclk_  = nullptr;
-    Signal* pin_ready_ = nullptr;
-    Signal* pin_reset_ = nullptr;
+    Pin pin_osc_;
+    Pin pin_clk_;
+    Pin pin_pclk_;
+    Pin pin_ready_;
+    Pin pin_reset_;
 
     // Input pins
-    Signal* pin_res_   = nullptr;
-    Signal* pin_rdy1_  = nullptr;
-    Signal* pin_aen1_  = nullptr;
-    Signal* pin_vcc_   = nullptr;
+    Pin pin_res_;
+    Pin pin_rdy1_;
+    Pin pin_aen1_;
+    Pin pin_vcc_;
 
     Scheduler* scheduler_ = nullptr;
     uint64_t clk_cycles_ = 0;

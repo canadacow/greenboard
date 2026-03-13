@@ -48,19 +48,19 @@ private:
     void clear_all();
     void drive_outputs();
 
-    // Pin signals
-    Signal* pin_clr_ = nullptr;   // Pin 1: ~CLR
-    Signal* pin_clk_ = nullptr;   // Pin 9: CLK
-    Signal* pin_vcc_ = nullptr;   // Pin 16: VCC
+    // Pin handles
+    Pin pin_clr_;    // Pin 1: ~CLR
+    Pin pin_clk_;    // Pin 9: CLK
+    Pin pin_vcc_;    // Pin 16: VCC
 
     // D inputs: 1D=pin4, 2D=pin5, 3D=pin12, 4D=pin15
-    Signal* pin_d_[4] = {};
+    Pin pin_d_[4];
 
     // Q outputs: 1Q=pin2, 2Q=pin7, 3Q=pin10, 4Q=pin14
-    Signal* pin_q_[4] = {};
+    Pin pin_q_[4];
 
     // ~Q outputs: ~1Q=pin3, ~2Q=pin6, ~3Q=pin11, ~4Q=pin13
-    Signal* pin_nq_[4] = {};
+    Pin pin_nq_[4];
 
     // Internal state
     bool q_[4] = {};

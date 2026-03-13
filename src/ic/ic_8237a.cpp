@@ -6,75 +6,56 @@ namespace bench {
 IC_8237A::IC_8237A() : CallbackComponent("8237A") {}
 
 void IC_8237A::install(Socket& socket) {
-    // Data bus: DB0=pin30 .. DB5=pin23 (skipping pin24,25=DACK), DB4=pin26, DB7=pin21
-    pin_db_[0] = socket.pin_signal(30);
-    pin_db_[1] = socket.pin_signal(29);
-    pin_db_[2] = socket.pin_signal(28);
-    pin_db_[3] = socket.pin_signal(27);
-    pin_db_[4] = socket.pin_signal(26);
-    pin_db_[5] = socket.pin_signal(23);
-    pin_db_[6] = socket.pin_signal(22);
-    pin_db_[7] = socket.pin_signal(21);
+    auto pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        return s ? s->pin() : Pin{};
+    };
+    auto connect_pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+        return s ? s->pin() : Pin{};
+    };
 
-    // Address pins: A0-A3 = pin32-35, A4-A7 = pin37-40
-    pin_a_[0] = socket.pin_signal(32);
-    pin_a_[1] = socket.pin_signal(33);
-    pin_a_[2] = socket.pin_signal(34);
-    pin_a_[3] = socket.pin_signal(35);
-    pin_a_[4] = socket.pin_signal(37);
-    pin_a_[5] = socket.pin_signal(38);
-    pin_a_[6] = socket.pin_signal(39);
-    pin_a_[7] = socket.pin_signal(40);
+    // Data bus
+    pin_db_[0] = pin(30); pin_db_[1] = pin(29); pin_db_[2] = pin(28); pin_db_[3] = pin(27);
+    pin_db_[4] = pin(26); pin_db_[5] = pin(23); pin_db_[6] = pin(22); pin_db_[7] = pin(21);
+
+    // Address
+    pin_a_[0] = pin(32); pin_a_[1] = pin(33); pin_a_[2] = pin(34); pin_a_[3] = pin(35);
+    pin_a_[4] = pin(37); pin_a_[5] = pin(38); pin_a_[6] = pin(39); pin_a_[7] = pin(40);
 
     // Control
-    pin_ior_   = socket.pin_signal(1);
-    pin_iow_   = socket.pin_signal(2);
-    pin_cs_    = socket.pin_signal(11);
-    pin_clk_   = socket.pin_signal(12);
-    pin_reset_ = socket.pin_signal(13);
-    pin_ready_ = socket.pin_signal(6);
-    pin_hlda_  = socket.pin_signal(7);
-    pin_eop_   = socket.pin_signal(36);
-    pin_vcc_   = socket.pin_signal(5);
+    pin_ior_   = connect_pin(1);
+    pin_iow_   = connect_pin(2);
+    pin_cs_    = connect_pin(11);
+    pin_clk_   = connect_pin(12);
+    pin_reset_ = connect_pin(13);
+    pin_ready_ = pin(6);
+    pin_hlda_  = connect_pin(7);
+    pin_eop_   = pin(36);
+    pin_vcc_   = connect_pin(5);
 
-    // DREQ inputs: DREQ0=pin19, DREQ1=pin18, DREQ2=pin17, DREQ3=pin16
-    pin_dreq_[0] = socket.pin_signal(19);
-    pin_dreq_[1] = socket.pin_signal(18);
-    pin_dreq_[2] = socket.pin_signal(17);
-    pin_dreq_[3] = socket.pin_signal(16);
+    // DREQ inputs
+    for (int i = 0; i < 4; ++i)
+        pin_dreq_[i] = connect_pin(19 - i);
 
     // Outputs
-    pin_hrq_   = socket.pin_signal(10);
-    pin_dack_[0] = socket.pin_signal(25);  // ~DACK0
-    pin_dack_[1] = socket.pin_signal(24);  // ~DACK1
-    pin_dack_[2] = socket.pin_signal(14);  // ~DACK2
-    pin_dack_[3] = socket.pin_signal(15);  // ~DACK3
-    pin_memr_  = socket.pin_signal(3);
-    pin_memw_  = socket.pin_signal(4);
-    pin_adstb_ = socket.pin_signal(8);
-    pin_aen_   = socket.pin_signal(9);
-
-    // Subscribe to inputs
-    if (pin_cs_)    pin_cs_->connect(this);
-    if (pin_ior_)   pin_ior_->connect(this);
-    if (pin_iow_)   pin_iow_->connect(this);
-    if (pin_clk_)   pin_clk_->connect(this);
-    if (pin_reset_) pin_reset_->connect(this);
-    if (pin_hlda_)  pin_hlda_->connect(this);
-    if (pin_vcc_)   pin_vcc_->connect(this);
-    for (int i = 0; i < 4; ++i) {
-        if (pin_dreq_[i]) pin_dreq_[i]->connect(this);
-    }
-
+    pin_hrq_   = pin(10);
+    pin_dack_[0] = pin(25); pin_dack_[1] = pin(24); pin_dack_[2] = pin(14); pin_dack_[3] = pin(15);
+    pin_memr_  = pin(3);
+    pin_memw_  = pin(4);
+    pin_adstb_ = pin(8);
+    pin_aen_   = pin(9);
+}
 
 void IC_8237A::on_signal_change(bool rising, bool /*falling*/) {
     if (!rising) return;  // compute once per cycle
-    Level reset_cur = pin_reset_ ? pin_reset_->level() : Level::HiZ;
-    Level iow_cur = pin_iow_ ? pin_iow_->level() : Level::HiZ;
-    Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;
-    Level ior_cur = pin_ior_ ? pin_ior_->level() : Level::HiZ;
-    Level clk_cur = pin_clk_ ? pin_clk_->level() : Level::HiZ;
-    Level hlda_cur = pin_hlda_ ? pin_hlda_->level() : Level::HiZ;
+    Level reset_cur = pin_reset_.level();
+    Level iow_cur = pin_iow_.level();
+    Level cs_cur = pin_cs_.level();
+    Level ior_cur = pin_ior_.level();
+    Level clk_cur = pin_clk_.level();
+    Level hlda_cur = pin_hlda_.level();
 
     // RESET rising edge
     if (reset_cur == Level::High && reset_prev_ != Level::High)
@@ -134,12 +115,12 @@ void IC_8237A::on_reset() {
     }
 
     // Deassert outputs
-    if (pin_hrq_) pin_hrq_->drive(Level::Low);
+    pin_hrq_.drive(Level::Low);
     for (int i = 0; i < 4; ++i) {
-        if (pin_dack_[i]) pin_dack_[i]->drive(Level::High);  // active low
+        pin_dack_[i].drive(Level::High);  // active low
     }
-    if (pin_aen_)   pin_aen_->drive(Level::Low);
-    if (pin_adstb_) pin_adstb_->drive(Level::Low);
+    pin_aen_.drive(Level::Low);
+    pin_adstb_.drive(Level::Low);
 
     spdlog::debug("[8237A] reset");
 }
@@ -149,7 +130,7 @@ void IC_8237A::on_bus_write() {
     // Read A0-A3 for register select
     uint8_t reg = 0;
     for (int i = 0; i < 4; ++i) {
-        if (pin_a_[i] && pin_a_[i]->level() == Level::High)
+        if (pin_a_[i].level() == Level::High)
             reg |= (1 << i);
     }
 
@@ -232,7 +213,7 @@ void IC_8237A::on_bus_write() {
 void IC_8237A::on_bus_read() {
     uint8_t reg = 0;
     for (int i = 0; i < 4; ++i) {
-        if (pin_a_[i] && pin_a_[i]->level() == Level::High)
+        if (pin_a_[i].level() == Level::High)
             reg |= (1 << i);
     }
 
@@ -260,7 +241,7 @@ void IC_8237A::on_bus_read() {
             uint8_t s = 0;
             for (int i = 0; i < 4; ++i) {
                 if (ch_[i].tc_reached) s |= (1 << i);
-                if (pin_dreq_[i] && pin_dreq_[i]->level() == Level::High)
+                if (pin_dreq_[i].level() == Level::High)
                     s |= (1 << (i + 4));
             }
             drive_data(s);
@@ -286,12 +267,12 @@ void IC_8237A::evaluate_dreq() {
     // Fixed priority: CH0 highest
     for (int i = 0; i < 4; ++i) {
         if (ch_[i].masked) continue;
-        bool dreq = (pin_dreq_[i] && pin_dreq_[i]->level() == Level::High) || ch_[i].request;
+        bool dreq = (pin_dreq_[i].level() == Level::High) || ch_[i].request;
         if (dreq) {
             // Assert HRQ, wait for HLDA
             active_ch_ = i;
             state_ = State::RequestPending;
-            if (pin_hrq_) pin_hrq_->drive(Level::High);
+            pin_hrq_.drive(Level::High);
             return;
         }
     }
@@ -303,33 +284,30 @@ void IC_8237A::on_clk_falling() {
     auto& ch = ch_[active_ch_];
 
     // Assert ~DACK for active channel
-    if (pin_dack_[active_ch_])
-        pin_dack_[active_ch_]->drive(Level::Low);  // active low
+    pin_dack_[active_ch_].drive(Level::Low);  // active low
 
     // Enable address bus and strobe
-    if (pin_aen_) pin_aen_->drive(Level::High);
+    pin_aen_.drive(Level::High);
 
     // Drive address on A0-A7 (lower 8 bits of current address)
     for (int i = 0; i < 8; ++i) {
-        if (pin_a_[i])
-            pin_a_[i]->drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
+        pin_a_[i].drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
     }
 
     // Strobe upper address onto data bus (for 74LS373 latch)
-    if (pin_adstb_) pin_adstb_->drive(Level::High);
+    pin_adstb_.drive(Level::High);
     for (int i = 0; i < 8; ++i) {
-        if (pin_db_[i])
-            pin_db_[i]->drive((ch.current_address >> (i + 8)) & 1 ? Level::High : Level::Low);
+        pin_db_[i].drive((ch.current_address >> (i + 8)) & 1 ? Level::High : Level::Low);
     }
-    if (pin_adstb_) pin_adstb_->drive(Level::Low);
+    pin_adstb_.drive(Level::Low);
 
     // Drive appropriate memory strobe based on transfer type
     uint8_t transfer_type = (ch.mode >> 2) & 0x03;
     // 00=verify, 01=write (IO->mem), 10=read (mem->IO)
     if (transfer_type == 0x01) {
-        if (pin_memw_) pin_memw_->drive(Level::Low);
+        pin_memw_.drive(Level::Low);
     } else if (transfer_type == 0x02) {
-        if (pin_memr_) pin_memr_->drive(Level::Low);
+        pin_memr_.drive(Level::Low);
     }
 
     // Update address and count
@@ -344,10 +322,8 @@ void IC_8237A::on_clk_falling() {
         ch.tc_reached = true;
 
         // Pulse ~EOP
-        if (pin_eop_) {
-            pin_eop_->drive(Level::Low);
-            pin_eop_->drive(Level::High);
-        }
+        pin_eop_.drive(Level::Low);
+        pin_eop_.drive(Level::High);
 
         // Auto-initialize: reload base values
         bool auto_init = (ch.mode & 0x10) != 0;
@@ -362,24 +338,23 @@ void IC_8237A::on_clk_falling() {
     }
 
     // Deassert memory strobes
-    if (pin_memr_) pin_memr_->drive(Level::High);
-    if (pin_memw_) pin_memw_->drive(Level::High);
+    pin_memr_.drive(Level::High);
+    pin_memw_.drive(Level::High);
 
     // Deassert DACK
-    if (pin_dack_[active_ch_])
-        pin_dack_[active_ch_]->drive(Level::High);
+    pin_dack_[active_ch_].drive(Level::High);
 
     // For single transfer mode, release bus after each byte
     uint8_t mode_type = (ch.mode >> 6) & 0x03;
     // 00=demand, 01=single, 10=block, 11=cascade
     if (mode_type == 0x01 || ch.tc_reached) {
         // Release bus
-        if (pin_hrq_) pin_hrq_->drive(Level::Low);
-        if (pin_aen_) pin_aen_->drive(Level::Low);
+        pin_hrq_.drive(Level::Low);
+        pin_aen_.drive(Level::Low);
 
         // Release address pins
         for (int i = 0; i < 8; ++i) {
-            if (pin_a_[i]) pin_a_[i]->release();
+            pin_a_[i].release();
         }
         release_data();
 
@@ -394,22 +369,20 @@ void IC_8237A::on_clk_falling() {
 
 void IC_8237A::drive_data(uint8_t value) {
     for (int i = 0; i < 8; ++i) {
-        if (pin_db_[i])
-            pin_db_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);
+        pin_db_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
     }
 }
 
 void IC_8237A::release_data() {
     for (int i = 0; i < 8; ++i) {
-        if (pin_db_[i])
-            pin_db_[i]->release();
+        pin_db_[i].release();
     }
 }
 
 uint8_t IC_8237A::read_data() const {
     uint8_t val = 0;
     for (int i = 0; i < 8; ++i) {
-        if (pin_db_[i] && pin_db_[i]->level() == Level::High)
+        if (pin_db_[i].level() == Level::High)
             val |= (1 << i);
     }
     return val;

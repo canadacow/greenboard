@@ -6,56 +6,54 @@ namespace bench {
 IC_74S175::IC_74S175() : InlineComponent("74S175") {}
 
 void IC_74S175::install(Socket& socket) {
-    pin_clr_ = socket.pin_signal(1);    // ~CLR
-    pin_clk_ = socket.pin_signal(9);    // CLK
-    pin_vcc_ = socket.pin_signal(16);   // VCC
+    auto pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        return s ? s->pin() : Pin{};
+    };
+    auto connect_pin = [&](int p) -> Pin {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+        return s ? s->pin() : Pin{};
+    };
 
-    // D inputs
-    pin_d_[0] = socket.pin_signal(4);   // 1D
-    pin_d_[1] = socket.pin_signal(5);   // 2D
-    pin_d_[2] = socket.pin_signal(12);  // 3D
-    pin_d_[3] = socket.pin_signal(15);  // 4D
+    pin_clr_ = connect_pin(1);
+    pin_clk_ = connect_pin(9);
+    pin_vcc_ = connect_pin(16);
 
-    // Q outputs
-    pin_q_[0] = socket.pin_signal(2);   // 1Q
-    pin_q_[1] = socket.pin_signal(7);   // 2Q
-    pin_q_[2] = socket.pin_signal(10);  // 3Q
-    pin_q_[3] = socket.pin_signal(14);  // 4Q
+    pin_d_[0] = pin(4);
+    pin_d_[1] = pin(5);
+    pin_d_[2] = pin(12);
+    pin_d_[3] = pin(15);
 
-    // ~Q outputs
-    pin_nq_[0] = socket.pin_signal(3);  // ~1Q
-    pin_nq_[1] = socket.pin_signal(6);  // ~2Q
-    pin_nq_[2] = socket.pin_signal(11); // ~3Q
-    pin_nq_[3] = socket.pin_signal(13); // ~4Q
+    pin_q_[0] = pin(2);
+    pin_q_[1] = pin(7);
+    pin_q_[2] = pin(10);
+    pin_q_[3] = pin(14);
 
-    // Subscribe to clock and clear.
-    if (pin_clk_) subscribe_to(*pin_clk_);
-    if (pin_clr_) subscribe_to(*pin_clr_);
-    if (pin_vcc_) subscribe_to(*pin_vcc_);
+    pin_nq_[0] = pin(3);
+    pin_nq_[1] = pin(6);
+    pin_nq_[2] = pin(11);
+    pin_nq_[3] = pin(13);
 }
 
 void IC_74S175::on_signal_change(bool rising, bool /*falling*/) {
     if (!rising) return;  // only process on rising half
 
     // ~CLR: async clear when driven Low.
-    if (pin_clr_) {
-        Level cur = pin_clr_->level();
-        if (cur == Level::Low && clr_prev_ != Level::Low)
-            clear_all();
-        clr_prev_ = cur;
-    }
+    Level cur = pin_clr_.level();
+    if (cur == Level::Low && clr_prev_ != Level::Low)
+        clear_all();
+    clr_prev_ = cur;
 
     // Latch D inputs on rising edge.
-    if (pin_clk_) {
-        if (!pin_clr_ || pin_clr_->level() != Level::Low)
-            on_clk_rising();
-    }
+    if (pin_clr_.level() != Level::Low)
+        on_clk_rising();
 }
 
 void IC_74S175::on_clk_rising() {
     // Sample all D inputs and update Q state.
     for (int i = 0; i < 4; ++i) {
-        q_[i] = pin_d_[i] && pin_d_[i]->level() == Level::High;
+        q_[i] = pin_d_[i].level() == Level::High;
     }
     drive_outputs();
 }
@@ -68,8 +66,8 @@ void IC_74S175::clear_all() {
 
 void IC_74S175::drive_outputs() {
     for (int i = 0; i < 4; ++i) {
-        if (pin_q_[i])  pin_q_[i]->drive(q_[i] ? Level::High : Level::Low);
-        if (pin_nq_[i]) pin_nq_[i]->drive(q_[i] ? Level::Low : Level::High);
+        pin_q_[i].drive(q_[i] ? Level::High : Level::Low);
+        pin_nq_[i].drive(q_[i] ? Level::Low : Level::High);
     }
 }
 
