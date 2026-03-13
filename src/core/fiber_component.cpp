@@ -37,7 +37,7 @@ void FiberComponent::run() {
     on_power_on();
     for (;;) {
         yield();
-        on_signal_change();
+        on_signal_change(true, true);
     }
 }
 

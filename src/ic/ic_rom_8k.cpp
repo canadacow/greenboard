@@ -69,7 +69,7 @@ void IC_ROM_8K::on_power_off() {
     }
 }
 
-void IC_ROM_8K::on_signal_change() {
+void IC_ROM_8K::on_signal_change(bool /*rising*/, bool /*falling*/) {
     update_outputs();
 }
 

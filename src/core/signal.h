@@ -21,6 +21,7 @@ struct SignalPool {
     static constexpr int MAX_SIGNALS = 512;
     alignas(64) static Level current[MAX_SIGNALS];
     alignas(64) static Level pending[MAX_SIGNALS];
+    static const char* names[MAX_SIGNALS];
     static int count;
 
     static int allocate() { return count++; }

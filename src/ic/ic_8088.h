@@ -4,6 +4,8 @@
 
 namespace bench {
 
+class Scheduler;
+
 // Intel 8088 CPU (maximum mode).
 //
 // 40-pin DIP. U3 on the 5150 motherboard.
@@ -47,10 +49,11 @@ public:
     IC_8088(uint16_t start_cs = 0xF000, uint16_t start_ip = 0x0100);
 
     void install(Socket& socket);
+    void set_scheduler(Scheduler* s) { scheduler_ = s; }
 
 protected:
     void run() override;
-    void on_signal_change() override;
+    void on_signal_change(bool rising, bool falling) override;
 
 private:
     // --- Bus operations ---
@@ -67,8 +70,8 @@ private:
     void release_data();
     void drive_status(uint8_t s2, uint8_t s1, uint8_t s0);
     void drive_status_passive();
-    void full_wait_clk(); // Rise and fall
-    void half_wait_clk(); // Either rise or fall
+    void full_wait_clk();  // One CLK cycle = one yield
+    void half_wait_clk();  // One CLK cycle = two yields (rising/falling split)
 
     // --- Memory routing (register file or bus) ---
     static constexpr uint32_t REGS_BASE = 0xF0000;
@@ -274,10 +277,7 @@ private:
     // Interrupt state
     bool nmi_pending_ = false;
 
-    // CLK edge tracking -- set by on_signal_change(), consumed by wait_clk_*
-    bool clk_rose_ = false;
-    bool clk_fell_ = false;
-    Level clk_prev_ = Level::HiZ;
+    // NMI edge tracking
     Level nmi_prev_ = Level::HiZ;
 
     // Halted flag -- set when CPU reaches HLT or CS:IP = 0:0
@@ -290,6 +290,8 @@ private:
     // Start address (set via constructor, applied in cpu_reset)
     uint16_t start_cs_;
     uint16_t start_ip_;
+
+    Scheduler* scheduler_ = nullptr;
 };
 
 } // namespace bench

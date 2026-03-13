@@ -1,4 +1,5 @@
 #include "ic/ic_8088.h"
+#include "core/scheduler.h"
 #include <spdlog/spdlog.h>
 #include <cstring>
 
@@ -79,16 +80,7 @@ void IC_8088::install(Socket& socket) {
     if (pin_vcc_)   pin_vcc_->connect(this);
 }
 
-void IC_8088::on_signal_change() {
-    // CLK edge detection
-    if (pin_clk_) {
-        Level cur = pin_clk_->level();
-        if (cur == Level::High && clk_prev_ != Level::High)
-            clk_rose_ = true;
-        if (cur == Level::Low && clk_prev_ != Level::Low)
-            clk_fell_ = true;
-        clk_prev_ = cur;
-    }
+void IC_8088::on_signal_change(bool /*rising*/, bool /*falling*/) {
     // NMI rising edge detection
     if (pin_nmi_) {
         Level cur = pin_nmi_->level();
@@ -125,7 +117,7 @@ void IC_8088::run() {
 
     for (;;) {
         if (pin_vcc_ && pin_vcc_->level() != Level::High) break;
-        on_signal_change();  // process NMI, CLK edges
+        on_signal_change(true, true);  // process NMI
         execute();
     }
 
@@ -183,17 +175,23 @@ void IC_8088::drive_status_passive() {
 }
 
 void IC_8088::full_wait_clk() {
-    // Two yields = one full CLK cycle. The 8284A calls evaluate() on
-    // both rising and falling edges, so each yield is a half-cycle.
     yield();
-    on_signal_change();
-    yield();
-    on_signal_change();
+    on_signal_change(true, true);
 }
 
 void IC_8088::half_wait_clk() {
-    yield();
-    on_signal_change();
+    // Request the 8284A to split the next cycle into rising/falling halves.
+    // This gives intermediate components (8288, BusGlue) a commit gap
+    // between their rising-half output and the 8088's read.
+    scheduler_->request_half_cycle();
+    yield();                        // exits current evaluate, returns to 8284A
+    // 8284A sees flag, calls evaluate(rising=true, falling=false)
+    // We get resumed here after the rising half:
+    on_signal_change(true, false);
+    yield();                        // back to 8284A
+    // 8284A calls evaluate(rising=false, falling=true)
+    // We get resumed here after the falling half:
+    on_signal_change(false, true);
 }
 
 // ---- Memory read: 4 T-states (T1, T2, T3, T4) + optional Tw ----
@@ -203,21 +201,20 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     drive_address(address & 0xFFFFF);
     full_wait_clk();                                             // T1
 
-    // T2 rise -- ALE falls, latches capture address (AD still driven)
-    half_wait_clk();                                             // T2 rise
-    // Now safe: latches have captured. Release AD, go passive.
+    // T2 -- ALE falls, latches capture. Release AD, go passive.
     release_data();
     drive_status_passive();
-    half_wait_clk();                                             // T2 fall (~DEN + cmd asserted)
+    full_wait_clk();                                             // T2
 
     // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
         full_wait_clk();                                         // Tw
     }
 
-    // T3 -- data propagates through bus
-    full_wait_clk();                                             // T3
-    uint8_t data = read_data();                                  // read AFTER T3 commits
+    // T3 -- split cycle: rising half lets BusGlue drive data,
+    //        falling half commits it through 74S245 to AD pins.
+    half_wait_clk();                                             // T3
+    uint8_t data = read_data();                                  // read AFTER falling half
 
     // T4 -- bus cycle complete
     full_wait_clk();                                             // T4
@@ -231,12 +228,10 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     drive_address(address & 0xFFFFF);
     full_wait_clk();                                             // T1
 
-    // T2 rise -- ALE falls, latches capture address (AD still driven)
-    half_wait_clk();                                             // T2 rise
-    // Now safe: latches have captured. Switch AD to write data, go passive.
+    // T2 -- ALE falls, latches capture. Switch AD to write data, go passive.
     drive_data(value);
     drive_status_passive();
-    half_wait_clk();                                             // T2 fall (~DEN + cmd asserted)
+    full_wait_clk();                                             // T2
 
     // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
@@ -269,21 +264,20 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
     drive_address(port);
     full_wait_clk();                                             // T1
 
-    // T2 rise -- ALE falls, latches capture address (AD still driven)
-    half_wait_clk();                                             // T2 rise
-    // Now safe: latches have captured. Release AD, go passive.
+    // T2 -- ALE falls, latches capture. Release AD, go passive.
     release_data();
     drive_status_passive();
-    half_wait_clk();                                             // T2 fall (~DEN + cmd asserted)
+    full_wait_clk();                                             // T2
 
     // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
         full_wait_clk();                                         // Tw
     }
 
-    // T3 -- data propagates through bus
-    full_wait_clk();                                             // T3
-    uint8_t data = read_data();                                  // read AFTER T3 commits
+    // T3 -- split cycle: rising half lets BusGlue drive data,
+    //        falling half commits it through 74S245 to AD pins.
+    half_wait_clk();                                             // T3
+    uint8_t data = read_data();                                  // read AFTER falling half
 
     // T4 -- bus cycle complete
     full_wait_clk();                                             // T4
@@ -297,12 +291,10 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     drive_address(port);
     full_wait_clk();                                             // T1
 
-    // T2 rise -- ALE falls, latches capture address (AD still driven)
-    half_wait_clk();                                             // T2 rise
-    // Now safe: latches have captured. Switch AD to write data, go passive.
+    // T2 -- ALE falls, latches capture. Switch AD to write data, go passive.
     drive_data(value);
     drive_status_passive();
-    half_wait_clk();                                             // T2 fall (~DEN + cmd asserted)
+    full_wait_clk();                                             // T2
 
     // Tw -- wait states while READY is low
     while (pin_ready_ && pin_ready_->level() != Level::High) {
@@ -445,8 +437,6 @@ void IC_8088::cpu_reset() {
     rep_override_en_ = 0;
     trap_flag_ = 0;
     nmi_pending_ = false;
-    clk_rose_ = false;
-    clk_fell_ = false;
     prefetch_len_ = 0;
     prefetch_base_ = 0;
     halted_.store(false, std::memory_order_release);
@@ -1226,22 +1216,20 @@ void IC_8088::execute() {
             // First INTA pulse (PIC latches request) -- 4 T-states
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             full_wait_clk();                                     // T1
-            half_wait_clk();                                     // T2 rise
             release_data();
             drive_status_passive();
-            half_wait_clk();                                     // T2 fall
+            full_wait_clk();                                     // T2
             full_wait_clk();                                     // T3
             full_wait_clk();                                     // T4
 
             // Second INTA pulse (PIC drives vector on data bus) -- 4 T-states
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             full_wait_clk();                                     // T1
-            half_wait_clk();                                     // T2 rise
             release_data();
             drive_status_passive();
-            half_wait_clk();                                     // T2 fall
-            full_wait_clk();                                     // T3
-            uint8_t vector = read_data();                        // read AFTER T3 commits
+            full_wait_clk();                                     // T2
+            half_wait_clk();                                     // T3 (split for PIC vector)
+            uint8_t vector = read_data();
             full_wait_clk();                                     // T4
 
             pc_interrupt(vector);

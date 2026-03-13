@@ -52,7 +52,8 @@ void IC_8255A::install(Socket& socket) {
     if (pin_vcc_)   pin_vcc_->connect(this);
 }
 
-void IC_8255A::on_signal_change() {
+void IC_8255A::on_signal_change(bool rising, bool /*falling*/) {
+    if (!rising) return;  // compute once per cycle
     Level reset_cur = pin_reset_ ? pin_reset_->level() : Level::HiZ;
     Level wr_cur = pin_wr_ ? pin_wr_->level() : Level::HiZ;
     Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;

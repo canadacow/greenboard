@@ -62,7 +62,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change() override;
+    void on_signal_change(bool rising, bool falling) override;
 
 private:
     // A single counter channel.
@@ -124,7 +124,6 @@ private:
     Signal* pin_vcc_ = nullptr;   // Pin 24: VCC
 
     // Edge tracking
-    Level clk_prev_[3] = {Level::HiZ, Level::HiZ, Level::HiZ};
     Level gate_prev_[3] = {Level::HiZ, Level::HiZ, Level::HiZ};
     Level wr_prev_ = Level::HiZ;
     Level rd_prev_ = Level::HiZ;

@@ -44,15 +44,12 @@ void IC_8253::install(Socket& socket) {
     if (pin_vcc_) pin_vcc_->connect(this);
 }
 
-void IC_8253::on_signal_change() {
-    // CLK falling edge triggers counter decrement.
+void IC_8253::on_signal_change(bool rising, bool /*falling*/) {
+    if (!rising) return;  // compute once per cycle
+    // Single-tick model: decrement each tick.
     for (int i = 0; i < 3; ++i) {
-        if (pin_clk_[i]) {
-            Level cur = pin_clk_[i]->level();
-            if (cur == Level::Low && clk_prev_[i] == Level::High)
-                on_clk_falling(i);
-            clk_prev_[i] = cur;
-        }
+        if (pin_clk_[i])
+            on_clk_falling(i);
     }
 
     // GATE level changes.

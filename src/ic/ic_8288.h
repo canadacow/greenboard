@@ -1,5 +1,5 @@
 #pragma once
-#include "core/inline_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -51,7 +51,7 @@ namespace bench {
 // Inline IC -- runs in the fixed-point loop so ALE/~DEN/commands are
 // visible to other inlines (74S373 latches, 74S245 transceivers) in the
 // same evaluation cycle, before fibers resume.
-class IC_8288 : public InlineComponent {
+class IC_8288 : public CallbackComponent {
 public:
     IC_8288();
 
@@ -59,7 +59,7 @@ public:
 
 protected:
     void on_power_on() override;
-    void on_signal_change() override;
+    void on_signal_change(bool rising, bool falling) override;
 
 private:
     // Bus cycle type decoded from S0-S2
@@ -94,7 +94,6 @@ private:
     // Internal state
     State state_ = State::Idle;
     BusCycle cycle_ = BusCycle::Passive;
-    Level clk_prev_ = Level::HiZ;
 };
 
 } // namespace bench

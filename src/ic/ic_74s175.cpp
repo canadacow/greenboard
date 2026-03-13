@@ -34,7 +34,9 @@ void IC_74S175::install(Socket& socket) {
     if (pin_vcc_) subscribe_to(*pin_vcc_);
 }
 
-void IC_74S175::on_signal_change() {
+void IC_74S175::on_signal_change(bool rising, bool /*falling*/) {
+    if (!rising) return;  // only process on rising half
+
     // ~CLR: async clear when driven Low.
     if (pin_clr_) {
         Level cur = pin_clr_->level();
@@ -43,15 +45,10 @@ void IC_74S175::on_signal_change() {
         clr_prev_ = cur;
     }
 
-    // CLK rising edge: latch D inputs.
+    // Latch D inputs on rising edge.
     if (pin_clk_) {
-        Level cur = pin_clk_->level();
-        if (cur == Level::High && clk_prev_ != Level::High) {
-            // Only latch if ~CLR is not asserted.
-            if (!pin_clr_ || pin_clr_->level() != Level::Low)
-                on_clk_rising();
-        }
-        clk_prev_ = cur;
+        if (!pin_clr_ || pin_clr_->level() != Level::Low)
+            on_clk_rising();
     }
 }
 

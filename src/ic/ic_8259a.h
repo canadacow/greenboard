@@ -36,7 +36,7 @@ public:
 
 protected:
     void on_power_on() override;
-    void on_signal_change() override;
+    void on_signal_change(bool rising, bool falling) override;
 
 private:
     // Initialization state machine

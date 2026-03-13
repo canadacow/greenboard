@@ -50,7 +50,7 @@ protected:
     }
     void on_power_on() override {}
     void on_power_off() override {}
-    void on_signal_change() override {}
+    void on_signal_change(bool, bool) override {}
 };
 
 // =========================================================================
@@ -89,24 +89,15 @@ public:
         cycle_type = 7;
         cycle_addr = 0;
         bus_cycle_count = 0;
-        clk_prev_ = Level::HiZ;
     }
 
 protected:
-    void on_signal_change() override {
-        Level clk_cur = pin_clk ? pin_clk->level() : Level::HiZ;
-
-        if (clk_cur == Level::High && clk_prev_ != Level::High)
-            on_clk_rising();
-        if (clk_cur == Level::Low && clk_prev_ != Level::Low)
-            on_clk_falling();
-
-        clk_prev_ = clk_cur;
+    void on_signal_change(bool rising, bool falling) override {
+        if (rising) on_clk_rising();
+        if (falling) on_clk_falling();
     }
 
 private:
-    Level clk_prev_ = Level::HiZ;
-
     uint8_t decode_status() {
         uint8_t v2 = (s2->level() == Level::High) ? 1 : 0;
         uint8_t v1 = (s1->level() == Level::High) ? 1 : 0;
@@ -740,17 +731,18 @@ int main() {
     scheduler.register_inline(rom_ic);
     // Register callback components (no fiber overhead).
     scheduler.register_callback(pic);
-    scheduler.register_inline(bc);
+    scheduler.register_callback(bc);
     scheduler.register_callback(&bus);
     // Register fiber components (everything except the 8284A clock).
     scheduler.register_fiber(cpu);
     // Throwaway: measure fiber dispatch overhead with a no-op fiber.
-    NoopFiber noop_fiber;
-    noop_fiber.power_on();
-    scheduler.register_fiber(&noop_fiber);
+    //NoopFiber noop_fiber;
+    //noop_fiber.power_on();
+    //scheduler.register_fiber(&noop_fiber);
     clk_gen->set_scheduler(&scheduler);
+    cpu->set_scheduler(&scheduler);
 
-    #define RUN_BENCHMARK
+   #define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

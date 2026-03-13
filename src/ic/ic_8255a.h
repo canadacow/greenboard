@@ -43,7 +43,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change() override;
+    void on_signal_change(bool rising, bool falling) override;
 
 private:
     void on_bus_write();

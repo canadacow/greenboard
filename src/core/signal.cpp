@@ -10,6 +10,7 @@ namespace bench {
 
 alignas(64) Level SignalPool::current[MAX_SIGNALS] = {};
 alignas(64) Level SignalPool::pending[MAX_SIGNALS] = {};
+const char* SignalPool::names[MAX_SIGNALS] = {};
 int SignalPool::count = 1;  // slot 0 reserved as dummy (reads HiZ, writes vanish)
 
 // --- Signal ---
@@ -24,6 +25,7 @@ Signal::Signal(std::string name) : name_(std::move(name)) {
     pending_ = &SignalPool::pending[idx];
     *current_ = Level::HiZ;
     *pending_ = Level::HiZ;
+    SignalPool::names[idx] = name_.c_str();
 }
 
 void Signal::set_pull(Level pull) {

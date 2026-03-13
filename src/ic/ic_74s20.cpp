@@ -44,7 +44,7 @@ void IC_74S20::on_power_off() {
     y2_.release();
 }
 
-void IC_74S20::on_signal_change() {
+void IC_74S20::on_signal_change(bool /*rising*/, bool /*falling*/) {
     update_outputs();
 }
 

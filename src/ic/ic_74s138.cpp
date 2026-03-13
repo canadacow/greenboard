@@ -44,7 +44,7 @@ void IC_74S138::on_power_off() {
         y_[i].release();
 }
 
-void IC_74S138::on_signal_change() {
+void IC_74S138::on_signal_change(bool /*rising*/, bool /*falling*/) {
     update_outputs();
 }
 

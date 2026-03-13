@@ -3,12 +3,11 @@
 
 namespace bench {
 
-IC_8288::IC_8288() : InlineComponent("8288") {}
+IC_8288::IC_8288() : CallbackComponent("8288") {}
 
 void IC_8288::on_power_on() {
     state_ = State::Idle;
     cycle_ = BusCycle::Passive;
-    clk_prev_ = Level::HiZ;
 }
 
 void IC_8288::install(Socket& socket) {
@@ -44,13 +43,9 @@ void IC_8288::install(Socket& socket) {
     if (vcc) vcc->connect(this);
 }
 
-void IC_8288::on_signal_change() {
-    Level cur = pin_clk_.level();
-    if (cur == Level::High && clk_prev_ != Level::High)
-        on_clk_rising();
-    if (cur == Level::Low && clk_prev_ != Level::Low)
-        on_clk_falling();
-    clk_prev_ = cur;
+void IC_8288::on_signal_change(bool rising, bool falling) {
+    if (rising) on_clk_rising();
+    if (falling) on_clk_falling();
 }
 
 IC_8288::BusCycle IC_8288::decode_status() const {

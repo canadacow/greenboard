@@ -56,20 +56,14 @@ void IC_8284A::run(std::stop_token stop) {
             break;
         }
 
-        // --- CLK rising edge ---
-        if (pin_clk_) pin_clk_->drive(Level::High);
-
-        // PCLK toggles on CLK rising edge (CLK / 2).
+        // --- Single tick = one full CLK cycle ---
         ++clk_cycles_;
+
+        // PCLK toggles each CLK cycle (CLK / 2).
         pclk_state = !pclk_state;
         if (pin_pclk_) pin_pclk_->drive(pclk_state ? Level::High : Level::Low);
 
-        scheduler_->evaluate(self);
-
-        // --- CLK falling edge ---
-        if (pin_clk_) pin_clk_->drive(Level::Low);
-
-        // READY and RESET are synchronized to CLK falling edge.
+        // READY and RESET synchronized each cycle.
         bool ready = true;
         bool aen1 = pin_aen1_ && pin_aen1_->level() == Level::Low;
         if (aen1)
@@ -80,7 +74,13 @@ void IC_8284A::run(std::stop_token stop) {
         bool res = pin_res_ && pin_res_->level() == Level::High;
         if (pin_reset_) pin_reset_->drive(res ? Level::Low : Level::High);
 
-        scheduler_->evaluate(self);
+        if (scheduler_->half_cycle_requested()) {
+            scheduler_->clear_half_cycle();
+            scheduler_->evaluate(self, true, false);   // rising half
+            scheduler_->evaluate(self, false, true);   // falling half
+        } else {
+            scheduler_->evaluate(self);                // full cycle
+        }
 
         ++clk_ticks;
     }

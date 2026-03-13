@@ -67,7 +67,8 @@ void IC_8237A::install(Socket& socket) {
     }
 
 
-void IC_8237A::on_signal_change() {
+void IC_8237A::on_signal_change(bool rising, bool /*falling*/) {
+    if (!rising) return;  // compute once per cycle
     Level reset_cur = pin_reset_ ? pin_reset_->level() : Level::HiZ;
     Level iow_cur = pin_iow_ ? pin_iow_->level() : Level::HiZ;
     Level cs_cur = pin_cs_ ? pin_cs_->level() : Level::HiZ;

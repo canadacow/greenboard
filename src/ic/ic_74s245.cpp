@@ -35,7 +35,7 @@ void IC_74S245::install(Socket& socket) {
     if (vcc) vcc->connect(this);
 }
 
-void IC_74S245::on_signal_change() {
+void IC_74S245::on_signal_change(bool /*rising*/, bool /*falling*/) {
     if (g_.level() != Level::Low) {
         release_outputs();
         return;

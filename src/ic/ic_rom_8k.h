@@ -38,7 +38,7 @@ public:
 protected:
     void on_power_on() override;
     void on_power_off() override;
-    void on_signal_change() override;
+    void on_signal_change(bool rising, bool falling) override;
 
 private:
     void update_outputs();
