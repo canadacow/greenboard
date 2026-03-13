@@ -41,9 +41,9 @@ void IC_74S373::on_signal_change(bool rising, bool /*falling*/) {
     if (!rising) return;  // edge-tracking: run once per cycle
     Level le = le_.level();
 
-    // LE falling edge: capture D inputs at moment of transition
-    if (le == Level::Low && le_prev_ != Level::Low)
-        for (int i = 0; i < 8; ++i) latch_[i] = d_[i].level();
+    // LE falling edge: stop tracking. latch_[] already holds the last
+    // transparent-mode value -- no re-read of D pins (they may have
+    // changed, e.g. AD0-AD7 released by 8088 after T1).
     le_prev_ = le;
 
     // Transparent mode: Q tracks D continuously

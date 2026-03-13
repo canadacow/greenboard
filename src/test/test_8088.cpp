@@ -280,7 +280,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::trace);
+    spdlog::set_level(spdlog::level::info);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -293,7 +293,7 @@ int main() {
             {0x0506, 0xDEF0, "XCHG ax"},
             {0x0508, 0x9ABC, "XCHG bx"},
         }},
-#if 0
+#if 1
         {"ALU", "test_alu.bin", {
             {0x0500, 0x0042, "ADD"},
             {0x0502, 0x0010, "SUB"},
@@ -741,8 +741,8 @@ int main() {
     scheduler.register_inline(rom_dec);
     scheduler.register_inline(rom_ic);
     // Register callback components (no fiber overhead).
+    scheduler.register_bus_controller(bc);
     scheduler.register_callback(pic);
-    scheduler.register_callback(bc);
     scheduler.register_callback(&bus);
     // Register fiber components (everything except the 8284A clock).
     scheduler.register_fiber(cpu);
@@ -753,7 +753,7 @@ int main() {
     clk_gen->set_scheduler(&scheduler);
     cpu->set_scheduler(&scheduler);
 
-   //#define RUN_BENCHMARK
+    #define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

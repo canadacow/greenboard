@@ -1,5 +1,5 @@
 #pragma once
-#include "core/callback_component.h"
+#include "core/bus_controller_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -51,7 +51,7 @@ namespace bench {
 // Inline IC -- runs in the fixed-point loop so ALE/~DEN/commands are
 // visible to other inlines (74S373 latches, 74S245 transceivers) in the
 // same evaluation cycle, before fibers resume.
-class IC_8288 : public CallbackComponent {
+class IC_8288 : public BusControllerComponent {
 public:
     IC_8288();
 

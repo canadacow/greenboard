@@ -1,5 +1,6 @@
 #pragma once
 #include "core/signal.h"
+#include "core/bus_controller_component.h"
 #include "core/callback_component.h"
 #include "core/fiber_component.h"
 #include "core/inline_component.h"
@@ -21,6 +22,11 @@ public:
     void register_inline(InlineComponent* ic) {
         assert(inline_count_ < MAX_INLINES && "Scheduler: too many inline ICs");
         inlines_[inline_count_++] = ic;
+    }
+
+    void register_bus_controller(BusControllerComponent* bc) {
+        assert(bus_ctrl_count_ < MAX_BUS_CTRLS && "Scheduler: too many bus controllers");
+        bus_ctrls_[bus_ctrl_count_++] = bc;
     }
 
     void register_callback(CallbackComponent* cc) {
@@ -49,18 +55,18 @@ public:
             fibers_[i]->resume(caller);
     }
 
-    // Commit + callbacks + inlines only. No fiber resume.
+    // Commit + bus controllers + settle inlines + callbacks. No fiber resume.
+    //
+    // Order matches real hardware propagation within a clock period:
+    //   1. Commit pending signals (8088 status lines become visible)
+    //   2. Bus controllers (8288 decodes S0-S2, drives ~IOW/~MEMR/ALE/etc.)
+    //      -- 8288 uses drive_immediate() so outputs are in current[] already
+    //   3. Commit + settle inlines (74S373 latches address, 74S138 decodes ~CS)
+    //   4. Regular callbacks (8259A, 8253, etc. see fully settled bus)
     void evaluate_no_wake(bool rising = true, bool falling = true) {
         SignalPool::commit();
-        for (int i = 0; i < callback_count_; ++i)
-            callbacks_[i]->on_signal_change(rising, falling);
-        commit_and_eval_inlines(rising, falling);
-    }
-
-private:
-    void commit_and_eval_inlines(bool rising = true, bool falling = true) {
-        // Phase 1: Commit all signals.
-        if (!SignalPool::commit()) return;
+        for (int i = 0; i < bus_ctrl_count_; ++i)
+            bus_ctrls_[i]->on_signal_change(rising, falling);
 
         // Phase 2: Fixed-point inline IC evaluation.
         // No is_powered() check -- inlines are always powered during eval.
@@ -71,13 +77,21 @@ private:
 
             if (!SignalPool::commit()) break;
         }
+
+        for (int i = 0; i < callback_count_; ++i)
+            callbacks_[i]->on_signal_change(rising, falling);
     }
 
+private:
     bool half_cycle_ = false;
 
+    static constexpr int MAX_BUS_CTRLS = 4;
     static constexpr int MAX_INLINES = 32;
     static constexpr int MAX_CALLBACKS = 32;
     static constexpr int MAX_FIBERS = 256;
+
+    BusControllerComponent* bus_ctrls_[MAX_BUS_CTRLS] = {};
+    int bus_ctrl_count_ = 0;
 
     InlineComponent* inlines_[MAX_INLINES] = {};
     int inline_count_ = 0;

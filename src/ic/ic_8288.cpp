@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8288::IC_8288() : CallbackComponent("8288") {}
+IC_8288::IC_8288() : BusControllerComponent("8288") {}
 
 void IC_8288::on_power_on() {
     state_ = State::Idle;
@@ -80,13 +80,11 @@ IC_8288::BusCycle IC_8288::decode_status() const {
 }
 void IC_8288::release_command() {
     // Deassert all command strobes (active low -> High).
-    if (pin_inta_.level() == Level::Low)
-        spdlog::trace("[8288] releasing ~INTA High (T3->Idle)");
-    pin_memr_.drive(Level::High);
-    pin_memw_.drive(Level::High);
-    pin_ior_.drive(Level::High);
-    pin_iow_.drive(Level::High);
-    pin_inta_.drive(Level::High);
+    pin_memr_.drive_immediate(Level::High);
+    pin_memw_.drive_immediate(Level::High);
+    pin_ior_.drive_immediate(Level::High);
+    pin_iow_.drive_immediate(Level::High);
+    pin_inta_.drive_immediate(Level::High);
 }
 
 void IC_8288::on_clk_rising() {
@@ -94,37 +92,13 @@ void IC_8288::on_clk_rising() {
     if (pin_aen_.level() == Level::Low) {
         if (state_ != State::Idle) {
             release_command();
-            pin_ale_.drive(Level::Low);
-            pin_den_.drive(Level::High);  // ~DEN deasserted
+            pin_ale_.drive_immediate(Level::Low);
+            pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
         }
         return;
     }
-
-    auto cycle_name = [](BusCycle c) -> const char* {
-        switch (c) {
-            case BusCycle::Passive: return "Passive";
-            case BusCycle::INTA: return "INTA";
-            case BusCycle::IOR: return "IOR";
-            case BusCycle::IOW: return "IOW";
-            case BusCycle::Halt: return "Halt";
-            case BusCycle::Fetch: return "Fetch";
-            case BusCycle::MemR: return "MemR";
-            case BusCycle::MemW: return "MemW";
-        }
-        return "?";
-    };
-
-    auto state_name = [](State s) -> const char* {
-        switch (s) {
-            case State::Idle: return "Idle";
-            case State::T1: return "T1";
-            case State::T2: return "T2";
-            case State::T3: return "T3";
-        }
-        return "?";
-    };
 
     switch (state_) {
         case State::Idle: {
@@ -135,8 +109,8 @@ void IC_8288::on_clk_rising() {
 
                 // T1: Assert ALE, set DT/~R direction.
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
-                pin_ale_.drive(Level::High);
-                pin_dtr_.drive(is_write ? Level::High : Level::Low);
+                pin_ale_.drive_immediate(Level::High);
+                pin_dtr_.drive_immediate(is_write ? Level::High : Level::Low);
             }
             break;
         }
@@ -148,7 +122,7 @@ void IC_8288::on_clk_rising() {
             // ~DEN and command strobe are deferred to T2 CLK fall to avoid
             // bus contention: the 74S245 must not drive AD while the 74S373
             // is capturing the address from AD.
-            pin_ale_.drive(Level::Low);
+            pin_ale_.drive_immediate(Level::Low);
             break;
         }
 
@@ -160,7 +134,7 @@ void IC_8288::on_clk_rising() {
         case State::T3: {
             // T4: Deassert commands, deassert ~DEN, back to idle.
             release_command();
-            pin_den_.drive(Level::High);  // ~DEN deasserted
+            pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
             break;
@@ -179,33 +153,26 @@ void IC_8288::on_clk_falling() {
             // Assert the appropriate command strobe (active low).
             switch (cycle_) {
                 case BusCycle::INTA:
-                    spdlog::trace("[8288] driving ~INTA Low (T2 fall, state=T2)");
-                    pin_inta_.drive(Level::Low);
+                    pin_inta_.drive_immediate(Level::Low);
                     break;
                 case BusCycle::IOR:
-                    spdlog::trace("[8288] driving ~IOR Low (T2 fall)");
-                    pin_ior_.drive(Level::Low);
+                    pin_ior_.drive_immediate(Level::Low);
                     break;
-                case BusCycle::IOW: {
-                    auto lc = [](Level l) -> char { return l == Level::Low ? '0' : l == Level::High ? '1' : 'Z'; };
-                    spdlog::trace("[8288] driving ~IOW Low (T2 fall) pool_idx={} cur={} pend_before={}",
-                        pin_iow_.idx, lc(SignalPool::current[pin_iow_.idx]), lc(SignalPool::pending[pin_iow_.idx]));
-                    pin_iow_.drive(Level::Low);
-                    spdlog::trace("[8288] after drive: pend_after={}", lc(SignalPool::pending[pin_iow_.idx]));
+                case BusCycle::IOW:
+                    pin_iow_.drive_immediate(Level::Low);
                     break;
-                }
                 case BusCycle::Fetch:
                 case BusCycle::MemR:
-                    pin_memr_.drive(Level::Low);
+                    pin_memr_.drive_immediate(Level::Low);
                     break;
                 case BusCycle::MemW:
-                    pin_memw_.drive(Level::Low);
+                    pin_memw_.drive_immediate(Level::Low);
                     break;
                 default:
                     break;
             }
         }
-        pin_den_.drive(Level::Low);
+        pin_den_.drive_immediate(Level::Low);
     }
 }
 

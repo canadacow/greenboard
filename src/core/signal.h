@@ -54,6 +54,13 @@ struct Pin {
     Level level() const { return SignalPool::current[idx]; }
     void drive(Level lvl) { SignalPool::pending[idx] = lvl; }
     void release() { SignalPool::pending[idx] = Level::HiZ; }
+
+    // Write to both pending[] and current[] so inlines see the value
+    // immediately without a full pool commit. Used by bus controller ICs.
+    void drive_immediate(Level lvl) {
+        SignalPool::pending[idx] = lvl;
+        SignalPool::current[idx] = lvl;
+    }
 };
 
 // Contiguous block of N pool slots. Stores one base index; read/write
