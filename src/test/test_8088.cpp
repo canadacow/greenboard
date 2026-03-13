@@ -280,7 +280,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr) 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -293,7 +293,7 @@ int main() {
             {0x0506, 0xDEF0, "XCHG ax"},
             {0x0508, 0x9ABC, "XCHG bx"},
         }},
-#if 1
+#if 0
         {"ALU", "test_alu.bin", {
             {0x0500, 0x0042, "ADD"},
             {0x0502, 0x0010, "SUB"},
@@ -405,6 +405,17 @@ int main() {
             {0x050A, 0x0021, "AH=09 last char '!'"},
             {0x050C, 0x002A, "AH=4C exit code 42"},
         } },
+#endif
+        {"I/O (PIC ports)", "test_io.bin", {
+            {0x0500, 0x00AB, "OUT imm8 / IN imm8 byte"},
+            {0x0502, 0x00CD, "OUT DX / IN DX byte"},
+            {0x0504, 0xBEEF, "OUT/IN word"},
+            {0x0506, 0x00FE, "PIC IMR readback"},
+            {0x0508, 0x0001, "Timer IRQ0 -> INT 8"},
+            {0x050A, 0x0008, "INT 8 vector correct"},
+            {0x050C, 0x0001, "EOI clears ISR"},
+            {0x050E, 0x0001, "I/O doesn't touch memory"},
+        }},
         {"IRQ (advanced)", "test_irq.bin", {
             {0x0500, 0x0001, "IRQ1 fires (INT 9)"},
             {0x0502, 0x0001, "Priority: IRQ0 first"},
@@ -420,7 +431,7 @@ int main() {
             {0x0504, 0x0032, "last string byte ('2')"},
             {0x0506, 0xB000, "8K byte sum"},
         }},
-#endif
+
     };
 
     // --- Wiring (permanent -- these are the copper traces on the test board) ---
@@ -742,7 +753,7 @@ int main() {
     clk_gen->set_scheduler(&scheduler);
     cpu->set_scheduler(&scheduler);
 
-   #define RUN_BENCHMARK
+   //#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

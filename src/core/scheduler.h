@@ -44,17 +44,7 @@ public:
     // 8288 that advance state once per eval), commit their outputs,
     // then run inlines to fixed-point (combinational ripple), then fibers.
     void evaluate(Fiber caller, bool rising = true, bool falling = true) {
-        // Phase 1: Commit signals driven by previous cycle.
-        SignalPool::commit();
-
-        // Phase 2: Callbacks (sequential state machines, once per eval).
-        for (int i = 0; i < callback_count_; ++i)
-            callbacks_[i]->on_signal_change(rising, falling);
-
-        // Phase 3: Commit callback outputs, then inline fixed-point.
-        settle_inlines(rising, falling);
-
-        // Phase 4: Resume fibers.
+        evaluate_no_wake(rising, falling);
         for (int i = 0; i < fiber_count_; ++i)
             fibers_[i]->resume(caller);
     }
@@ -64,56 +54,22 @@ public:
         SignalPool::commit();
         for (int i = 0; i < callback_count_; ++i)
             callbacks_[i]->on_signal_change(rising, falling);
-        settle_inlines(rising, falling);
+        commit_and_eval_inlines(rising, falling);
     }
 
 private:
-    void settle_inlines(bool rising, bool falling) {
-        // Commit callback outputs, then fixed-point inline evaluation.
+    void commit_and_eval_inlines(bool rising = true, bool falling = true) {
+        // Phase 1: Commit all signals.
         if (!SignalPool::commit()) return;
 
-        int spins = 0;
+        // Phase 2: Fixed-point inline IC evaluation.
+        // No is_powered() check -- inlines are always powered during eval.
         for (;;)
         {
             for (int i = 0; i < inline_count_; ++i)
                 inlines_[i]->on_signal_change(rising, falling);
 
-            if (++spins >= 7) {
-                // Dump signals that are still oscillating.
-                auto lvl_char = [](Level l) -> char {
-                    switch (l) {
-                        case Level::Low: return '0';
-                        case Level::High: return '1';
-                        case Level::HiZ: return 'Z';
-                        default: return '?';
-                    }
-                };
-
-                bool foundPins = false;
-
-                spdlog::error("Inlines not settling after {} spins (r={} f={}):", spins, rising, falling);
-                for (int i = 1; i < SignalPool::count; ++i) {
-                    if (SignalPool::current[i] != SignalPool::pending[i]) {
-                        const char* n = SignalPool::names[i] ? SignalPool::names[i] : "?";
-                        spdlog::error("  [{}] {} : {} -> {}",
-                            i, n,
-                            lvl_char(SignalPool::current[i]),
-                            lvl_char(SignalPool::pending[i]));
-
-                        foundPins = true;
-                    }
-                }
-                
-                if(!foundPins)
-                {
-                    spdlog::error("   No pins found to have changed this round...?");
-                }
-                _exit(0);
-            }
-            else
-            {
-                if (!SignalPool::commit()) break;
-            }
+            if (!SignalPool::commit()) break;
         }
     }
 

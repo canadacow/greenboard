@@ -62,26 +62,54 @@ void IC_8259A::on_power_on() {
     inta_prev_ = Level::HiZ;
 }
 
-void IC_8259A::on_signal_change(bool rising, bool /*falling*/) {
+void IC_8259A::on_signal_change(bool rising, bool falling) {
+    // Diagnostic: log EVERY call (including falling-only) to trace timing
+    {
+        auto lvl = [](Level l) -> char { return l == Level::Low ? '0' : l == Level::High ? '1' : 'Z'; };
+        Level wr_raw = SignalPool::current[wr_.idx];
+        Level cs_raw = SignalPool::current[cs_.idx];
+        Level wr_pend = SignalPool::pending[wr_.idx];
+        if (cs_raw == Level::Low || wr_raw == Level::Low) {
+            spdlog::trace("[8259A] on_signal_change r={} f={} ~CS_cur={} ~WR_cur={} ~WR_pend={} wr_idx={} cs_idx={}",
+                rising, falling, lvl(cs_raw), lvl(wr_raw), lvl(wr_pend), wr_.idx, cs_.idx);
+        }
+    }
     if (!rising) return;  // compute once per cycle
     Level wr_cur   = wr_.level();
     Level cs_cur   = cs_.level();
     Level rd_cur   = rd_.level();
     Level inta_cur = inta_.level();
 
+    // Log whenever ~CS is active (Low) -- means someone is talking to us
+    if (cs_cur == Level::Low) {
+        auto lvl = [](Level l) -> char { return l == Level::Low ? '0' : l == Level::High ? '1' : 'Z'; };
+        spdlog::trace("[8259A] ~CS=0 ~WR={} ~RD={} ~INTA={} (prev: ~WR={} ~RD={} ~INTA={}) wr_idx={} rd_idx={}",
+            lvl(wr_cur), lvl(rd_cur), lvl(inta_cur),
+            lvl(wr_prev_), lvl(rd_prev_), lvl(inta_prev_),
+            wr_.idx, rd_.idx);
+    }
+
     // Bus write: ~WR falling while ~CS active
-    if (wr_cur == Level::Low && wr_prev_ != Level::Low && cs_cur == Level::Low)
+    if (wr_cur == Level::Low && wr_prev_ != Level::Low && cs_cur == Level::Low) {
+        spdlog::trace("[8259A] bus write (~WR fell, ~CS=Low) A0={} data=0x{:02X}", a0_.level() == Level::High ? 1 : 0, read_data());
         on_bus_write();
+    }
     // Bus write: ~CS falling while ~WR active
-    if (cs_cur == Level::Low && cs_prev_ != Level::Low && wr_cur == Level::Low)
+    if (cs_cur == Level::Low && cs_prev_ != Level::Low && wr_cur == Level::Low) {
+        spdlog::trace("[8259A] bus write (~CS fell, ~WR=Low) A0={} data=0x{:02X}", a0_.level() == Level::High ? 1 : 0, read_data());
         on_bus_write();
+    }
 
     // Bus read: ~RD falling while ~CS active
-    if (rd_cur == Level::Low && rd_prev_ != Level::Low && cs_cur == Level::Low)
+    if (rd_cur == Level::Low && rd_prev_ != Level::Low && cs_cur == Level::Low) {
+        spdlog::trace("[8259A] bus read (~RD fell, ~CS=Low) A0={}", a0_.level() == Level::High ? 1 : 0);
         on_bus_read();
+    }
     // Bus read: ~CS falling while ~RD active
-    if (cs_cur == Level::Low && cs_prev_ != Level::Low && rd_cur == Level::Low)
+    if (cs_cur == Level::Low && cs_prev_ != Level::Low && rd_cur == Level::Low) {
+        spdlog::trace("[8259A] bus read (~CS fell, ~RD=Low) A0={}", a0_.level() == Level::High ? 1 : 0);
         on_bus_read();
+    }
 
     // Release data bus when ~RD or ~CS goes inactive
     if ((rd_cur == Level::High && rd_prev_ != Level::High) ||
@@ -89,8 +117,10 @@ void IC_8259A::on_signal_change(bool rising, bool /*falling*/) {
         release_data();
 
     // ~INTA falling edge
-    if (inta_cur == Level::Low && inta_prev_ != Level::Low)
+    if (inta_cur == Level::Low && inta_prev_ != Level::Low) {
+        spdlog::trace("[8259A] ~INTA falling edge detected (inta_count={} -> {})", inta_count_, inta_count_ + 1);
         on_inta_falling();
+    }
 
     // ~INTA rising edge: release data bus after second pulse
     if (inta_cur == Level::High && inta_prev_ != Level::High && inta_count_ >= 2) {

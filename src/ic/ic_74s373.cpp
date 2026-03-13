@@ -8,17 +8,19 @@ namespace bench {
 IC_74S373::IC_74S373() : InlineComponent("74S373") {}
 
 void IC_74S373::install(Socket& socket) {
-    // D inputs (read current) -- must be contiguous pool slots
+    // D inputs (read current)
     static constexpr int d_pins[] = {3, 4, 7, 8, 13, 14, 17, 18};
-    d_ = PinBlock<8>::from_socket(socket, d_pins);
-    for (int pin : d_pins) {
-        Signal* s = socket.pin_signal(pin);
-        if (s) s->connect(this);
+    for (int i = 0; i < 8; ++i) {
+        Signal* s = socket.pin_signal(d_pins[i]);
+        if (s) { s->connect(this); d_[i] = s->pin(); }
     }
 
-    // Q outputs (write pending) -- must be contiguous pool slots
+    // Q outputs (write pending)
     static constexpr int q_pins[] = {2, 5, 6, 9, 12, 15, 16, 19};
-    q_ = PinBlock<8>::from_socket(socket, q_pins);
+    for (int i = 0; i < 8; ++i) {
+        Signal* s = socket.pin_signal(q_pins[i]);
+        if (s) q_[i] = s->pin();
+    }
 
     // Control signals (read current)
     Signal* le = socket.pin_signal(11);
@@ -39,26 +41,23 @@ void IC_74S373::on_signal_change(bool rising, bool /*falling*/) {
     if (!rising) return;  // edge-tracking: run once per cycle
     Level le = le_.level();
 
-    // LE falling edge or transparent mode: capture D inputs
-    if (le == Level::Low && le_prev_ != Level::Low) {
-        d_.read(latch_);
-        uint8_t val = 0;
-        for (int i = 0; i < 8; ++i)
-            if (latch_[i] == Level::High) val |= (1 << i);
-    }
+    // LE falling edge: capture D inputs at moment of transition
+    if (le == Level::Low && le_prev_ != Level::Low)
+        for (int i = 0; i < 8; ++i) latch_[i] = d_[i].level();
     le_prev_ = le;
 
+    // Transparent mode: Q tracks D continuously
     if (le == Level::High)
-        d_.read(latch_);
+        for (int i = 0; i < 8; ++i) latch_[i] = d_[i].level();
 
     update_outputs();
 }
 
 void IC_74S373::update_outputs() {
     if (oe_.level() == Level::Low)
-        q_.drive(latch_);
+        for (int i = 0; i < 8; ++i) q_[i].drive(latch_[i]);
     else
-        q_.fill(Level::HiZ);
+        for (int i = 0; i < 8; ++i) q_[i].drive(Level::HiZ);
 }
 
 } // namespace bench

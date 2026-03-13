@@ -80,6 +80,8 @@ IC_8288::BusCycle IC_8288::decode_status() const {
 }
 void IC_8288::release_command() {
     // Deassert all command strobes (active low -> High).
+    if (pin_inta_.level() == Level::Low)
+        spdlog::trace("[8288] releasing ~INTA High (T3->Idle)");
     pin_memr_.drive(Level::High);
     pin_memw_.drive(Level::High);
     pin_ior_.drive(Level::High);
@@ -177,14 +179,21 @@ void IC_8288::on_clk_falling() {
             // Assert the appropriate command strobe (active low).
             switch (cycle_) {
                 case BusCycle::INTA:
+                    spdlog::trace("[8288] driving ~INTA Low (T2 fall, state=T2)");
                     pin_inta_.drive(Level::Low);
                     break;
                 case BusCycle::IOR:
+                    spdlog::trace("[8288] driving ~IOR Low (T2 fall)");
                     pin_ior_.drive(Level::Low);
                     break;
-                case BusCycle::IOW:
+                case BusCycle::IOW: {
+                    auto lc = [](Level l) -> char { return l == Level::Low ? '0' : l == Level::High ? '1' : 'Z'; };
+                    spdlog::trace("[8288] driving ~IOW Low (T2 fall) pool_idx={} cur={} pend_before={}",
+                        pin_iow_.idx, lc(SignalPool::current[pin_iow_.idx]), lc(SignalPool::pending[pin_iow_.idx]));
                     pin_iow_.drive(Level::Low);
+                    spdlog::trace("[8288] after drive: pend_after={}", lc(SignalPool::pending[pin_iow_.idx]));
                     break;
+                }
                 case BusCycle::Fetch:
                 case BusCycle::MemR:
                     pin_memr_.drive(Level::Low);
