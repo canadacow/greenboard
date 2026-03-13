@@ -35,6 +35,7 @@ add_executable(bench
     src/ic/ic_74s245.cpp
     src/ic/ic_74s138.cpp
     src/ic/ic_74s20.cpp
+    src/ic/ic_dram_256k.cpp
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -70,6 +71,7 @@ add_executable(test_8088
     src/ic/ic_74s138.cpp
     src/ic/ic_74s20.cpp
     src/ic/ic_rom_8k.cpp
+    src/ic/ic_dram_256k.cpp
 )
 target_include_directories(test_8088 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_8088 PRIVATE spdlog::spdlog fmt::fmt)

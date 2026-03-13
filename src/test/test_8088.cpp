@@ -29,6 +29,7 @@
 #include "ic/ic_74s138.h"
 #include "ic/ic_74s20.h"
 #include "ic/ic_rom_8k.h"
+#include "ic/ic_dram_256k.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <cstring>
@@ -68,6 +69,15 @@ public:
     std::unique_ptr<uint8_t[]> mem = std::make_unique<uint8_t[]>(1 << 20);
     std::unique_ptr<uint8_t[]> io  = std::make_unique<uint8_t[]>(1 << 16);
 
+    // DRAM interface pins -- BusGlue replaces the address MUX (74S158)
+    // and delay line timing. Drives RAS/CAS/MA/WE per the 4164 protocol.
+    Pin dram_md[8];              // MD0-MD7 memory data bus (DRAM side)
+    Pin dram_ma[8];              // MA0-MA7 multiplexed DRAM address
+    Pin dram_ras;                // ~RAS (active low)
+    Pin dram_cas[4];             // ~CAS0-3 (per-bank, active low)
+    Pin dram_we;                 // ~WE (active low)
+    bool dram_connected = false;
+
     Signal* pic_ir[8] = {};       // IR0-IR7 (for test trigger port 0xF0)
 
     void init(Signal* xa_sigs[], Signal* d_sigs[], Signal& s0, Signal& s1, Signal& s2, Signal& clk) {
@@ -79,18 +89,32 @@ public:
         clk.connect(this);
     }
 
+    void init_dram(Signal* md_sigs[], Signal* ma_sigs[],
+                   Signal& ras, Signal* cas_sigs[], Signal& we) {
+        for (int i = 0; i < 8; ++i) dram_md[i] = md_sigs[i]->pin();
+        for (int i = 0; i < 8; ++i) dram_ma[i] = ma_sigs[i]->pin();
+        dram_ras = ras.pin();
+        for (int i = 0; i < 4; ++i) dram_cas[i] = cas_sigs[i]->pin();
+        dram_we = we.pin();
+        dram_connected = true;
+    }
+
     // T-state machine
     enum class TState { IDLE, T1, T2, T3, T4 };
     TState t_state = TState::IDLE;
     uint8_t cycle_type = 7;
     uint32_t cycle_addr = 0;
     int bus_cycle_count = 0;
+    bool dram_cycle = false;
+    bool dram_driving_md = false;
 
     void reset() {
         t_state = TState::IDLE;
         cycle_type = 7;
         cycle_addr = 0;
         bus_cycle_count = 0;
+        dram_cycle = false;
+        dram_driving_md = false;
     }
 
 protected:
@@ -141,6 +165,52 @@ private:
     bool is_hw_decoded(uint32_t addr) { return (addr & 0xFFFF) >= 0x20 && (addr & 0xFFFF) <= 0x3F; }
     // ROM range served by real IC_ROM_8K chips. BusGlue must not drive data here.
     bool is_rom_range(uint32_t addr) { return addr >= 0xFE000 && addr <= 0xFFFFF; }
+    // DRAM range: first 256KB (4 banks x 64KB).
+    bool is_dram_range(uint32_t addr) { return dram_connected && addr < 0x40000; }
+
+    // Drive MA = row address, assert ~RAS for the correct bank.
+    void drive_dram_row() {
+        uint8_t row = (cycle_addr >> 8) & 0xFF;
+        for (int i = 0; i < 8; ++i)
+            dram_ma[i].drive((row >> i) & 1 ? Level::High : Level::Low);
+        dram_ras.drive(Level::Low);
+    }
+
+    // Switch MA to column address, assert ~CAS for the target bank, set ~WE.
+    void drive_dram_col_and_cas() {
+        uint8_t col = cycle_addr & 0xFF;
+        int bank = (cycle_addr >> 16) & 3;
+        for (int i = 0; i < 8; ++i)
+            dram_ma[i].drive((col >> i) & 1 ? Level::High : Level::Low);
+        dram_cas[bank].drive(Level::Low);
+        dram_we.drive(is_write_cycle() ? Level::Low : Level::High);
+    }
+
+    void drive_dram_din(uint8_t val) {
+        for (int i = 0; i < 8; ++i)
+            dram_md[i].drive((val >> i) & 1 ? Level::High : Level::Low);
+        dram_driving_md = true;
+    }
+
+    uint8_t read_dram_dout() {
+        uint8_t val = 0;
+        for (int i = 0; i < 8; ++i)
+            if (dram_md[i].level() == Level::High)
+                val |= (1u << i);
+        return val;
+    }
+
+    void release_dram_signals() {
+        dram_ras.drive(Level::High);
+        for (int i = 0; i < 4; ++i) dram_cas[i].drive(Level::High);
+        dram_we.drive(Level::High);
+        for (int i = 0; i < 8; ++i) dram_ma[i].release();
+        if (dram_driving_md) {
+            for (int i = 0; i < 8; ++i) dram_md[i].release();
+            dram_driving_md = false;
+        }
+        dram_cycle = false;
+    }
 
     uint8_t io_read(uint16_t port) { return io[port]; }
 
@@ -183,20 +253,42 @@ private:
             if (status != 7) {
                 t_state = TState::T1;
                 cycle_type = status;
+                // During T1, ALE is high so latches are transparent -- XA is valid.
+                // Read address now and start DRAM row phase so that row+RAS
+                // gets its own commit before col+CAS is driven at T2 falling.
+                cycle_addr = read_address();
+                if (!is_io_cycle() && !is_inta_cycle()
+                    && is_dram_range(cycle_addr & 0xFFFFF)) {
+                    dram_cycle = true;
+                    drive_dram_row();
+                    spdlog::trace("[BusGlue] IDLE->T1 DRAM row: addr={:05X} row={:02X} type={}",
+                        cycle_addr, (cycle_addr >> 8) & 0xFF, cycle_type);
+                }
             }
             break;
 
         case TState::T1:
-            // ALE falls this CLK rising (8288 T1->T2). Latches capture but
-            // may not have settled yet (concurrent). Just advance state.
+            // ALE drops this CLK rising (8288 T1->T2). 74S373 inlines have
+            // latched the address. Row+RAS were driven last tick (IDLE->T1
+            // or T4->T1) and are now committed -- DRAM latched the row
+            // during this tick's inline eval.
             t_state = TState::T2;
             break;
 
         case TState::T2:
-            // Address is latched (ALE fell last CLK rise, settled by now).
-            // Drive read data / capture write data.
+            // For DRAM: CAS was driven at T2 falling, committed now.
+            // DRAM inline eval responded to CAS. Read DOUT for reads.
+            // For non-DRAM: drive data directly (same timing as before).
             t_state = TState::T3;
-            if (is_read_cycle()) {
+            if (dram_cycle) {
+                if (is_read_cycle()) {
+                    // DOUT settled during inline eval. Read MD, drive D.
+                    uint8_t val = read_dram_dout();
+                    drive_d(val);
+                    spdlog::trace("[BusGlue] T2->T3 DRAM read: addr={:05X} val={:02X}", cycle_addr, val);
+                }
+                spdlog::trace("[BusGlue] T2->T3 DRAM cycle done (type={})", cycle_type);
+            } else if (is_read_cycle()) {
                 if (is_inta_cycle()) {
                 } else if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
                     // PIC (and other U66-decoded ports) -- handled by real hardware.
@@ -225,6 +317,8 @@ private:
 
         case TState::T3:
             t_state = TState::T4;
+            if (dram_cycle)
+                release_dram_signals();
             break;
 
         case TState::T4:
@@ -232,6 +326,15 @@ private:
                 t_state = TState::T1;
                 cycle_type = status;
                 bus_cycle_count++;
+                // Back-to-back cycle: same as IDLE->T1, read addr + start row.
+                cycle_addr = read_address();
+                if (!is_io_cycle() && !is_inta_cycle()
+                    && is_dram_range(cycle_addr & 0xFFFFF)) {
+                    dram_cycle = true;
+                    drive_dram_row();
+                    spdlog::trace("[BusGlue] T4->T1 DRAM row: addr={:05X} row={:02X} type={}",
+                        cycle_addr, (cycle_addr >> 8) & 0xFF, cycle_type);
+                }
             } else {
                 if (is_read_cycle()) {
                     release_d();
@@ -245,8 +348,19 @@ private:
 
     void on_clk_falling() {
         if (t_state == TState::T2) {
-            // ALE fell last CLK rise, latches settled. Read latched address.
-            cycle_addr = read_address();
+            // For DRAM: RAS was driven at T1->T2 rising, committed now.
+            // DRAM latched row during inline eval. Drive col + CAS + WE.
+            if (dram_cycle) {
+                drive_dram_col_and_cas();
+                int bank = (cycle_addr >> 16) & 3;
+                spdlog::trace("[BusGlue] T2fall DRAM: col={:02X} bank={} WE={} type={}",
+                    cycle_addr & 0xFF, bank, is_write_cycle() ? "Low" : "High", cycle_type);
+                if (is_write_cycle()) {
+                    uint8_t val = read_d();
+                    drive_dram_din(val);
+                    spdlog::trace("[BusGlue] T2fall DRAM write DIN={:02X}", val);
+                }
+            }
         }
     }
 };
@@ -465,6 +579,20 @@ int main() {
     Signal irq4{"IRQ4"}, irq5{"IRQ5"}, irq6{"IRQ6"}, irq7{"IRQ7"};
     Signal* irq_arr[] = {&irq0, &irq1, &irq2, &irq3, &irq4, &irq5, &irq6, &irq7};
 
+    // DRAM signals (BusGlue drives these as address MUX + timing substitute)
+    Signal dram_ma0("MA0"), dram_ma1("MA1"), dram_ma2("MA2"), dram_ma3("MA3");
+    Signal dram_ma4("MA4"), dram_ma5("MA5"), dram_ma6("MA6"), dram_ma7("MA7");
+    Signal* dram_ma_arr[] = {&dram_ma0, &dram_ma1, &dram_ma2, &dram_ma3,
+                             &dram_ma4, &dram_ma5, &dram_ma6, &dram_ma7};
+    Signal dram_ras("~RAS");
+    Signal dram_cas0("~CAS0"), dram_cas1("~CAS1"), dram_cas2("~CAS2"), dram_cas3("~CAS3");
+    Signal* dram_cas_arr[] = {&dram_cas0, &dram_cas1, &dram_cas2, &dram_cas3};
+    Signal dram_we("~WE_DRAM");
+    Signal md0("MD0"), md1("MD1"), md2("MD2"), md3("MD3");
+    Signal md4("MD4"), md5("MD5"), md6("MD6"), md7("MD7");
+    Signal mdp("MDP");
+    Signal* md_arr[] = {&md0, &md1, &md2, &md3, &md4, &md5, &md6, &md7};
+
     // 8284A signals
     Signal osc{"OSC"}, pclk{"PCLK"}, res{"RES"};
 
@@ -490,6 +618,12 @@ int main() {
     for (int i = 0; i < 8; ++i)  all_traces.push_back(d_arr[i]);
     for (int i = 0; i < 8; ++i)  all_traces.push_back(irq_arr[i]);
     for (int i = 0; i < 20; ++i) all_traces.push_back(&xa[i]);
+    for (int i = 0; i < 8; ++i)  all_traces.push_back(dram_ma_arr[i]);
+    for (int i = 0; i < 8; ++i)  all_traces.push_back(md_arr[i]);
+    all_traces.push_back(&mdp);
+    all_traces.push_back(&dram_ras);
+    for (int i = 0; i < 4; ++i)  all_traces.push_back(dram_cas_arr[i]);
+    all_traces.push_back(&dram_we);
 
     // U11: 8284A Clock Generator
     Socket clk_socket{"U11", "8284A", 18};
@@ -712,6 +846,56 @@ int main() {
     all_traces.push_back(&rom_addr_sel);
     all_traces.push_back(&cs7);
 
+    // --- DRAM: 4 banks x 9 chips = 36 sockets (IC_DRAM_256K) ---
+    auto make_dram_bank = [&](int start_u) -> std::vector<Socket> {
+        std::vector<Socket> bank;
+        bank.reserve(9);
+        for (int i = 0; i < 9; ++i)
+            bank.emplace_back("U" + std::to_string(start_u + i), "RAM_64K_X_1", 16);
+        return bank;
+    };
+    auto ram_bank0 = make_dram_bank(37);  // U37-U45
+    auto ram_bank1 = make_dram_bank(53);  // U53-U61
+    auto ram_bank2 = make_dram_bank(69);  // U69-U77
+    auto ram_bank3 = make_dram_bank(85);  // U85-U93
+
+    // Wire each DRAM bank: shared MA/WE/RAS, per-bank CAS, per-chip data.
+    auto wire_dram_bank = [&](std::vector<Socket>& bank, int bank_idx) {
+        for (int chip = 0; chip < 9; ++chip) {
+            auto& s = bank[chip];
+            // 4164 address pins -> MA bus
+            s.wire(5, dram_ma0);   // A0
+            s.wire(7, dram_ma1);   // A1
+            s.wire(6, dram_ma2);   // A2
+            s.wire(12, dram_ma3);  // A3
+            s.wire(11, dram_ma4);  // A4
+            s.wire(10, dram_ma5);  // A5
+            s.wire(13, dram_ma6);  // A6
+            s.wire(9, dram_ma7);   // A7
+            // Control
+            s.wire(3, dram_we);    // ~WE
+            s.wire(4, dram_ras);   // ~RAS
+            s.wire(15, *dram_cas_arr[bank_idx]);  // ~CAS (per-bank)
+            s.wire(8, vcc);        // VCC
+            s.wire(16, gnd);       // GND
+            // Data: chip 0 = parity, chips 1-8 = MD0-MD7
+            if (chip == 0) {
+                s.wire(2, mdp);    // DIN (parity)
+                s.wire(14, mdp);   // DOUT (parity)
+            } else {
+                s.wire(2, *md_arr[chip - 1]);   // DIN
+                s.wire(14, *md_arr[chip - 1]);  // DOUT
+            }
+        }
+    };
+    wire_dram_bank(ram_bank0, 0);
+    wire_dram_bank(ram_bank1, 1);
+    wire_dram_bank(ram_bank2, 2);
+    wire_dram_bank(ram_bank3, 3);
+
+    IC_DRAM_256K dram;
+    dram.install(ram_bank0, ram_bank1, ram_bank2, ram_bank3);
+
     // BusGlue: reactive address decode + memory
     Signal* xa_ptrs[20];
     Signal* d_ptrs[8];
@@ -720,6 +904,7 @@ int main() {
 
     BusGlue bus;
     bus.init(xa_ptrs, d_ptrs, s0, s1, s2, clk);
+    bus.init_dram(md_arr, dram_ma_arr, dram_ras, dram_cas_arr, dram_we);
     for (int i = 0; i < 8; ++i) bus.pic_ir[i] = irq_arr[i];
 
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
@@ -735,6 +920,7 @@ int main() {
     scheduler.register_inline(nand_ic);
     scheduler.register_inline(rom_dec);
     scheduler.register_inline(rom_ic);
+    scheduler.register_inline(&dram);
     // Register callback components (no fiber overhead).
     scheduler.register_bus_controller(bc);
     scheduler.register_callback(pic);
@@ -757,6 +943,7 @@ int main() {
     {
         std::memset(bus.mem.get(), 0xF4, 1 << 20);
         std::memset(bus.io.get(), 0xFF, 1 << 16);
+        std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
         bus.reset();
 
         std::string path = std::string(ASM_TEST_DIR) + "/test_bench64.bin";
@@ -771,6 +958,7 @@ int main() {
             nand_ic->power_on();
             rom_dec->power_on();
             rom_ic->power_on();
+            dram.power_on();
             latch_lo_ic->power_on();
             latch_mid_ic->power_on();
             latch_hi_ic->power_on();
@@ -800,19 +988,6 @@ int main() {
 
             double elapsed = std::chrono::duration<double>(end - start).count();
 
-            // Read 64-bit counter from memory.
-            uint64_t count = 0;
-            for (int i = 0; i < 8; ++i)
-                count |= (uint64_t)bus.mem[0x0500 + i] << (i * 8);
-
-            double rate = (elapsed > 0) ? (double)count / elapsed : 0;
-            uint64_t cycles = clk_gen->clk_cycles();
-            double mhz = (elapsed > 0) ? (double)cycles / elapsed / 1e6 : 0;
-            spdlog::info("  count: {} increments in {:.3f}s ({:.0f} inc/s)",
-                count, elapsed, rate);
-            spdlog::info("  CLK: {} cycles ({:.3f} MHz, target 4.77 MHz)",
-                cycles, mhz);
-
             if (!cpu->halted())
                 spdlog::warn("  benchmark timeout -- CPU did not halt");
 
@@ -826,6 +1001,7 @@ int main() {
             bc->power_off();
             pic->power_off();
             bus.power_off();
+            dram.power_off();
             rom_ic->power_off();
             xcvr->power_off();
             io_dec->power_off();
@@ -834,6 +1010,19 @@ int main() {
             latch_lo_ic->power_off();
             latch_mid_ic->power_off();
             latch_hi_ic->power_off();
+
+            // Read 64-bit counter directly from DRAM.
+            uint64_t count = 0;
+            for (int i = 0; i < 8; ++i)
+                count |= (uint64_t)dram.data()[0x0500 + i] << (i * 8);
+
+            double rate = (elapsed > 0) ? (double)count / elapsed : 0;
+            uint64_t cycles = clk_gen->clk_cycles();
+            double mhz = (elapsed > 0) ? (double)cycles / elapsed / 1e6 : 0;
+            spdlog::info("  count: {} increments in {:.3f}s ({:.0f} inc/s)",
+                count, elapsed, rate);
+            spdlog::info("  CLK: {} cycles ({:.3f} MHz, target 4.77 MHz)",
+                cycles, mhz);
 
             for (auto* sig : all_traces)
                 sig->reset();
@@ -847,9 +1036,10 @@ int main() {
     for (auto& tc : tests) {
         spdlog::info("--- {} ---", tc.name);
 
-        // Reset memory, I/O space, and BusGlue state
+        // Reset memory, I/O space, DRAM, and BusGlue state
         std::memset(bus.mem.get(), 0xF4, 1 << 20);
         std::memset(bus.io.get(), 0xFF, 1 << 16);
+        std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
         bus.reset();
 
         // Load binary
@@ -870,6 +1060,7 @@ int main() {
         nand_ic->power_on();
         rom_dec->power_on();
         rom_ic->power_on();
+        dram.power_on();
         latch_lo_ic->power_on();
         latch_mid_ic->power_on();
         latch_hi_ic->power_on();
@@ -916,6 +1107,7 @@ int main() {
         bc->power_off();
         pic->power_off();
         bus.power_off();
+        dram.power_off();
         rom_ic->power_off();
         xcvr->power_off();
         io_dec->power_off();
@@ -929,10 +1121,11 @@ int main() {
         for (auto* sig : all_traces)
             sig->reset();
 
-        // Check results
+        // Check results -- read directly from DRAM (results are in DRAM range).
         bool pass = true;
+        const uint8_t* ram = dram.data();
         for (auto& e : tc.expects) {
-            uint16_t actual = bus.mem[e.addr] | (bus.mem[e.addr + 1] << 8);
+            uint16_t actual = ram[e.addr] | (ram[e.addr + 1] << 8);
             if (actual != e.value) {
                 spdlog::error("  FAIL {}: [0x{:04X}] = 0x{:04X} (expected 0x{:04X})",
                     e.label, e.addr, actual, e.value);

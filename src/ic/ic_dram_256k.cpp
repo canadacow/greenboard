@@ -1,0 +1,158 @@
+#include "ic/ic_dram_256k.h"
+#include <spdlog/spdlog.h>
+
+namespace bench {
+
+IC_DRAM_256K::IC_DRAM_256K() : InlineComponent("DRAM_256K") {}
+
+void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank1,
+                           std::vector<Socket>& bank2, std::vector<Socket>& bank3) {
+    std::vector<Socket>* bank_sockets[4] = {&bank0, &bank1, &bank2, &bank3};
+
+    auto pin = [](Socket& s, int p) -> Pin {
+        Signal* sig = s.pin_signal(p);
+        return sig ? sig->pin() : Pin{};
+    };
+    auto connect_pin = [this](Socket& s, int p) -> Pin {
+        Signal* sig = s.pin_signal(p);
+        if (sig) sig->connect(this);
+        return sig ? sig->pin() : Pin{};
+    };
+
+    // Shared signals -- grab from first chip of bank 0
+    Socket& chip0 = bank0[0];
+
+    // 4164 address pins -> address bits
+    pin_a_[0] = pin(chip0, 5);    // A0
+    pin_a_[1] = pin(chip0, 7);    // A1
+    pin_a_[2] = pin(chip0, 6);    // A2
+    pin_a_[3] = pin(chip0, 12);   // A3
+    pin_a_[4] = pin(chip0, 11);   // A4
+    pin_a_[5] = pin(chip0, 10);   // A5
+    pin_a_[6] = pin(chip0, 13);   // A6
+    pin_a_[7] = pin(chip0, 9);    // A7
+
+    pin_we_  = connect_pin(chip0, 3);   // ~WE
+    pin_vcc_ = connect_pin(chip0, 8);   // VCC
+
+    for (int b = 0; b < 4; ++b) {
+        auto& sockets = *bank_sockets[b];
+        auto& bank = banks_[b];
+
+        // ~RAS from pin 4, ~CAS from pin 15 (same net for all chips in bank)
+        bank.ras = connect_pin(sockets[0], 4);
+        bank.cas = connect_pin(sockets[0], 15);
+
+        // Data pins: socket[0]=parity chip, socket[1..8]=MD0..MD7
+        for (int i = 0; i < 8; ++i) {
+            bank.din[i]  = pin(sockets[i + 1], 2);    // MD[i] DIN
+            bank.dout[i] = pin(sockets[i + 1], 14);   // MD[i] DOUT
+        }
+        bank.din[8]  = pin(sockets[0], 2);             // Parity DIN
+        bank.dout[8] = pin(sockets[0], 14);            // Parity DOUT
+    }
+
+    spdlog::debug("[DRAM] installed 4 banks x 9 chips = 256KB");
+}
+
+void IC_DRAM_256K::on_power_on() {
+    // DRAM contents are undefined at power-on (leave as zero-initialized)
+    spdlog::debug("[DRAM] power on");
+}
+
+void IC_DRAM_256K::on_power_off() {
+    // Release any driven data pins
+    for (int b = 0; b < 4; ++b) {
+        auto& bank = banks_[b];
+        if (bank.driving) {
+            for (int i = 0; i < 9; ++i)
+                bank.dout[i].release();
+            bank.driving = false;
+        }
+        bank.row_latched = false;
+        bank.ras_prev = Level::HiZ;
+        bank.cas_prev = Level::HiZ;
+    }
+    spdlog::debug("[DRAM] power off");
+}
+
+void IC_DRAM_256K::on_signal_change(bool rising, bool /*falling*/) {
+    if(!rising) return;
+    
+    for (int b = 0; b < 4; ++b) {
+        auto& bank = banks_[b];
+        Level ras_cur = bank.ras.level();
+        Level cas_cur = bank.cas.level();
+
+        // ~RAS falling edge: latch row address
+        if (ras_cur == Level::Low && bank.ras_prev != Level::Low) {
+            bank.row_addr = read_address();
+            bank.row_latched = true;
+            spdlog::trace("[DRAM] bank{} RAS fall: row={:02X}", b, bank.row_addr);
+        }
+
+        // ~RAS rising edge: end of cycle, release outputs
+        if (ras_cur == Level::High && bank.ras_prev != Level::High) {
+            bank.row_latched = false;
+            if (bank.driving) {
+                for (int i = 0; i < 9; ++i)
+                    bank.dout[i].release();
+                bank.driving = false;
+            }
+        }
+
+        // ~CAS falling edge: latch column address, perform read or write
+        if (cas_cur == Level::Low && bank.cas_prev != Level::Low && bank.row_latched) {
+            uint8_t col_addr = read_address();
+            uint32_t addr = (static_cast<uint32_t>(b) << 16)
+                          | (static_cast<uint32_t>(bank.row_addr) << 8)
+                          | col_addr;
+
+            if (pin_we_.level() == Level::Low) {
+                // Write: sample DIN pins, store to RAM
+                uint8_t data = 0;
+                for (int i = 0; i < 8; ++i) {
+                    if (bank.din[i].level() == Level::High)
+                        data |= (1 << i);
+                }
+                ram_[addr] = data;
+                parity_[addr] = bank.din[8].level() == Level::High ? 1 : 0;
+                spdlog::trace("[DRAM] WRITE bank{} addr={:05X} (row={:02X} col={:02X}) data={:02X}",
+                    b, addr, bank.row_addr, col_addr, data);
+            } else {
+                // Read: drive DOUT pins from RAM
+                uint8_t data = ram_[addr];
+                for (int i = 0; i < 8; ++i) {
+                    bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
+                }
+                bank.dout[8].drive(parity_[addr] ? Level::High : Level::Low);
+                bank.driving = true;
+                spdlog::trace("[DRAM] READ bank{} addr={:05X} (row={:02X} col={:02X}) data={:02X}",
+                    b, addr, bank.row_addr, col_addr, data);
+            }
+        }
+
+        // ~CAS rising edge: release data outputs
+        if (cas_cur == Level::High && bank.cas_prev != Level::High) {
+            if (bank.driving) {
+                for (int i = 0; i < 9; ++i)
+                    bank.dout[i].release();
+                bank.driving = false;
+            }
+        }
+
+        bank.ras_prev = ras_cur;
+        bank.cas_prev = cas_cur;
+    }
+}
+
+uint8_t IC_DRAM_256K::read_address() const {
+    uint8_t addr = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (pin_a_[i].level() == Level::High)
+            addr |= (1 << i);
+    }
+    return addr;
+}
+
+} // namespace bench
