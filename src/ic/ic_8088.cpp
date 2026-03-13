@@ -390,11 +390,15 @@ void IC_8088::index_inc(int reg_id) {
 }
 
 uint8_t IC_8088::fetch_byte(int offset) {
-    while (offset >= prefetch_len_ && prefetch_len_ < 8) {
+#if 0 // This is busted
+    while (offset >= prefetch_len_ && prefetch_len_ < 4) {
         prefetch_[prefetch_len_] = bus_read_byte(prefetch_base_ + prefetch_len_);
         prefetch_len_++;
     }
     return prefetch_[offset];
+#else
+    return bus_read_byte(prefetch_base_ + offset);
+#endif
 }
 
 uint16_t IC_8088::fetch_word(int offset) {

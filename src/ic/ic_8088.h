@@ -110,7 +110,7 @@ private:
     // Instruction fetch
     uint8_t fetch_byte(int offset);
     uint16_t fetch_word(int offset);
-    uint8_t prefetch_[8] = {};
+    uint8_t prefetch_[4] = {};
     int prefetch_len_ = 0;
     uint32_t prefetch_base_ = 0;
 
