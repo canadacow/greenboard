@@ -36,10 +36,22 @@ public:
 
     // Pin direction declarations for wiring visualization and dependency graph.
     static constexpr int SLOT_WORDS = (SignalPool::MAX_SIGNALS + 63) / 64;
-    void declare_input(Pin p)  { inputs_[p.idx / 64]  |= uint64_t(1) << (p.idx % 64); }
-    void declare_output(Pin p) { outputs_[p.idx / 64] |= uint64_t(1) << (p.idx % 64); }
+    void declare_input(Pin p)  { if (p.idx == 0) return; inputs_[p.idx / 64]  |= uint64_t(1) << (p.idx % 64); }
+    void declare_output(Pin p) { if (p.idx == 0) return; outputs_[p.idx / 64] |= uint64_t(1) << (p.idx % 64); }
+
+    // Async inputs are sampled by the IC at a future point (e.g. INTR, NMI,
+    // READY, TEST on the 8088). They appear in the wiring graph as inputs
+    // but create no ordering edges in the dependency DAG -- the value read
+    // this cycle was driven in a previous cycle.
+    void declare_async_input(Pin p) {
+        if (p.idx == 0) return;
+        inputs_[p.idx / 64]       |= uint64_t(1) << (p.idx % 64);
+        async_inputs_[p.idx / 64] |= uint64_t(1) << (p.idx % 64);
+    }
+
     const uint64_t* inputs()  const { return inputs_; }
     const uint64_t* outputs() const { return outputs_; }
+    const uint64_t* async_inputs() const { return async_inputs_; }
 
 protected:
     // Called when a connected signal changes.
@@ -59,8 +71,9 @@ protected:
 private:
     std::string name_;
     std::string description_;
-    uint64_t inputs_[SLOT_WORDS]  = {};
-    uint64_t outputs_[SLOT_WORDS] = {};
+    uint64_t inputs_[SLOT_WORDS]       = {};
+    uint64_t outputs_[SLOT_WORDS]      = {};
+    uint64_t async_inputs_[SLOT_WORDS] = {};
 };
 
 } // namespace bench

@@ -4,6 +4,7 @@
 #include "core/callback_component.h"
 #include "core/fiber_component.h"
 #include "core/inline_component.h"
+#include <array>
 #include <cassert>
 #include <algorithm>
 #include <cstdio>
@@ -120,6 +121,7 @@ public:
         }
 
         dump_dot("callback_graph");
+        dump_unified_waves();
         resolved_ = true;
     }
 
@@ -259,6 +261,211 @@ public:
         std::string cmd = "\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg " + dot_path + " -o " + svg_path + " 2>&1";
         if (std::system(cmd.c_str()) == 0)
             spdlog::info("[Scheduler] rendered {}", svg_path);
+        else
+            spdlog::warn("[Scheduler] dot not found -- SVG not rendered");
+    }
+
+    // Prototype: topologically sort ALL evaluable components (bus controllers +
+    // inlines + callbacks) using effective outputs (output & ~input) to break
+    // bidirectional cycles. Logs wave assignment and dumps a DOT/SVG graph.
+    // Does NOT change evaluation order -- purely for visualization/planning.
+    void dump_unified_waves() {
+        // Collect ALL components into a flat list (fibers included).
+        std::vector<Component*> evals;
+        for (int i = 0; i < fiber_count_;     ++i) evals.push_back(fibers_[i]);
+        for (int i = 0; i < bus_ctrl_count_;  ++i) evals.push_back(bus_ctrls_[i]);
+        for (int i = 0; i < inline_count_;    ++i) evals.push_back(inlines_[i]);
+        for (int i = 0; i < callback_count_;  ++i) evals.push_back(callbacks_[i]);
+        const int n = static_cast<int>(evals.size());
+        if (n == 0) return;
+
+        constexpr int W = Component::SLOT_WORDS;
+
+        // Effective outputs: output-only pins (exclude bidirectional).
+        // Effective inputs: exclude async inputs (cross-cycle, no ordering).
+        std::vector<std::array<uint64_t, W>> eff_out(n), eff_in(n);
+        for (int i = 0; i < n; ++i)
+            for (int w = 0; w < W; ++w) {
+                eff_out[i][w] = evals[i]->outputs()[w] & ~evals[i]->inputs()[w];
+                eff_in[i][w]  = evals[i]->inputs()[w]  & ~evals[i]->async_inputs()[w];
+            }
+
+        // Build adjacency: depends[b][a] means b depends on a.
+        std::vector<std::vector<bool>> depends(n, std::vector<bool>(n, false));
+        for (int a = 0; a < n; ++a)
+            for (int b = 0; b < n; ++b) {
+                if (a == b) continue;
+                for (int w = 0; w < W; ++w)
+                    if (eff_out[a][w] & eff_in[b][w]) {
+                        depends[b][a] = true;
+                        // Log the signals that cause this edge.
+                        uint64_t overlap = eff_out[a][w] & eff_in[b][w];
+                        for (int bit = 0; bit < 64; ++bit) {
+                            if ((overlap >> bit) & 1) {
+                                int slot = w * 64 + bit;
+                                const char* nm = (slot < SignalPool::count) ? SignalPool::names[slot] : "?";
+                                spdlog::info("[unified]   {} -> {} via {}",
+                                             evals[a]->name(), evals[b]->name(), nm ? nm : "?");
+                            }
+                        }
+                        break;
+                    }
+            }
+
+        // Kahn's algorithm with level assignment.
+        std::vector<int> in_deg(n, 0), level(n, 0);
+        for (int b = 0; b < n; ++b)
+            for (int a = 0; a < n; ++a)
+                if (depends[b][a]) ++in_deg[b];
+
+        std::vector<int> queue;
+        for (int i = 0; i < n; ++i)
+            if (in_deg[i] == 0) queue.push_back(i);
+
+        int front = 0, sorted = 0;
+        while (front < static_cast<int>(queue.size())) {
+            int u = queue[front++];
+            ++sorted;
+            for (int v = 0; v < n; ++v) {
+                if (!depends[v][u]) continue;
+                level[v] = std::max(level[v], level[u] + 1);
+                if (--in_deg[v] == 0) queue.push_back(v);
+            }
+        }
+
+        if (sorted != n) {
+            spdlog::error("[Scheduler] unified sort: cycle detected! sorted={} of {}", sorted, n);
+            for (int i = 0; i < n; ++i)
+                if (in_deg[i] > 0)
+                    spdlog::error("[Scheduler]   stuck: {} (in_deg={})", evals[i]->name(), in_deg[i]);
+            return;
+        }
+
+        // Group into waves.
+        int num_w = 0;
+        for (int i = 0; i < n; ++i)
+            num_w = std::max(num_w, level[i] + 1);
+
+        std::vector<std::vector<Component*>> waves(num_w);
+        for (int i = 0; i < n; ++i)
+            waves[level[i]].push_back(evals[i]);
+
+        spdlog::info("[Scheduler] === unified wave plan ({} waves, {} components) ===", num_w, n);
+        for (int w = 0; w < num_w; ++w) {
+            spdlog::info("[Scheduler] wave {}: {} components", w, waves[w].size());
+            for (auto* c : waves[w])
+                spdlog::info("[Scheduler]   - {}", c->name());
+        }
+
+        // Dump DOT with wave subgraph clustering.
+        // Visuals are outside waves; fibers are already in evals.
+        std::vector<Component*> all;
+        for (int i = 0; i < visual_count_; ++i) all.push_back(visuals_[i]);
+        for (auto* c : evals) all.push_back(c);
+        int total = static_cast<int>(all.size());
+        int eval_start = visual_count_;  // evals start here in 'all'
+
+        // Build a map from component pointer to index in 'all'.
+        auto idx_of = [&](Component* c) -> int {
+            for (int i = 0; i < total; ++i)
+                if (all[i] == c) return i;
+            return -1;
+        };
+
+        FILE* f = std::fopen("unified_waves.dot", "w");
+        if (!f) return;
+
+        std::fprintf(f, "digraph unified_waves {\n");
+        std::fprintf(f, "  rankdir=LR;\n");
+        std::fprintf(f, "  node [shape=box fontname=\"Consolas\" fontsize=10 style=filled];\n");
+        std::fprintf(f, "  edge [fontname=\"Consolas\" fontsize=8 color=\"#555555\"];\n");
+        std::fprintf(f, "  graph [nodesep=0.3 ranksep=0.8 compound=true];\n\n");
+
+        // Wave colors (cycle through a palette).
+        const char* wave_colors[] = {
+            "#e8f4f8", "#e8f8e8", "#f8f4e8", "#f8e8e8",
+            "#e8e8f8", "#f4e8f8", "#e8f8f4", "#f8f8e8",
+        };
+        int ncolors = 8;
+
+        // Non-wave components (visuals, fibers).
+        for (int i = 0; i < eval_start; ++i) {
+            auto* c = all[i];
+            std::string label = c->description().empty()
+                ? c->name() : c->description() + "\\n" + c->name();
+            std::fprintf(f, "  n%d [label=\"%s\" fillcolor=\"#dddddd\"];\n",
+                         i, label.c_str());
+        }
+        std::fprintf(f, "\n");
+
+        // Wave subgraphs.
+        for (int w = 0; w < num_w; ++w) {
+            std::fprintf(f, "  subgraph cluster_wave%d {\n", w);
+            std::fprintf(f, "    label=\"wave %d\";\n", w);
+            std::fprintf(f, "    style=filled; color=\"%s\";\n", wave_colors[w % ncolors]);
+            std::fprintf(f, "    fontname=\"Consolas\"; fontsize=11;\n");
+            for (auto* c : waves[w]) {
+                int idx = idx_of(c);
+                std::string label = c->description().empty()
+                    ? c->name() : c->description() + "\\n" + c->name();
+                std::fprintf(f, "    n%d [label=\"%s\" fillcolor=\"white\"];\n",
+                             idx, label.c_str());
+            }
+            std::fprintf(f, "  }\n\n");
+        }
+
+        // Edges: only effective-output -> input (the ordering edges).
+        // Also show io<->io as dashed (no ordering, same wave).
+        struct PinInfo { int slot; const char* name; };
+        std::vector<std::vector<PinInfo>> in_pins(total), out_pins(total), io_pins(total);
+        for (int i = 0; i < total; ++i) {
+            auto* c = all[i];
+            for (int s = 1; s < SignalPool::count; ++s) {
+                const char* nm = SignalPool::names[s];
+                if (!nm) continue;
+                bool is_in  = (c->inputs()[s / 64]  >> (s % 64)) & 1;
+                bool is_out = (c->outputs()[s / 64] >> (s % 64)) & 1;
+                if (is_in && is_out) io_pins[i].push_back({s, nm});
+                else if (is_in)      in_pins[i].push_back({s, nm});
+                else if (is_out)     out_pins[i].push_back({s, nm});
+            }
+        }
+
+        auto has_slot = [](const std::vector<PinInfo>& v, int slot) {
+            for (auto& p : v) if (p.slot == slot) return true;
+            return false;
+        };
+
+        for (int a = 0; a < total; ++a) {
+            for (int b = 0; b < total; ++b) {
+                if (a == b) continue;
+                // out -> in (ordering edge)
+                for (auto& op : out_pins[a])
+                    if (has_slot(in_pins[b], op.slot))
+                        std::fprintf(f, "  n%d -> n%d [label=\"%s\"];\n", a, b, op.name);
+                // out -> io
+                for (auto& op : out_pins[a])
+                    if (has_slot(io_pins[b], op.slot))
+                        std::fprintf(f, "  n%d -> n%d [label=\"%s\"];\n", a, b, op.name);
+                // io -> in
+                for (auto& bp : io_pins[a])
+                    if (has_slot(in_pins[b], bp.slot))
+                        std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc8800\"];\n", a, b, bp.name);
+                // io <-> io (no ordering, show as bidirectional dashed)
+                if (a < b)
+                    for (auto& bp : io_pins[a])
+                        if (has_slot(io_pins[b], bp.slot))
+                            std::fprintf(f, "  n%d -> n%d [label=\"%s\" dir=both style=dashed color=\"#cc8800\"];\n", a, b, bp.name);
+            }
+        }
+
+        std::fprintf(f, "}\n");
+        std::fclose(f);
+        spdlog::info("[Scheduler] wrote unified_waves.dot");
+
+        std::string cmd = "\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg unified_waves.dot -o unified_waves.svg 2>&1";
+        if (std::system(cmd.c_str()) == 0)
+            spdlog::info("[Scheduler] rendered unified_waves.svg");
         else
             spdlog::warn("[Scheduler] dot not found -- SVG not rendered");
     }
