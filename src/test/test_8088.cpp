@@ -258,8 +258,6 @@ private:
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
                     drive_dram_row();
-                    spdlog::trace("[BusGlue] IDLE->T1 DRAM row: addr={:05X} row={:02X} type={}",
-                        cycle_addr, (cycle_addr >> 8) & 0xFF, cycle_type);
                 }
             }
             break;
@@ -282,9 +280,7 @@ private:
                     // DOUT settled during inline eval. Read MD, drive D.
                     uint8_t val = read_dram_dout();
                     drive_d(val);
-                    spdlog::trace("[BusGlue] T2->T3 DRAM read: addr={:05X} val={:02X}", cycle_addr, val);
                 }
-                spdlog::trace("[BusGlue] T2->T3 DRAM cycle done (type={})", cycle_type);
             } else if (is_read_cycle()) {
                 if (is_inta_cycle()) {
                 } else if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
@@ -320,8 +316,6 @@ private:
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
                     drive_dram_row();
-                    spdlog::trace("[BusGlue] T4->T1 DRAM row: addr={:05X} row={:02X} type={}",
-                        cycle_addr, (cycle_addr >> 8) & 0xFF, cycle_type);
                 }
             } else {
                 if (is_read_cycle()) {
@@ -341,12 +335,9 @@ private:
             if (dram_cycle) {
                 drive_dram_col_and_cas();
                 int bank = (cycle_addr >> 16) & 3;
-                spdlog::trace("[BusGlue] T2fall DRAM: col={:02X} bank={} WE={} type={}",
-                    cycle_addr & 0xFF, bank, is_write_cycle() ? "Low" : "High", cycle_type);
                 if (is_write_cycle()) {
                     uint8_t val = read_d();
                     drive_dram_din(val);
-                    spdlog::trace("[BusGlue] T2fall DRAM write DIN={:02X}", val);
                 }
             }
         }
