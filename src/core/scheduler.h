@@ -414,20 +414,25 @@ public:
             std::fprintf(f, "  }\n\n");
         }
 
-        // Edges: only effective-output -> input (the ordering edges).
-        // Also show io<->io as dashed (no ordering, same wave).
+        // Edges:
+        //   solid grey  = ordering edge (out -> in, must eval producer first)
+        //   dashed orange = bidirectional bus (io -- shared, no ordering)
+        //   dashed red    = async input (sampled on a future cycle, no ordering)
         struct PinInfo { int slot; const char* name; };
-        std::vector<std::vector<PinInfo>> in_pins(total), out_pins(total), io_pins(total);
+        std::vector<std::vector<PinInfo>> in_pins(total), async_pins(total),
+                                          out_pins(total), io_pins(total);
         for (int i = 0; i < total; ++i) {
             auto* c = all[i];
             for (int s = 1; s < SignalPool::count; ++s) {
                 const char* nm = SignalPool::names[s];
                 if (!nm) continue;
-                bool is_in  = (c->inputs()[s / 64]  >> (s % 64)) & 1;
-                bool is_out = (c->outputs()[s / 64] >> (s % 64)) & 1;
-                if (is_in && is_out) io_pins[i].push_back({s, nm});
-                else if (is_in)      in_pins[i].push_back({s, nm});
-                else if (is_out)     out_pins[i].push_back({s, nm});
+                bool is_in    = (c->inputs()[s / 64]       >> (s % 64)) & 1;
+                bool is_out   = (c->outputs()[s / 64]      >> (s % 64)) & 1;
+                bool is_async = (c->async_inputs()[s / 64]  >> (s % 64)) & 1;
+                if (is_in && is_out)  io_pins[i].push_back({s, nm});
+                else if (is_async)    async_pins[i].push_back({s, nm});
+                else if (is_in)       in_pins[i].push_back({s, nm});
+                else if (is_out)      out_pins[i].push_back({s, nm});
             }
         }
 
@@ -443,6 +448,10 @@ public:
                 for (auto& op : out_pins[a])
                     if (has_slot(in_pins[b], op.slot))
                         std::fprintf(f, "  n%d -> n%d [label=\"%s\"];\n", a, b, op.name);
+                // out -> async_in (cross-cycle, no ordering)
+                for (auto& op : out_pins[a])
+                    if (has_slot(async_pins[b], op.slot))
+                        std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc4444\"];\n", a, b, op.name);
                 // out -> io
                 for (auto& op : out_pins[a])
                     if (has_slot(io_pins[b], op.slot))
@@ -451,6 +460,10 @@ public:
                 for (auto& bp : io_pins[a])
                     if (has_slot(in_pins[b], bp.slot))
                         std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc8800\"];\n", a, b, bp.name);
+                // io -> async_in (cross-cycle, no ordering)
+                for (auto& bp : io_pins[a])
+                    if (has_slot(async_pins[b], bp.slot))
+                        std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc4444\"];\n", a, b, bp.name);
                 // io <-> io (no ordering, show as bidirectional dashed)
                 if (a < b)
                     for (auto& bp : io_pins[a])
