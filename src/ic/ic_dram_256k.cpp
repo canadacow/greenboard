@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_DRAM_256K::IC_DRAM_256K() : InlineComponent("DRAM_256K") {}
+IC_DRAM_256K::IC_DRAM_256K() : InlineComponent("DRAM_256K") { set_description("DRAM"); }
 
 void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank1,
                            std::vector<Socket>& bank2, std::vector<Socket>& bank3) {
@@ -58,8 +58,8 @@ void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank
     for (int b = 0; b < 4; ++b) {
         declare_input(banks_[b].ras);                         // ~RAS
         declare_input(banks_[b].cas);                         // ~CAS
-        for (int i = 0; i < 9; ++i) declare_input(banks_[b].din[i]);   // DIN
-        for (int i = 0; i < 9; ++i) declare_output(banks_[b].dout[i]); // DOUT
+        // DIN/DOUT share the same MD signal -- bidirectional.
+        for (int i = 0; i < 9; ++i) { declare_input(banks_[b].din[i]); declare_output(banks_[b].din[i]); }
     }
 }
 

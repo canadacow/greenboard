@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8237A::IC_8237A() : CallbackComponent("8237A") {}
+IC_8237A::IC_8237A() : CallbackComponent("8237A") { set_description("DMA"); }
 
 void IC_8237A::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {

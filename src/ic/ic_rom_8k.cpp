@@ -7,6 +7,7 @@ namespace bench {
 IC_ROM_8K::IC_ROM_8K(const std::string& label, const std::string& file_path)
     : InlineComponent(label)
 {
+    set_description("8K ROM");
     if (!file_path.empty()) {
         std::ifstream f(file_path, std::ios::binary);
         if (!f) {

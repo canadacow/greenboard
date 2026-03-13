@@ -125,38 +125,27 @@ public:
 
     // Write a Graphviz DOT file showing ALL registered components with
     // per-pin ports and directed edges for each signal connecting an output
-    // to an input. Components are clustered by type (bus ctrl / inline / callback).
+    // to an input. Flat layout -- no clustering by scheduling category.
     void dump_dot(const char* base) {
         std::string dot_path = std::string(base) + ".dot";
         std::string svg_path = std::string(base) + ".svg";
         FILE* f = std::fopen(dot_path.c_str(), "w");
         if (!f) return;
 
-        // Build unified component list with cluster boundaries.
-        struct ClusterRange { int start; int end; const char* label; const char* color; };
+        // Gather every registered component into a flat list.
         std::vector<Component*> all;
-        std::vector<ClusterRange> clusters;
-
-        auto add_cluster = [&](auto* arr, int count, const char* label, const char* color) {
-            int s = static_cast<int>(all.size());
-            for (int i = 0; i < count; ++i) all.push_back(arr[i]);
-            int e = static_cast<int>(all.size());
-            if (e > s) clusters.push_back({s, e, label, color});
-        };
-        add_cluster(visuals_,   visual_count_,    "threaded",             "#996699");
-        add_cluster(fibers_,    fiber_count_,      "fibers",              "#cc4444");
-        add_cluster(bus_ctrls_, bus_ctrl_count_,   "bus controllers",     "#cc6644");
-        add_cluster(inlines_,   inline_count_,     "inlines (fixed-point)", "#44aa44");
-
-        int cb_start = static_cast<int>(all.size());
-        add_cluster(callbacks_, callback_count_,   "callbacks",           "#4488cc");
-
+        for (int i = 0; i < visual_count_;    ++i) all.push_back(visuals_[i]);
+        for (int i = 0; i < fiber_count_;     ++i) all.push_back(fibers_[i]);
+        for (int i = 0; i < bus_ctrl_count_;  ++i) all.push_back(bus_ctrls_[i]);
+        for (int i = 0; i < inline_count_;    ++i) all.push_back(inlines_[i]);
+        for (int i = 0; i < callback_count_;  ++i) all.push_back(callbacks_[i]);
         int total = static_cast<int>(all.size());
 
         std::fprintf(f, "digraph component_graph {\n");
         std::fprintf(f, "  rankdir=LR;\n");
         std::fprintf(f, "  node [shape=none fontname=\"Consolas\" fontsize=10];\n");
-        std::fprintf(f, "  edge [fontname=\"Consolas\" fontsize=8];\n\n");
+        std::fprintf(f, "  edge [fontname=\"Consolas\" fontsize=8 color=\"#555555\"];\n");
+        std::fprintf(f, "  graph [nodesep=0.4 ranksep=1.2];\n\n");
 
         // Collect per-component pin lists: in-only, out-only, bidirectional (io).
         struct PinInfo { int slot; const char* name; };
@@ -175,21 +164,28 @@ public:
             }
         }
 
-        // Helper: emit one component node as an HTML table with in/io/out columns.
-        auto emit_node = [&](int idx, const char* color) {
+        // Uniform header color for all components.
+        const char* hdr_color = "#336699";
+
+        // Emit each component as an HTML table node.
+        for (int idx = 0; idx < total; ++idx) {
             auto* c = all[idx];
             int ni  = static_cast<int>(in_pins[idx].size());
             int nio = static_cast<int>(io_pins[idx].size());
             int no  = static_cast<int>(out_pins[idx].size());
             int cols = (nio > 0) ? 5 : 3;
             int rows = std::max({ni, nio, no, 1});
-            std::fprintf(f, "    n%d [label=<\n", idx);
-            std::fprintf(f, "      <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\">\n");
-            std::fprintf(f, "        <TR><TD COLSPAN=\"%d\" BGCOLOR=\"%s\">"
+            std::fprintf(f, "  n%d [label=<\n", idx);
+            std::fprintf(f, "    <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\">\n");
+            if (!c->description().empty())
+                std::fprintf(f, "      <TR><TD COLSPAN=\"%d\" BGCOLOR=\"%s\">"
+                                "<FONT COLOR=\"white\"><I>%s</I></FONT></TD></TR>\n",
+                             cols, hdr_color, c->description().c_str());
+            std::fprintf(f, "      <TR><TD COLSPAN=\"%d\" BGCOLOR=\"%s\">"
                             "<FONT COLOR=\"white\"><B>%s</B></FONT></TD></TR>\n",
-                         cols, color, c->name().c_str());
+                         cols, hdr_color, c->name().c_str());
             // Column headers.
-            std::fprintf(f, "        <TR>"
+            std::fprintf(f, "      <TR>"
                             "<TD BGCOLOR=\"#dddddd\"><B>in</B></TD>"
                             "<TD></TD>");
             if (nio > 0)
@@ -197,15 +193,13 @@ public:
                                 "<TD></TD>");
             std::fprintf(f, "<TD BGCOLOR=\"#dddddd\"><B>out</B></TD></TR>\n");
             for (int r = 0; r < rows; ++r) {
-                std::fprintf(f, "        <TR>");
-                // In column.
+                std::fprintf(f, "      <TR>");
                 if (r < ni)
                     std::fprintf(f, "<TD PORT=\"i%d\" BGCOLOR=\"#eeffee\" ALIGN=\"LEFT\">%s</TD>",
                                  in_pins[idx][r].slot, in_pins[idx][r].name);
                 else
                     std::fprintf(f, "<TD></TD>");
                 std::fprintf(f, "<TD>  </TD>");
-                // IO column (only if component has any).
                 if (nio > 0) {
                     if (r < nio)
                         std::fprintf(f, "<TD PORT=\"b%d\" BGCOLOR=\"#fff3dd\" ALIGN=\"CENTER\">%s</TD>",
@@ -214,7 +208,6 @@ public:
                         std::fprintf(f, "<TD></TD>");
                     std::fprintf(f, "<TD>  </TD>");
                 }
-                // Out column.
                 if (r < no)
                     std::fprintf(f, "<TD PORT=\"o%d\" BGCOLOR=\"#ffeeee\" ALIGN=\"RIGHT\">%s</TD>",
                                  out_pins[idx][r].slot, out_pins[idx][r].name);
@@ -223,35 +216,8 @@ public:
                 std::fprintf(f, "</TR>\n");
             }
             if (ni == 0 && nio == 0 && no == 0)
-                std::fprintf(f, "        <TR><TD COLSPAN=\"%d\"><I>(no pins declared)</I></TD></TR>\n", cols);
-            std::fprintf(f, "      </TABLE>>];\n");
-        };
-
-        // Emit clusters. Callbacks get wave sub-clusters if resolved.
-        for (auto& cl : clusters) {
-            bool is_cb = (cl.start == cb_start && resolved_ && num_waves_ > 0);
-            if (is_cb) {
-                for (int w = 0; w < num_waves_; ++w) {
-                    std::fprintf(f, "  subgraph cluster_wave%d {\n", w);
-                    std::fprintf(f, "    label=\"callback wave %d\";\n", w);
-                    std::fprintf(f, "    style=dashed; color=\"#888888\";\n");
-                    for (int ci = 0; ci < callback_count_; ++ci) {
-                        for (int wi = 0; wi < wave_counts_[w]; ++wi) {
-                            if (waves_[w][wi] == callbacks_[ci]) {
-                                emit_node(cb_start + ci, cl.color);
-                                break;
-                            }
-                        }
-                    }
-                    std::fprintf(f, "  }\n\n");
-                }
-            } else {
-                std::fprintf(f, "  subgraph cluster_%d {\n", cl.start);
-                std::fprintf(f, "    label=\"%s\";\n", cl.label);
-                std::fprintf(f, "    style=dashed; color=\"#888888\";\n");
-                for (int i = cl.start; i < cl.end; ++i) emit_node(i, cl.color);
-                std::fprintf(f, "  }\n\n");
-            }
+                std::fprintf(f, "      <TR><TD COLSPAN=\"%d\"><I>(no pins declared)</I></TD></TR>\n", cols);
+            std::fprintf(f, "    </TABLE>>];\n\n");
         }
 
         // Helper: find a slot in a pin list.
@@ -261,26 +227,22 @@ public:
         };
 
         // Edges. For each pair (a,b) and shared signal slot:
-        //   out(a) -> in(b)          : directed arrow,  o port -> i port
-        //   out(a) -> io(b)          : directed arrow,  o port -> b port
-        //   io(a)  -> in(b)          : directed arrow,  b port -> i port
-        //   io(a)  <-> io(b)         : double arrow,    b port <-> b port (emit once, a<b)
+        //   out(a) -> in(b)   : directed arrow
+        //   out(a) -> io(b)   : directed arrow
+        //   io(a)  -> in(b)   : directed arrow
+        //   io(a)  <-> io(b)  : double arrow (emit once, a<b)
         for (int a = 0; a < total; ++a) {
             for (int b = 0; b < total; ++b) {
                 if (a == b) continue;
-                // out -> in
                 for (auto& op : out_pins[a])
                     if (has_slot(in_pins[b], op.slot))
                         std::fprintf(f, "  n%d:o%d -> n%d:i%d;\n", a, op.slot, b, op.slot);
-                // out -> io
                 for (auto& op : out_pins[a])
                     if (has_slot(io_pins[b], op.slot))
                         std::fprintf(f, "  n%d:o%d -> n%d:b%d;\n", a, op.slot, b, op.slot);
-                // io -> in
                 for (auto& bp : io_pins[a])
                     if (has_slot(in_pins[b], bp.slot))
                         std::fprintf(f, "  n%d:b%d -> n%d:i%d;\n", a, bp.slot, b, bp.slot);
-                // io <-> io (emit once: a < b)
                 if (a < b)
                     for (auto& bp : io_pins[a])
                         if (has_slot(io_pins[b], bp.slot))

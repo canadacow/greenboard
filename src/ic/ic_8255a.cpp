@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8255A::IC_8255A() : CallbackComponent("8255A") {}
+IC_8255A::IC_8255A() : CallbackComponent("8255A") { set_description("PPI"); }
 
 void IC_8255A::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {

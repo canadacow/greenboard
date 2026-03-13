@@ -6,7 +6,7 @@
 
 namespace bench {
 
-IC_8284A::IC_8284A() : ThreadedComponent("8284A") {}
+IC_8284A::IC_8284A() : ThreadedComponent("8284A") { set_description("Clock Generator"); }
 
 void IC_8284A::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {

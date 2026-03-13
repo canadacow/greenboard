@@ -61,7 +61,7 @@ protected:
 // =========================================================================
 class BusGlue : public CallbackComponent {
 public:
-    BusGlue() : CallbackComponent("BusGlue") {}
+    BusGlue() : CallbackComponent("BusGlue") { set_description("Bus Glue"); }
 
     Pin xa[20];                  // XA0-XA19 -- latched address from 74S373s
     Pin d[8];                    // D0-D7 -- system data bus
@@ -86,6 +86,12 @@ public:
         pin_s1 = s1.pin();
         pin_s2 = s2.pin();
         clk.connect(this);
+
+        // Pin directions for wiring visualization.
+        for (int i = 0; i < 20; ++i) declare_input(xa[i]);
+        for (int i = 0; i < 8; ++i) { declare_input(d[i]); declare_output(d[i]); }
+        declare_input(pin_s0); declare_input(pin_s1); declare_input(pin_s2);
+        declare_input(clk.pin());
     }
 
     void init_dram(Signal* md_sigs[], Signal* ma_sigs[],
@@ -98,8 +104,7 @@ public:
         dram_connected = true;
 
         // Pin directions for dependency graph.
-        // BusGlue reads DRAM DOUT (via MD), drives DRAM control signals.
-        for (int i = 0; i < 8; ++i) declare_input(dram_md[i]);   // reads MD (DRAM output)
+        for (int i = 0; i < 8; ++i) { declare_input(dram_md[i]); declare_output(dram_md[i]); }  // MD (bidirectional)
         for (int i = 0; i < 8; ++i) declare_output(dram_ma[i]);  // drives MA
         declare_output(dram_ras);
         for (int i = 0; i < 4; ++i) declare_output(dram_cas[i]);
@@ -892,7 +897,10 @@ int main() {
     BusGlue bus;
     bus.init(xa_ptrs, d_ptrs, s0, s1, s2, clk);
     bus.init_dram(md_arr, dram_ma_arr, dram_ras, dram_cas_arr, dram_we);
-    for (int i = 0; i < 8; ++i) bus.pic_ir[i] = irq_arr[i];
+    for (int i = 0; i < 8; ++i) {
+        bus.pic_ir[i] = irq_arr[i];
+        bus.declare_output(irq_arr[i]->pin());
+    }
 
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
     // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.

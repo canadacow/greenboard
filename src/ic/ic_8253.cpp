@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8253::IC_8253() : CallbackComponent("8253") {}
+IC_8253::IC_8253() : CallbackComponent("8253") { set_description("PIT"); }
 
 void IC_8253::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {
