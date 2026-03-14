@@ -18,6 +18,7 @@ int SignalPool::count = 1;  // slot 0 reserved as dummy (reads HiZ, writes vanis
 Component* SignalPool::active_comp_ = nullptr;
 uint64_t SignalPool::valid_write_[SLOT_WORDS] = {};
 uint64_t SignalPool::valid_read_[SLOT_WORDS] = {};
+uint64_t SignalPool::valid_hiz_release_[SLOT_WORDS] = {};
 
 static bool is_power_rail(int idx) {
     const char* n = SignalPool::names[idx];
@@ -25,13 +26,15 @@ static bool is_power_rail(int idx) {
     return (n[0] == '+' || (n[0] == 'G' && n[1] == 'N' && n[2] == 'D'));
 }
 
-void SignalPool::check_write(int idx) {
+void SignalPool::check_write(int idx, Level lvl) {
     if (!active_comp_ || idx == 0 || is_power_rail(idx)) return;
-    if (!(valid_write_[idx / 64] & (uint64_t(1) << (idx % 64)))) {
-        spdlog::critical("[PinValidation] {} writing slot {} ({}) without output declaration",
-                         active_comp_->name(), idx, names[idx] ? names[idx] : "???");
-        std::_Exit(1);
-    }
+    uint64_t bit = uint64_t(1) << (idx % 64);
+    int word = idx / 64;
+    if (valid_write_[word] & bit) return;
+    if (lvl == Level::HiZ && (valid_hiz_release_[word] & bit)) return;
+    spdlog::critical("[PinValidation] {} writing slot {} ({}) without output declaration",
+                     active_comp_->name(), idx, names[idx] ? names[idx] : "???");
+    std::_Exit(1);
 }
 
 void SignalPool::check_read(int idx) {
@@ -50,6 +53,7 @@ void SignalPool::begin_component(Component* c) {
     for (int w = 0; w < W; ++w) {
         valid_write_[w] = c->outputs()[w];
         valid_read_[w]  = c->inputs()[w];
+        valid_hiz_release_[w] = 0;
     }
     // Apply bidir block overrides based on current direction.
     for (auto& block : c->bidir_blocks()) {
@@ -75,6 +79,8 @@ void SignalPool::begin_component(Component* c) {
                     valid_read_[w]  &= ~om;
                     valid_write_[w] &= ~im;
                     valid_read_[w]  &= ~im;
+                    // Track HiZ pins -- release (drive HiZ) is allowed.
+                    valid_hiz_release_[w] |= om | im;
                     break;
             }
         }

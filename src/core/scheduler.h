@@ -536,6 +536,10 @@ public:
 
         // Select DAG permutation by checking bidir block lambdas.
         // Map BidirDir bit flags to base-3 digits: HiZ(1)->0, Input(2)->1, Output(4)->2.
+        // Lambdas may read pin levels -- suspend validation during selection.
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::end_component();
+#endif
         static constexpr int dir_to_digit[] = {-1, 0, 1, -1, 2};  // indexed by uint8_t(BidirDir)
         int perm = 0, mul = 1;
         for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {

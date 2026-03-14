@@ -483,6 +483,7 @@ void IC_8088::cpu_reset() {
     prefetch_len_ = 0;
     prefetch_base_ = 0;
     halted_.store(false, std::memory_order_release);
+    bus_t_ = BusT::T1;
 }
 
 int IC_8088::set_CF(int new_CF) { return regs8()[FLAG_CF] = !!new_CF; }

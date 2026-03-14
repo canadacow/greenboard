@@ -31,11 +31,12 @@ struct SignalPool {
     static Component* active_comp_;
     static uint64_t valid_write_[SLOT_WORDS];
     static uint64_t valid_read_[SLOT_WORDS];
+    static uint64_t valid_hiz_release_[SLOT_WORDS];
 
     static void begin_component(Component* c);
     static void end_component() { active_comp_ = nullptr; }
 
-    static void check_write(int idx);
+    static void check_write(int idx, Level lvl);
     static void check_read(int idx);
 #endif
 
@@ -72,13 +73,13 @@ struct Pin {
     }
     void drive(Level lvl) {
 #ifdef BENCH_PIN_VALIDATION
-        SignalPool::check_write(idx);
+        SignalPool::check_write(idx, lvl);
 #endif
         SignalPool::pending[idx] = lvl;
     }
     void release() {
 #ifdef BENCH_PIN_VALIDATION
-        SignalPool::check_write(idx);
+        SignalPool::check_write(idx, Level::HiZ);
 #endif
         SignalPool::pending[idx] = Level::HiZ;
     }
@@ -87,7 +88,7 @@ struct Pin {
     // immediately without a full pool commit. Used by bus controller ICs.
     void drive_immediate(Level lvl) {
 #ifdef BENCH_PIN_VALIDATION
-        SignalPool::check_write(idx);
+        SignalPool::check_write(idx, lvl);
 #endif
         SignalPool::pending[idx] = lvl;
         SignalPool::current[idx] = lvl;
@@ -103,7 +104,7 @@ struct PinBlock {
 
     void drive(const Level* src) {
 #ifdef BENCH_PIN_VALIDATION
-        for (int i = 0; i < N; ++i) SignalPool::check_write(base + i);
+        for (int i = 0; i < N; ++i) SignalPool::check_write(base + i, src[i]);
 #endif
         std::memcpy(&SignalPool::pending[base], src, N);
     }
@@ -115,7 +116,7 @@ struct PinBlock {
     }
     void fill(Level lvl) {
 #ifdef BENCH_PIN_VALIDATION
-        for (int i = 0; i < N; ++i) SignalPool::check_write(base + i);
+        for (int i = 0; i < N; ++i) SignalPool::check_write(base + i, lvl);
 #endif
         std::memset(&SignalPool::pending[base], static_cast<uint8_t>(lvl), N);
     }
@@ -130,7 +131,7 @@ struct PinBlock {
     }
     void drive(int i, Level lvl) {
 #ifdef BENCH_PIN_VALIDATION
-        SignalPool::check_write(base + i);
+        SignalPool::check_write(base + i, lvl);
 #endif
         SignalPool::pending[base + i] = lvl;
     }
