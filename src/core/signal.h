@@ -33,6 +33,9 @@ struct SignalPool {
     static uint64_t valid_read_[SLOT_WORDS];
     static uint64_t valid_hiz_release_[SLOT_WORDS];
 
+    static thread_local bool is_clock_thread_;
+    static void set_clock_thread() { is_clock_thread_ = true; }
+
     static bool validation_enabled_;
     static void enable_validation()  { validation_enabled_ = true; }
     static void disable_validation() { validation_enabled_ = false; }

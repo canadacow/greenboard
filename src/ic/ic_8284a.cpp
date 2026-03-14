@@ -44,6 +44,9 @@ void IC_8284A::run(std::stop_token stop) {
         return;
     }
 
+#ifdef BENCH_PIN_VALIDATION
+    SignalPool::set_clock_thread();
+#endif
     spdlog::debug("[8284A] VCC is High, oscillator spinning");
 
     // Assert RESET on power-up (RES starts low from RC delay).
