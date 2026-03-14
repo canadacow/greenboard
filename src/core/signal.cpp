@@ -3,6 +3,7 @@
 #include "core/inline_component.h"
 #include "core/scheduler.h"
 #include <cassert>
+#include <spdlog/spdlog.h>
 
 namespace bench {
 
@@ -12,6 +13,74 @@ alignas(64) Level SignalPool::current[MAX_SIGNALS] = {};
 alignas(64) Level SignalPool::pending[MAX_SIGNALS] = {};
 const char* SignalPool::names[MAX_SIGNALS] = {};
 int SignalPool::count = 1;  // slot 0 reserved as dummy (reads HiZ, writes vanish)
+
+#ifdef BENCH_PIN_VALIDATION
+Component* SignalPool::active_comp_ = nullptr;
+uint64_t SignalPool::valid_write_[SLOT_WORDS] = {};
+uint64_t SignalPool::valid_read_[SLOT_WORDS] = {};
+
+static bool is_power_rail(int idx) {
+    const char* n = SignalPool::names[idx];
+    if (!n) return false;
+    return (n[0] == '+' || (n[0] == 'G' && n[1] == 'N' && n[2] == 'D'));
+}
+
+void SignalPool::check_write(int idx) {
+    if (!active_comp_ || idx == 0 || is_power_rail(idx)) return;
+    if (!(valid_write_[idx / 64] & (uint64_t(1) << (idx % 64)))) {
+        spdlog::critical("[PinValidation] {} writing slot {} ({}) without output declaration",
+                         active_comp_->name(), idx, names[idx] ? names[idx] : "???");
+        std::_Exit(1);
+    }
+}
+
+void SignalPool::check_read(int idx) {
+    if (!active_comp_ || idx == 0 || is_power_rail(idx)) return;
+    if (!(valid_read_[idx / 64] & (uint64_t(1) << (idx % 64)))) {
+        spdlog::critical("[PinValidation] {} reading slot {} ({}) without input declaration",
+                         active_comp_->name(), idx, names[idx] ? names[idx] : "???");
+        std::_Exit(1);
+    }
+}
+
+void SignalPool::begin_component(Component* c) {
+    active_comp_ = c;
+    constexpr int W = SLOT_WORDS;
+    // Base: outputs are writable, inputs are readable.
+    for (int w = 0; w < W; ++w) {
+        valid_write_[w] = c->outputs()[w];
+        valid_read_[w]  = c->inputs()[w];
+    }
+    // Apply bidir block overrides based on current direction.
+    for (auto& block : c->bidir_blocks()) {
+        auto dir = block.direction();
+        for (int w = 0; w < W; ++w) {
+            uint64_t om = block.out_mask[w];
+            uint64_t im = block.in_mask[w];
+            switch (dir) {
+                case Component::BidirDir::Output:
+                    valid_write_[w] |= om;
+                    valid_read_[w]  &= ~om;
+                    valid_write_[w] &= ~im;
+                    valid_read_[w]  |= im;
+                    break;
+                case Component::BidirDir::Input:
+                    valid_write_[w] &= ~om;
+                    valid_read_[w]  |= om;
+                    valid_write_[w] |= im;
+                    valid_read_[w]  &= ~im;
+                    break;
+                case Component::BidirDir::HiZ:
+                    valid_write_[w] &= ~om;
+                    valid_read_[w]  &= ~om;
+                    valid_write_[w] &= ~im;
+                    valid_read_[w]  &= ~im;
+                    break;
+            }
+        }
+    }
+}
+#endif
 
 // --- Signal ---
 

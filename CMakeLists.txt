@@ -48,6 +48,10 @@ target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt)
 # Organize source files into VS filters matching directory structure
 source_group(TREE ${CMAKE_SOURCE_DIR}/src PREFIX "Source Files" FILES ${BENCH_HEADERS})
 
+# Pin validation: runtime checks that every read/write matches declared direction.
+# Disable for release builds.
+add_compile_definitions(BENCH_PIN_VALIDATION)
+
 # AVX2 for SignalPool::commit() SIMD optimization
 if(MSVC)
     add_compile_options(/arch:AVX2)

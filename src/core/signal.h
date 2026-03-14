@@ -26,6 +26,19 @@ struct SignalPool {
 
     static int allocate() { return count++; }
 
+#ifdef BENCH_PIN_VALIDATION
+    static constexpr int SLOT_WORDS = (MAX_SIGNALS + 63) / 64;
+    static Component* active_comp_;
+    static uint64_t valid_write_[SLOT_WORDS];
+    static uint64_t valid_read_[SLOT_WORDS];
+
+    static void begin_component(Component* c);
+    static void end_component() { active_comp_ = nullptr; }
+
+    static void check_write(int idx);
+    static void check_read(int idx);
+#endif
+
     // Copy pending -> current. Returns true if anything changed.
     // AVX2: compare + copy 32 bytes at a time. MAX_SIGNALS is
     // a multiple of 32, so we process the full array -- no tail.
@@ -51,13 +64,31 @@ struct SignalPool {
 struct Pin {
     int idx = 0;
 
-    Level level() const { return SignalPool::current[idx]; }
-    void drive(Level lvl) { SignalPool::pending[idx] = lvl; }
-    void release() { SignalPool::pending[idx] = Level::HiZ; }
+    Level level() const {
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::check_read(idx);
+#endif
+        return SignalPool::current[idx];
+    }
+    void drive(Level lvl) {
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::check_write(idx);
+#endif
+        SignalPool::pending[idx] = lvl;
+    }
+    void release() {
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::check_write(idx);
+#endif
+        SignalPool::pending[idx] = Level::HiZ;
+    }
 
     // Write to both pending[] and current[] so inlines see the value
     // immediately without a full pool commit. Used by bus controller ICs.
     void drive_immediate(Level lvl) {
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::check_write(idx);
+#endif
         SignalPool::pending[idx] = lvl;
         SignalPool::current[idx] = lvl;
     }
@@ -70,14 +101,39 @@ template<int N>
 struct PinBlock {
     int base = 0;
 
-    void drive(const Level* src) { std::memcpy(&SignalPool::pending[base], src, N); }
-    void read(Level* dst) const  { std::memcpy(dst, &SignalPool::current[base], N); }
-    void fill(Level lvl)         { std::memset(&SignalPool::pending[base], static_cast<uint8_t>(lvl), N); }
-    void release()               { fill(Level::HiZ); }
+    void drive(const Level* src) {
+#ifdef BENCH_PIN_VALIDATION
+        for (int i = 0; i < N; ++i) SignalPool::check_write(base + i);
+#endif
+        std::memcpy(&SignalPool::pending[base], src, N);
+    }
+    void read(Level* dst) const {
+#ifdef BENCH_PIN_VALIDATION
+        for (int i = 0; i < N; ++i) SignalPool::check_read(base + i);
+#endif
+        std::memcpy(dst, &SignalPool::current[base], N);
+    }
+    void fill(Level lvl) {
+#ifdef BENCH_PIN_VALIDATION
+        for (int i = 0; i < N; ++i) SignalPool::check_write(base + i);
+#endif
+        std::memset(&SignalPool::pending[base], static_cast<uint8_t>(lvl), N);
+    }
+    void release() { fill(Level::HiZ); }
 
     // Single-element access when needed.
-    Level level(int i) const     { return SignalPool::current[base + i]; }
-    void drive(int i, Level lvl) { SignalPool::pending[base + i] = lvl; }
+    Level level(int i) const {
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::check_read(base + i);
+#endif
+        return SignalPool::current[base + i];
+    }
+    void drive(int i, Level lvl) {
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::check_write(base + i);
+#endif
+        SignalPool::pending[base + i] = lvl;
+    }
 
     // Build from socket pin array, asserting contiguity. Defined after Signal.
     template<typename Socket>
