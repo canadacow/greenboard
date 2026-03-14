@@ -49,7 +49,7 @@ void IC_74S138::on_power_off() {
         y_[i].release();
 }
 
-void IC_74S138::on_signal_change(Fiber caller, bool /*rising*/, bool /*falling*/) {
+void IC_74S138::on_signal_change(Fiber /*caller*/) {
     update_outputs();
 }
 

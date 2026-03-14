@@ -32,7 +32,7 @@ public:
     // Called by the wave executor, same as any other component.
     // If a caller fiber is set, resumes the fiber (which runs until yield()).
     // If no caller (pre-clock init), does nothing.
-    void on_signal_change(Fiber caller, bool rising, bool falling) override;
+    void on_signal_change(Fiber caller) override;
 
 protected:
     // Override for active components (e.g. CPU).

@@ -523,14 +523,8 @@ public:
         }
     }
 
-    // Half-cycle flag: set by the 8088 before yielding.
-    // The 8284A checks this after evaluate() returns.
-    bool half_cycle_requested() const { return half_cycle_; }
-    void request_half_cycle() { half_cycle_ = true; }
-    void clear_half_cycle() { half_cycle_ = false; }
-
     // Evaluate all components in topological wave order.
-    void evaluate(Fiber caller = nullptr, bool rising = true, bool falling = true) {
+    void evaluate(Fiber caller = nullptr) {
         // Select DAG permutation by checking bidir block lambdas.
         // Map BidirDir bit flags to base-3 digits: HiZ(1)->0, Input(2)->1, Output(4)->2.
         // Lambdas may read pin levels -- suspend validation during selection.
@@ -552,7 +546,7 @@ public:
 #ifdef BENCH_PIN_VALIDATION
                 SignalPool::begin_component(c);
 #endif
-                c->on_signal_change(caller, rising, falling);
+                c->on_signal_change(caller);
 #ifdef BENCH_PIN_VALIDATION
                 SignalPool::end_component();
 #endif
@@ -561,7 +555,6 @@ public:
     }
 
 private:
-    bool half_cycle_ = false;
     bool resolved_ = false;
     bool unified_resolved_ = false;
 

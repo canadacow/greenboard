@@ -50,7 +50,7 @@ void IC_74S20::on_power_off() {
     y2_.release();
 }
 
-void IC_74S20::on_signal_change(Fiber /*caller*/, bool /*rising*/, bool /*falling*/) {
+void IC_74S20::on_signal_change(Fiber /*caller*/) {
     update_outputs();
 }
 

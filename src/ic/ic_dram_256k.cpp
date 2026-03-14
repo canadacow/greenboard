@@ -84,8 +84,7 @@ void IC_DRAM_256K::on_power_off() {
     spdlog::debug("[DRAM] power off");
 }
 
-void IC_DRAM_256K::on_signal_change(Fiber /*caller*/, bool rising, bool /*falling*/) {
-    if(!rising) return;
+void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
     
     for (int b = 0; b < 4; ++b) {
         auto& bank = banks_[b];

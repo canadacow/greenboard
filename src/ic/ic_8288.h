@@ -59,7 +59,7 @@ public:
 
 protected:
     void on_power_on() override;
-    void on_signal_change(Fiber caller, bool rising, bool falling) override;
+    void on_signal_change(Fiber caller) override;
 
 private:
     // Bus cycle type decoded from S0-S2
@@ -71,7 +71,6 @@ private:
     BusCycle decode_status() const;
     void release_command();
     void on_clk_rising();
-    void on_clk_falling();
 
     // Output pins (we drive these)
     Pin pin_ale_;    // Pin  5: ALE
@@ -94,7 +93,6 @@ private:
     // Internal state
     State state_ = State::Idle;
     BusCycle cycle_ = BusCycle::Passive;
-    bool t2_cmd_issued_ = false;
 };
 
 } // namespace bench

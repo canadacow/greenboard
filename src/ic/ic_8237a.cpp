@@ -59,8 +59,7 @@ void IC_8237A::install(Socket& socket) {
     declare_output(pin_adstb_); declare_output(pin_aen_);
 }
 
-void IC_8237A::on_signal_change(Fiber /*caller*/, bool rising, bool /*falling*/) {
-    if (!rising) return;  // compute once per cycle
+void IC_8237A::on_signal_change(Fiber /*caller*/) {
     Level reset_cur = pin_reset_.level();
     Level iow_cur = pin_iow_.level();
     Level cs_cur = pin_cs_.level();

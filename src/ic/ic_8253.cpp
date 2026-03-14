@@ -52,8 +52,7 @@ void IC_8253::install(Socket& socket) {
     declare_input(pin_rd_); declare_input(pin_wr_);
 }
 
-void IC_8253::on_signal_change(Fiber /*caller*/, bool rising, bool /*falling*/) {
-    if (!rising) return;  // compute once per cycle
+void IC_8253::on_signal_change(Fiber /*caller*/) {
     // Single-tick model: decrement each tick.
     for (int i = 0; i < 3; ++i) {
         on_clk_falling(i);

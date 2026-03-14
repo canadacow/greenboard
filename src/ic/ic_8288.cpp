@@ -8,7 +8,6 @@ IC_8288::IC_8288() : BusControllerComponent("8288") { set_description("Bus Contr
 void IC_8288::on_power_on() {
     state_ = State::Idle;
     cycle_ = BusCycle::Passive;
-    t2_cmd_issued_ = false;
 }
 
 void IC_8288::install(Socket& socket) {
@@ -53,9 +52,8 @@ void IC_8288::install(Socket& socket) {
     declare_output(pin_ior_); declare_output(pin_iow_); declare_output(pin_inta_);
 }
 
-void IC_8288::on_signal_change(Fiber /*caller*/, bool rising, bool falling) {
-    if (rising) on_clk_rising();
-    if (falling) on_clk_falling();
+void IC_8288::on_signal_change(Fiber /*caller*/) {
+    on_clk_rising();
 }
 
 IC_8288::BusCycle IC_8288::decode_status() const {
@@ -106,7 +104,6 @@ void IC_8288::on_clk_rising() {
             pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
-            t2_cmd_issued_ = false;
         }
         return;
     }
@@ -130,13 +127,28 @@ void IC_8288::on_clk_rising() {
         case State::T1: {
             state_ = State::T2;
             pin_ale_.drive_immediate(Level::Low);
+            // Assert command strobe and ~DEN (was deferred to falling edge).
+            {
+                bool cen = pin_cen_.level() == Level::High;
+                if (cen) {
+                    switch (cycle_) {
+                        case BusCycle::INTA:  pin_inta_.drive_immediate(Level::Low); break;
+                        case BusCycle::IOR:   pin_ior_.drive_immediate(Level::Low);  break;
+                        case BusCycle::IOW:   pin_iow_.drive_immediate(Level::Low);  break;
+                        case BusCycle::Fetch:
+                        case BusCycle::MemR:  pin_memr_.drive_immediate(Level::Low); break;
+                        case BusCycle::MemW:  pin_memw_.drive_immediate(Level::Low); break;
+                        default: break;
+                    }
+                }
+                pin_den_.drive_immediate(Level::Low);
+            }
             break;
         }
 
         case State::T2:
             // T3: Commands stay active. Nothing changes.
             state_ = State::T3;
-            t2_cmd_issued_ = false;
             break;
 
         case State::T3: {
@@ -149,41 +161,6 @@ void IC_8288::on_clk_rising() {
             // Re-check status immediately for a new bus cycle.
             goto idle_recheck;
         }
-    }
-}
-
-void IC_8288::on_clk_falling() {
-    // Deferred from T2 CLK rise: assert ~DEN and command strobe.
-    // This gives the 74S373 a full half-cycle to capture the address
-    // before the 74S245 transceiver enables and drives the AD bus.
-    if (state_ == State::T2 && !t2_cmd_issued_) {
-        t2_cmd_issued_ = true;
-        bool cen = pin_cen_.level() == Level::High;
-        if (cen) {
-            // drive_command
-            // Assert the appropriate command strobe (active low).
-            switch (cycle_) {
-                case BusCycle::INTA:
-                    pin_inta_.drive_immediate(Level::Low);
-                    break;
-                case BusCycle::IOR:
-                    pin_ior_.drive_immediate(Level::Low);
-                    break;
-                case BusCycle::IOW:
-                    pin_iow_.drive_immediate(Level::Low);
-                    break;
-                case BusCycle::Fetch:
-                case BusCycle::MemR:
-                    pin_memr_.drive_immediate(Level::Low);
-                    break;
-                case BusCycle::MemW:
-                    pin_memw_.drive_immediate(Level::Low);
-                    break;
-                default:
-                    break;
-            }
-        }
-        pin_den_.drive_immediate(Level::Low);
     }
 }
 

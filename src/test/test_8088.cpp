@@ -51,7 +51,7 @@ protected:
     }
     void on_power_on() override {}
     void on_power_off() override {}
-    void on_signal_change(Fiber, bool, bool) override {}
+    void on_signal_change(Fiber) override {}
 };
 
 // =========================================================================
@@ -134,9 +134,9 @@ public:
     }
 
 protected:
-    void on_signal_change(Fiber caller, bool rising, bool falling) override {
-        if (rising) on_clk_rising();
-        if (falling) on_clk_falling();
+    void on_signal_change(Fiber caller) override {
+        on_clk_rising();
+        on_clk_falling();
     }
 
 private:

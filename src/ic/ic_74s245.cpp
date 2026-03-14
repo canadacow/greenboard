@@ -53,7 +53,7 @@ void IC_74S245::install(Socket& socket) {
         });
 }
 
-void IC_74S245::on_signal_change(Fiber /*caller*/, bool /*rising*/, bool /*falling*/) {
+void IC_74S245::on_signal_change(Fiber /*caller*/) {
     if (g_.level() != Level::Low) {
         release_outputs();
         return;

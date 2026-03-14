@@ -42,7 +42,7 @@ public:
 protected:
     void on_power_on() override;
     void on_power_off() override;
-    void on_signal_change(Fiber caller, bool rising, bool falling) override;
+    void on_signal_change(Fiber caller) override;
 
 private:
     void update_outputs();
