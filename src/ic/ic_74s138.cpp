@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S138::IC_74S138() : InlineComponent("74S138") { set_description("3-to-8 Decoder"); }
+IC_74S138::IC_74S138() : CallbackComponent("74S138") { set_description("3-to-8 Decoder"); }
 
 void IC_74S138::install(Socket& socket) {
     // Select inputs

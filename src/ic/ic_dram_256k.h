@@ -1,5 +1,5 @@
 #pragma once
-#include "core/inline_component.h"
+#include "core/callback_component.h"
 #include "core/signal.h"
 #include "board/socket.h"
 #include <array>
@@ -19,7 +19,7 @@ namespace bench {
 // 4164 pinout (16-pin DIP):
 //   1=NC  2=DIN  3=~WE  4=~RAS  5=A0  6=A2  7=A1  8=VCC
 //   9=A7  10=A5  11=A4  12=A3  13=A6  14=DOUT  15=~CAS  16=GND
-class IC_DRAM_256K : public InlineComponent {
+class IC_DRAM_256K : public CallbackComponent {
 public:
     IC_DRAM_256K();
 

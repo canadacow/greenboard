@@ -1,9 +1,7 @@
 #pragma once
 #include "core/signal.h"
-#include "core/bus_controller_component.h"
 #include "core/callback_component.h"
 #include "core/fiber_component.h"
-#include "core/inline_component.h"
 #include <array>
 #include <cassert>
 #include <algorithm>
@@ -26,18 +24,8 @@ namespace bench {
 // topologically sorts into waves, and inserts a commit() between each wave.
 class Scheduler {
 public:
-    void register_inline(InlineComponent* ic) {
-        assert(inline_count_ < MAX_INLINES && "Scheduler: too many inline ICs");
-        inlines_[inline_count_++] = ic;
-    }
-
-    void register_bus_controller(BusControllerComponent* bc) {
-        assert(bus_ctrl_count_ < MAX_BUS_CTRLS && "Scheduler: too many bus controllers");
-        bus_ctrls_[bus_ctrl_count_++] = bc;
-    }
-
     void register_callback(CallbackComponent* cc) {
-        assert(callback_count_ < MAX_CALLBACKS && "Scheduler: too many callback ICs");
+        assert(callback_count_ < MAX_CALLBACKS && "Scheduler: too many callbacks");
         callbacks_[callback_count_++] = cc;
     }
 
@@ -145,8 +133,6 @@ public:
         std::vector<Component*> all;
         for (int i = 0; i < visual_count_;    ++i) all.push_back(visuals_[i]);
         for (int i = 0; i < fiber_count_;     ++i) all.push_back(fibers_[i]);
-        for (int i = 0; i < bus_ctrl_count_;  ++i) all.push_back(bus_ctrls_[i]);
-        for (int i = 0; i < inline_count_;    ++i) all.push_back(inlines_[i]);
         for (int i = 0; i < callback_count_;  ++i) all.push_back(callbacks_[i]);
         int total = static_cast<int>(all.size());
 
@@ -279,8 +265,6 @@ public:
         // Collect ALL evaluable components (fibers included for DAG, excluded from exec).
         std::vector<Component*> evals;
         for (int i = 0; i < fiber_count_;     ++i) evals.push_back(fibers_[i]);
-        for (int i = 0; i < bus_ctrl_count_;  ++i) evals.push_back(bus_ctrls_[i]);
-        for (int i = 0; i < inline_count_;    ++i) evals.push_back(inlines_[i]);
         for (int i = 0; i < callback_count_;  ++i) evals.push_back(callbacks_[i]);
         const int n = static_cast<int>(evals.size());
         if (n == 0) return;
@@ -558,18 +542,9 @@ private:
     bool resolved_ = false;
     bool unified_resolved_ = false;
 
-    static constexpr int MAX_BUS_CTRLS = 4;
-    static constexpr int MAX_INLINES = 32;
-    static constexpr int MAX_CALLBACKS = 32;
+    static constexpr int MAX_CALLBACKS = 64;
     static constexpr int MAX_FIBERS = 256;
     static constexpr int MAX_WAVES = 16;
-    static constexpr int MAX_UNIFIED = MAX_BUS_CTRLS + MAX_INLINES + MAX_CALLBACKS;
-
-    BusControllerComponent* bus_ctrls_[MAX_BUS_CTRLS] = {};
-    int bus_ctrl_count_ = 0;
-
-    InlineComponent* inlines_[MAX_INLINES] = {};
-    int inline_count_ = 0;
 
     CallbackComponent* callbacks_[MAX_CALLBACKS] = {};
     int callback_count_ = 0;

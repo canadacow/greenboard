@@ -1,5 +1,5 @@
 #pragma once
-#include "core/inline_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 #include <cstring>
 
@@ -29,7 +29,7 @@ namespace bench {
 //   ~OE High           -> outputs tri-stated regardless of LE
 //
 // Threading: InlineComponent -- combinational, no thread.
-class IC_74S373 : public InlineComponent {
+class IC_74S373 : public CallbackComponent {
 public:
     IC_74S373();
 

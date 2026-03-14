@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S245::IC_74S245() : InlineComponent("74S245") { set_description("Bus Transceiver"); }
+IC_74S245::IC_74S245() : CallbackComponent("74S245") { set_description("Bus Transceiver"); }
 
 void IC_74S245::on_power_on() {
     driving_ = Driving::None;

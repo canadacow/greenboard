@@ -1,5 +1,5 @@
 #pragma once
-#include "core/inline_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -34,7 +34,7 @@ namespace bench {
 //
 // Threading: Inline IC. Executes synchronously in the driving thread.
 // CLK rising edge latches D inputs, ~CLR async clears all outputs.
-class IC_74S175 : public InlineComponent {
+class IC_74S175 : public CallbackComponent {
 public:
     IC_74S175();
 

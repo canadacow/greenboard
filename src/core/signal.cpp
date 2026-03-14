@@ -1,6 +1,5 @@
 #include "core/signal.h"
 #include "core/component.h"
-#include "core/inline_component.h"
 #include "core/scheduler.h"
 #include <cassert>
 #include <spdlog/spdlog.h>

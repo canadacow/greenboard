@@ -905,17 +905,16 @@ int main() {
     // All fiber components run cooperatively on the 8284A's thread.
     Scheduler scheduler;
     Signal::set_scheduler(&scheduler);
-    scheduler.register_inline(xcvr);
-    scheduler.register_inline(latch_lo_ic);
-    scheduler.register_inline(latch_mid_ic);
-    scheduler.register_inline(latch_hi_ic);
-    scheduler.register_inline(io_dec);
-    scheduler.register_inline(nand_ic);
-    scheduler.register_inline(rom_dec);
-    scheduler.register_inline(rom_ic);
-    scheduler.register_inline(&dram);
-    // Register callback components (no fiber overhead).
-    scheduler.register_bus_controller(bc);
+    scheduler.register_callback(xcvr);
+    scheduler.register_callback(latch_lo_ic);
+    scheduler.register_callback(latch_mid_ic);
+    scheduler.register_callback(latch_hi_ic);
+    scheduler.register_callback(io_dec);
+    scheduler.register_callback(nand_ic);
+    scheduler.register_callback(rom_dec);
+    scheduler.register_callback(rom_ic);
+    scheduler.register_callback(&dram);
+    scheduler.register_callback(bc);
     scheduler.register_callback(pic);
     scheduler.register_callback(&bus);
     // Register fiber components (everything except the 8284A clock).

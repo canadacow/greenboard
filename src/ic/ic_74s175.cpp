@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S175::IC_74S175() : InlineComponent("74S175") { set_description("Quad D Flip-Flop"); }
+IC_74S175::IC_74S175() : CallbackComponent("74S175") { set_description("Quad D Flip-Flop"); }
 
 void IC_74S175::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {

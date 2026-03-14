@@ -1,5 +1,5 @@
 #pragma once
-#include "core/inline_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -29,7 +29,7 @@ namespace bench {
 //   DIR = DT/~R from 8288 (via gating logic)
 //
 // Threading: InlineComponent -- combinational, no thread.
-class IC_74S245 : public InlineComponent {
+class IC_74S245 : public CallbackComponent {
 public:
     IC_74S245();
 

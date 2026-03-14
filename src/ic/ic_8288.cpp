@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_8288::IC_8288() : BusControllerComponent("8288") { set_description("Bus Controller"); }
+IC_8288::IC_8288() : CallbackComponent("8288") { set_description("Bus Controller"); }
 
 void IC_8288::on_power_on() {
     state_ = State::Idle;

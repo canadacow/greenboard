@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S20::IC_74S20() : InlineComponent("74S20") { set_description("Dual 4-In NAND"); }
+IC_74S20::IC_74S20() : CallbackComponent("74S20") { set_description("Dual 4-In NAND"); }
 
 void IC_74S20::install(Socket& socket) {
     auto connect_pin = [&](int p) -> Pin {

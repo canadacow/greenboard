@@ -1,5 +1,5 @@
 #pragma once
-#include "core/inline_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 #include <array>
 #include <string>
@@ -28,7 +28,7 @@ namespace bench {
 //           When ~CS is High, D0-D7 are tri-stated.
 //
 // Threading: InlineComponent -- combinational, no thread.
-class IC_ROM_8K : public InlineComponent {
+class IC_ROM_8K : public CallbackComponent {
 public:
     explicit IC_ROM_8K(const std::string& label = "ROM",
                        const std::string& file_path = "");

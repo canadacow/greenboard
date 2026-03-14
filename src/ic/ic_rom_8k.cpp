@@ -5,7 +5,7 @@
 namespace bench {
 
 IC_ROM_8K::IC_ROM_8K(const std::string& label, const std::string& file_path)
-    : InlineComponent(label)
+    : CallbackComponent(label)
 {
     set_description("8K ROM");
     if (!file_path.empty()) {

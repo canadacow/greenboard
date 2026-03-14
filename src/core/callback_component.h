@@ -4,20 +4,14 @@
 
 namespace bench {
 
-// A clocked IC that needs per-tick evaluation but never yields.
+// An IC evaluated once per CLK edge via direct function call.
 //
-// Sits between InlineComponent (fixed-point loop, combinational) and
-// FiberComponent (cooperative multitasking, can suspend mid-operation).
-//
-// CallbackComponent is called once per evaluate(), after inlines settle,
-// via a direct function call -- no fiber context switch overhead.
-// Use this for ICs that react to clock edges / signal changes but
-// complete all their work in a single on_signal_change() invocation.
+// No fiber context switch overhead. Use for any IC that completes
+// all work in a single on_signal_change() invocation.
 //
 // Pin direction declarations (declare_input/declare_output) feed the
-// Scheduler's dependency graph. Callbacks that produce signals another
-// callback consumes are placed in an earlier wave, with a commit()
-// between waves so outputs are visible to consumers.
+// Scheduler's dependency DAG. Components are topologically sorted
+// into waves so producers run before consumers.
 class CallbackComponent : public Component {
 public:
     explicit CallbackComponent(std::string name);

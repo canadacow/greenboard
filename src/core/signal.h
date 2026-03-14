@@ -10,7 +10,6 @@
 namespace bench {
 
 class Component;
-class InlineComponent;
 class Scheduler;
 
 // Global signal pool -- single flat array. Signals allocate a slot at
@@ -176,7 +175,6 @@ private:
     static Scheduler* scheduler_;
 
     friend class Scheduler;
-    friend class InlineComponent;
 };
 
 // A bundle of N named signal lines (e.g. address bus SA0..SA19).

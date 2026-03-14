@@ -1,5 +1,5 @@
 #pragma once
-#include "core/inline_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -29,7 +29,7 @@ namespace bench {
 //   Output is Low only when all four inputs are High.
 //
 // Threading: InlineComponent -- combinational, no thread.
-class IC_74S20 : public InlineComponent {
+class IC_74S20 : public CallbackComponent {
 public:
     IC_74S20();
 

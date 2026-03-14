@@ -16,7 +16,6 @@ add_executable(bench
     src/core/component.cpp
     src/core/threaded_component.cpp
     src/core/fiber_component.cpp
-    src/core/inline_component.cpp
     src/core/callback_component.cpp
     src/host_platform/fiber_minicoro.cpp
     src/board/socket.cpp
@@ -69,7 +68,6 @@ add_executable(test_8088
     src/core/component.cpp
     src/core/threaded_component.cpp
     src/core/fiber_component.cpp
-    src/core/inline_component.cpp
     src/core/callback_component.cpp
     src/host_platform/fiber_minicoro.cpp
     src/board/socket.cpp

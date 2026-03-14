@@ -1,5 +1,5 @@
 #pragma once
-#include "core/inline_component.h"
+#include "core/callback_component.h"
 #include "board/socket.h"
 
 namespace bench {
@@ -33,7 +33,7 @@ namespace bench {
 //     All outputs High (inactive).
 //
 // Threading: InlineComponent -- combinational, no thread.
-class IC_74S138 : public InlineComponent {
+class IC_74S138 : public CallbackComponent {
 public:
     IC_74S138();
 

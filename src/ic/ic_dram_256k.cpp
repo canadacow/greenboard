@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_DRAM_256K::IC_DRAM_256K() : InlineComponent("DRAM_256K") { set_description("DRAM"); }
+IC_DRAM_256K::IC_DRAM_256K() : CallbackComponent("DRAM_256K") { set_description("DRAM"); }
 
 void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank1,
                            std::vector<Socket>& bank2, std::vector<Socket>& bank3) {

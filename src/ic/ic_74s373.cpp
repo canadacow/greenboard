@@ -5,7 +5,7 @@
 
 namespace bench {
 
-IC_74S373::IC_74S373() : InlineComponent("74S373") { set_description("Octal Latch"); }
+IC_74S373::IC_74S373() : CallbackComponent("74S373") { set_description("Octal Latch"); }
 
 void IC_74S373::install(Socket& socket) {
     // D inputs (read current)
