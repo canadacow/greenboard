@@ -274,6 +274,9 @@ private:
         {0,2,4,6,7,8,9,10,11},
     };
 
+    // True when the 8088 is driving AD0-AD7 (T1 address, or write-cycle data).
+    bool ad_driving_ = false;
+
     // Interrupt state
     bool nmi_pending_ = false;
 

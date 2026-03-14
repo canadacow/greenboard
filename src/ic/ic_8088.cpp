@@ -92,6 +92,12 @@ void IC_8088::install(Socket& socket) {
     declare_input(pin_clk_); declare_input(pin_reset_);
     declare_async_input(pin_ready_); declare_async_input(pin_intr_);
     declare_async_input(pin_nmi_);   declare_async_input(pin_test_);
+
+    // AD0-AD7 are bidirectional: output during T1 (address) and write data,
+    // input during read data.
+    declare_bidir_block({pin_ad_[0], pin_ad_[1], pin_ad_[2], pin_ad_[3],
+                         pin_ad_[4], pin_ad_[5], pin_ad_[6], pin_ad_[7]},
+                        [this]() { return ad_driving_ ? BidirDir::Output : BidirDir::Input; });
 }
 
 void IC_8088::on_signal_change(bool /*rising*/, bool /*falling*/) {
@@ -147,6 +153,7 @@ void IC_8088::run() {
 // ========================================================================
 
 void IC_8088::drive_address(uint32_t address) {
+    ad_driving_ = true;
     for (int i = 0; i < 8; ++i)
         pin_ad_[i].drive((address >> i) & 1 ? Level::High : Level::Low);
     for (int i = 0; i < 12; ++i)
@@ -154,11 +161,13 @@ void IC_8088::drive_address(uint32_t address) {
 }
 
 void IC_8088::drive_data(uint8_t value) {
+    ad_driving_ = true;
     for (int i = 0; i < 8; ++i)
         pin_ad_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
 }
 
 uint8_t IC_8088::read_data() {
+    ad_driving_ = false;
     uint8_t val = 0;
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i].level() == Level::High)
@@ -167,6 +176,7 @@ uint8_t IC_8088::read_data() {
 }
 
 void IC_8088::release_data() {
+    ad_driving_ = false;
     for (int i = 0; i < 8; ++i)
         pin_ad_[i].release();
 }

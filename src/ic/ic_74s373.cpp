@@ -35,6 +35,12 @@ void IC_74S373::install(Socket& socket) {
     for (int i = 0; i < 8; ++i) declare_input(d_[i]);
     declare_input(le_); declare_input(oe_);
     for (int i = 0; i < 8; ++i) declare_output(q_[i]);
+
+    // D inputs are only active when LE=High (transparent mode).
+    // When LE=Low (latched), D inputs are disconnected -- no DAG dependency.
+    declare_bidir_block({d_[0], d_[1], d_[2], d_[3], d_[4], d_[5], d_[6], d_[7]},
+                        BidirDir::HiZ | BidirDir::Input,
+                        [this]() { return le_.level() == Level::High ? BidirDir::Input : BidirDir::HiZ; });
 }
 
 void IC_74S373::on_power_on() {

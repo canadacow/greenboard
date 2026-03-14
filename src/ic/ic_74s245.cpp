@@ -39,9 +39,18 @@ void IC_74S245::install(Socket& socket) {
     for (int i = 0; i < 8; ++i) { declare_input(a_[i]); declare_output(a_[i]); }
     for (int i = 0; i < 8; ++i) { declare_input(b_[i]); declare_output(b_[i]); }
 
-    // B-side is bidirectional: DIR=High -> A->B (B is output), DIR=Low -> B->A (B is input).
-    declare_bidir_block({b_[0], b_[1], b_[2], b_[3], b_[4], b_[5], b_[6], b_[7]},
-                        [this]() { return dir_.level() == Level::High; });
+    // A-side and B-side are anti-correlated:
+    //   DIR=High -> A->B (A is input, B is output)
+    //   DIR=Low  -> B->A (A is output, B is input)
+    // Paired as a single bidir block: is_output=true means A drives (DIR=Low).
+    declare_bidir_pair(
+        {a_[0], a_[1], a_[2], a_[3], a_[4], a_[5], a_[6], a_[7]},   // out_pins (A drives when DIR=Low)
+        {b_[0], b_[1], b_[2], b_[3], b_[4], b_[5], b_[6], b_[7]},   // in_pins  (B drives when DIR=High)
+        BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
+        [this]() -> BidirDir {
+            if (g_.level() != Level::Low) return BidirDir::HiZ;
+            return dir_.level() == Level::Low ? BidirDir::Output : BidirDir::Input;
+        });
 }
 
 void IC_74S245::on_signal_change(bool /*rising*/, bool /*falling*/) {

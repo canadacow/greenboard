@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <spdlog/spdlog.h>
 
@@ -127,7 +128,7 @@ public:
                 spdlog::info("[Scheduler]   - {}", waves_[w][i]->name());
         }
 
-        dump_dot("callback_graph");
+        //dump_dot("callback_graph");
         dump_unified_waves();
         resolved_ = true;
     }
@@ -295,11 +296,42 @@ public:
         }
 
         const int num_bidir = static_cast<int>(bidir_refs_.size());
-        const int num_perms = 1 << num_bidir;  // 2^N permutations (N is small: 2-3)
 
-        spdlog::info("[Scheduler] {} bidir blocks -> {} DAG permutations", num_bidir, num_perms);
+        // BidirDir bit flags: HiZ=1, Input=2, Output=4.
+        // Each block's state occupies one base-3 digit in the permutation index,
+        // mapping: digit 0 -> HiZ, digit 1 -> Input, digit 2 -> Output.
+        // Total index space is 3^N, but we only build plans for valid
+        // combinations (each block's digit must be in its `possible` mask).
+        using BidirDir = Component::BidirDir;
+        static constexpr BidirDir digit_to_dir[3] = {
+            BidirDir::HiZ, BidirDir::Input, BidirDir::Output
+        };
+
+        int num_slots = 1;  // 3^N index space
+        for (int i = 0; i < num_bidir; ++i) num_slots *= 3;
+
+        auto perm_dir = [](int perm, int b) -> BidirDir {
+            for (int i = 0; i < b; ++i) perm /= 3;
+            return digit_to_dir[perm % 3];
+        };
+
+        // Check if a permutation is valid (all blocks in their possible set).
+        auto perm_valid = [&](int perm) -> bool {
+            for (int b = 0; b < num_bidir; ++b)
+                if (!(bidir_refs_[b].block->possible & perm_dir(perm, b)))
+                    return false;
+            return true;
+        };
+
+        int num_valid = 0;
+        for (int p = 0; p < num_slots; ++p)
+            if (perm_valid(p)) ++num_valid;
+
+        spdlog::info("[Scheduler] {} bidir blocks -> {} valid permutations (of {} slots)",
+                     num_bidir, num_valid, num_slots);
         for (int i = 0; i < num_bidir; ++i)
-            spdlog::info("[Scheduler]   block {}: {} (bidir)", i, bidir_refs_[i].comp->name());
+            spdlog::info("[Scheduler]   block {}: {} (possible=0x{:x})", i,
+                         bidir_refs_[i].comp->name(), uint8_t(bidir_refs_[i].block->possible));
 
         // Which component index owns each bidir block?
         std::vector<int> bidir_comp_idx(num_bidir);
@@ -315,9 +347,10 @@ public:
             return false;
         };
 
-        // Build one wave plan per permutation.
-        wave_plans_.resize(num_perms);
-        for (int perm = 0; perm < num_perms; ++perm) {
+        // Build one wave plan per valid permutation.
+        wave_plans_.clear();
+        for (int perm = 0; perm < num_slots; ++perm) {
+            if (!perm_valid(perm)) continue;
             // Start with base effective outputs/inputs.
             std::vector<std::array<uint64_t, W>> eff_out(n), eff_in(n);
             for (int i = 0; i < n; ++i)
@@ -329,15 +362,26 @@ public:
             // Apply bidir overrides for this permutation.
             for (int b = 0; b < num_bidir; ++b) {
                 int ci = bidir_comp_idx[b];
-                bool is_output = (perm >> b) & 1;
+                BidirDir dir = perm_dir(perm, b);
                 for (int w = 0; w < W; ++w) {
-                    if (is_output) {
-                        // Component drives these pins: add to eff_out, remove from eff_in.
-                        eff_out[ci][w] |= bidir_refs_[b].block->mask[w];
-                        eff_in[ci][w]  &= ~bidir_refs_[b].block->mask[w];
-                    } else {
-                        // Component reads these pins: remove from eff_out, keep in eff_in.
-                        eff_out[ci][w] &= ~bidir_refs_[b].block->mask[w];
+                    uint64_t om = bidir_refs_[b].block->out_mask[w];
+                    uint64_t im = bidir_refs_[b].block->in_mask[w];
+                    switch (dir) {
+                        case BidirDir::Output:
+                            // out_mask pins driven, in_mask pins read.
+                            eff_out[ci][w] |= om;  eff_in[ci][w] &= ~om;
+                            eff_out[ci][w] &= ~im;
+                            break;
+                        case BidirDir::Input:
+                            // out_mask pins read, in_mask pins driven.
+                            eff_out[ci][w] &= ~om;
+                            eff_out[ci][w] |= im;  eff_in[ci][w] &= ~im;
+                            break;
+                        case BidirDir::HiZ:
+                            // Both sides disconnected.
+                            eff_out[ci][w] &= ~om;  eff_in[ci][w] &= ~om;
+                            eff_out[ci][w] &= ~im;  eff_in[ci][w] &= ~im;
+                            break;
                     }
                 }
             }
@@ -376,11 +420,8 @@ public:
             }
 
             if (sorted != n) {
-                spdlog::critical("[Scheduler] perm {}: cycle detected (sorted {} of {})", perm, sorted, n);
-                for (int i = 0; i < n; ++i)
-                    if (in_deg[i] > 0)
-                        spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", evals[i]->name(), in_deg[i]);
-                std::_Exit(1);
+                spdlog::warn("[Scheduler] perm {}: cycle -- impossible state, skipping", perm);
+                continue;
             }
 
             // Group into waves, excluding fibers from execution plan.
@@ -420,7 +461,6 @@ public:
     // Dump one DOT/SVG per DAG permutation, showing wave clustering and edges.
     void dump_permutation_dots(const std::vector<Component*>& evals, int n) {
         constexpr int W = Component::SLOT_WORDS;
-        const int num_perms = static_cast<int>(wave_plans_.size());
 
         // Gather visuals + evals into one flat list for node indexing.
         std::vector<Component*> all;
@@ -441,13 +481,30 @@ public:
             return -1;
         };
 
+        using BidirDir = Component::BidirDir;
+        static constexpr BidirDir digit_to_dir[3] = {
+            BidirDir::HiZ, BidirDir::Input, BidirDir::Output
+        };
+        auto perm_dir = [](int perm, int b) -> BidirDir {
+            for (int i = 0; i < b; ++i) perm /= 3;
+            return digit_to_dir[perm % 3];
+        };
+        auto dir_str = [](BidirDir d) -> const char* {
+            switch (d) {
+                case BidirDir::HiZ:    return "=HiZ";
+                case BidirDir::Input:  return "=IN";
+                case BidirDir::Output: return "=OUT";
+            }
+            return "=?";
+        };
+
         // Build a bidir label string for a permutation.
         auto perm_label = [&](int perm) -> std::string {
             std::string s;
             for (int b = 0; b < static_cast<int>(bidir_refs_.size()); ++b) {
                 if (!s.empty()) s += ", ";
                 s += bidir_refs_[b].comp->name();
-                s += ((perm >> b) & 1) ? "=OUT" : "=IN";
+                s += dir_str(perm_dir(perm, b));
             }
             return s;
         };
@@ -458,7 +515,7 @@ public:
         for (int b = 0; b < num_bidir; ++b)
             bidir_all_idx[b] = idx_of(bidir_refs_[b].comp);
 
-        for (int perm = 0; perm < num_perms; ++perm) {
+        for (auto& [perm, plan] : wave_plans_) {
             std::string dot_path = "unified_waves_perm" + std::to_string(perm) + ".dot";
             std::string svg_path = "unified_waves_perm" + std::to_string(perm) + ".svg";
             FILE* f = std::fopen(dot_path.c_str(), "w");
@@ -472,8 +529,6 @@ public:
             std::fprintf(f, "  node [shape=box fontname=\"Consolas\" fontsize=10 style=filled];\n");
             std::fprintf(f, "  edge [fontname=\"Consolas\" fontsize=8 color=\"#555555\"];\n");
             std::fprintf(f, "  graph [nodesep=0.3 ranksep=0.8 compound=true];\n\n");
-
-            auto& plan = wave_plans_[perm];
 
             // Non-wave components (visuals + fibers).
             for (int i = 0; i < total; ++i) {
@@ -519,13 +574,23 @@ public:
             for (int b = 0; b < num_bidir; ++b) {
                 int ci = bidir_all_idx[b];
                 if (ci < 0) continue;
-                bool is_output = (perm >> b) & 1;
+                BidirDir dir = perm_dir(perm, b);
                 for (int w = 0; w < W; ++w) {
-                    if (is_output) {
-                        eff_out[ci][w] |= bidir_refs_[b].block->mask[w];
-                        eff_in[ci][w]  &= ~bidir_refs_[b].block->mask[w];
-                    } else {
-                        eff_out[ci][w] &= ~bidir_refs_[b].block->mask[w];
+                    uint64_t om = bidir_refs_[b].block->out_mask[w];
+                    uint64_t im = bidir_refs_[b].block->in_mask[w];
+                    switch (dir) {
+                        case BidirDir::Output:
+                            eff_out[ci][w] |= om;  eff_in[ci][w] &= ~om;
+                            eff_out[ci][w] &= ~im;
+                            break;
+                        case BidirDir::Input:
+                            eff_out[ci][w] &= ~om;
+                            eff_out[ci][w] |= im;  eff_in[ci][w] &= ~im;
+                            break;
+                        case BidirDir::HiZ:
+                            eff_out[ci][w] &= ~om;  eff_in[ci][w] &= ~om;
+                            eff_out[ci][w] &= ~im;  eff_in[ci][w] &= ~im;
+                            break;
                     }
                 }
             }
@@ -586,16 +651,29 @@ public:
 
         if (unified_resolved_) {
             // Select DAG permutation by checking bidir block lambdas.
-            int perm = 0;
-            for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i)
-                if (bidir_refs_[i].block->is_output())
-                    perm |= (1 << i);
+            // Map BidirDir bit flags to base-3 digits: HiZ(1)->0, Input(2)->1, Output(4)->2.
+            static constexpr int dir_to_digit[] = {-1, 0, 1, -1, 2};  // indexed by uint8_t(BidirDir)
+            int perm = 0, mul = 1;
+            for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
+                perm += dir_to_digit[uint8_t(bidir_refs_[i].block->direction())] * mul;
+                mul *= 3;
+            }
 
-            auto& plan = wave_plans_[perm];
-            for (auto& wave : plan.waves) {
+            auto it = wave_plans_.find(perm);
+            if (it == wave_plans_.end()) {
+                spdlog::critical("[Scheduler] perm {} has no wave plan (cycle at build time). Block states:", perm);
+                for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
+                    auto dir = bidir_refs_[i].block->direction();
+                    using BD = Component::BidirDir;
+                    const char* ds = dir == BD::HiZ ? "HiZ" : dir == BD::Input ? "Input" : "Output";
+                    spdlog::critical("[Scheduler]   block {}: {} = {}", i, bidir_refs_[i].comp->name(), ds);
+                }
+                std::_Exit(1);
+            }
+            for (auto& wave : it->second.waves) {
                 for (auto* c : wave)
                     c->on_signal_change(rising, falling);
-                SignalPool::commit();
+                    SignalPool::commit();
             }
             return;
         }
@@ -631,7 +709,7 @@ private:
     struct WavePlan {
         std::vector<std::vector<Component*>> waves;
     };
-    std::vector<WavePlan> wave_plans_;
+    std::unordered_map<int, WavePlan> wave_plans_;
 
     // Bidir block references for runtime DAG selection.
     struct BidirRef {

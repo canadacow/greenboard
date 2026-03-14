@@ -54,20 +54,73 @@ public:
     const uint64_t* outputs() const { return outputs_; }
     const uint64_t* async_inputs() const { return async_inputs_; }
 
+    // Tri-state direction for bidir blocks (bit-flag values for composing masks).
+    enum class BidirDir : uint8_t {
+        HiZ    = 1,  // pins disconnected (no dependency either way)
+        Input  = 2,  // component reads these pins
+        Output = 4,  // component drives these pins
+    };
+    friend constexpr BidirDir operator|(BidirDir a, BidirDir b) {
+        return BidirDir(uint8_t(a) | uint8_t(b));
+    }
+    friend constexpr bool operator&(BidirDir mask, BidirDir d) {
+        return (uint8_t(mask) & uint8_t(d)) != 0;
+    }
+
     // Bidirectional pin blocks whose direction changes at runtime.
     // The scheduler builds a DAG per direction permutation and selects at runtime.
+    //
+    // Three states: Output (drives out_mask, reads in_mask),
+    //               Input  (reads out_mask, drives in_mask),
+    //               HiZ    (pins removed from both eff_out and eff_in).
+    //
+    // `possible` is a bitmask of BidirDir values this block can be in.
+    // The scheduler enumerates the Cartesian product of each block's
+    // possible states, so the permutation count is the product of
+    // per-block popcount(possible), not 3^N.
+    //
+    // For unpaired blocks (e.g. 8088 AD0-AD7), in_mask is all zeros.
+    // For paired blocks (e.g. 74S245 A+B), out_mask and in_mask are anti-correlated.
     struct BidirBlock {
-        uint64_t mask[SLOT_WORDS] = {};
-        std::function<bool()> is_output;  // true = component drives these pins
+        uint64_t out_mask[SLOT_WORDS] = {};
+        uint64_t in_mask[SLOT_WORDS]  = {};
+        std::function<BidirDir()> direction;
+        BidirDir possible = {};
     };
 
-    void declare_bidir_block(std::initializer_list<Pin> pins, std::function<bool()> dir_fn) {
+    // Single-sided bidir block. Default possible: Input | Output.
+    void declare_bidir_block(std::initializer_list<Pin> pins,
+                             BidirDir possible_states,
+                             std::function<BidirDir()> dir_fn) {
         bidir_blocks_.emplace_back();
         auto& b = bidir_blocks_.back();
         for (auto p : pins)
             if (p.idx != 0)
-                b.mask[p.idx / 64] |= uint64_t(1) << (p.idx % 64);
-        b.is_output = std::move(dir_fn);
+                b.out_mask[p.idx / 64] |= uint64_t(1) << (p.idx % 64);
+        b.direction = std::move(dir_fn);
+        b.possible = possible_states;
+    }
+    void declare_bidir_block(std::initializer_list<Pin> pins, std::function<BidirDir()> dir_fn) {
+        declare_bidir_block(pins, BidirDir::Input | BidirDir::Output, std::move(dir_fn));
+    }
+
+    // Paired bidir block with explicit possible states.
+    // out_pins driven when direction()=Output, in_pins driven when Input.
+    // HiZ: both sides disconnected.
+    void declare_bidir_pair(std::initializer_list<Pin> out_pins,
+                            std::initializer_list<Pin> in_pins,
+                            BidirDir possible_states,
+                            std::function<BidirDir()> dir_fn) {
+        bidir_blocks_.emplace_back();
+        auto& b = bidir_blocks_.back();
+        for (auto p : out_pins)
+            if (p.idx != 0)
+                b.out_mask[p.idx / 64] |= uint64_t(1) << (p.idx % 64);
+        for (auto p : in_pins)
+            if (p.idx != 0)
+                b.in_mask[p.idx / 64] |= uint64_t(1) << (p.idx % 64);
+        b.direction = std::move(dir_fn);
+        b.possible = possible_states;
     }
 
     const std::vector<BidirBlock>& bidir_blocks() const { return bidir_blocks_; }
