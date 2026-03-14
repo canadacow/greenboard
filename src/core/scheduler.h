@@ -412,6 +412,158 @@ public:
         }
 
         unified_resolved_ = true;
+
+        // Dump DOT/SVG for each permutation.
+        dump_permutation_dots(evals, n);
+    }
+
+    // Dump one DOT/SVG per DAG permutation, showing wave clustering and edges.
+    void dump_permutation_dots(const std::vector<Component*>& evals, int n) {
+        constexpr int W = Component::SLOT_WORDS;
+        const int num_perms = static_cast<int>(wave_plans_.size());
+
+        // Gather visuals + evals into one flat list for node indexing.
+        std::vector<Component*> all;
+        for (int i = 0; i < visual_count_; ++i) all.push_back(visuals_[i]);
+        for (auto* c : evals) all.push_back(c);
+        int total = static_cast<int>(all.size());
+        int eval_start = visual_count_;
+
+        // Wave colors.
+        const char* wave_colors[] = {
+            "#e8f4f8", "#e8f8e8", "#f8f4e8", "#f8e8e8",
+            "#e8e8f8", "#f4e8f8", "#e8f8f4", "#f8f8e8",
+        };
+
+        auto idx_of = [&](Component* c) -> int {
+            for (int i = 0; i < total; ++i)
+                if (all[i] == c) return i;
+            return -1;
+        };
+
+        // Build a bidir label string for a permutation.
+        auto perm_label = [&](int perm) -> std::string {
+            std::string s;
+            for (int b = 0; b < static_cast<int>(bidir_refs_.size()); ++b) {
+                if (!s.empty()) s += ", ";
+                s += bidir_refs_[b].comp->name();
+                s += ((perm >> b) & 1) ? "=OUT" : "=IN";
+            }
+            return s;
+        };
+
+        // Which 'all' index owns each bidir block?
+        const int num_bidir = static_cast<int>(bidir_refs_.size());
+        std::vector<int> bidir_all_idx(num_bidir);
+        for (int b = 0; b < num_bidir; ++b)
+            bidir_all_idx[b] = idx_of(bidir_refs_[b].comp);
+
+        for (int perm = 0; perm < num_perms; ++perm) {
+            std::string dot_path = "unified_waves_perm" + std::to_string(perm) + ".dot";
+            std::string svg_path = "unified_waves_perm" + std::to_string(perm) + ".svg";
+            FILE* f = std::fopen(dot_path.c_str(), "w");
+            if (!f) continue;
+
+            std::string title = "perm " + std::to_string(perm) + ": " + perm_label(perm);
+            std::fprintf(f, "digraph unified_perm%d {\n", perm);
+            std::fprintf(f, "  rankdir=LR;\n");
+            std::fprintf(f, "  label=\"%s\";\n", title.c_str());
+            std::fprintf(f, "  labelloc=t; fontsize=14; fontname=\"Consolas\";\n");
+            std::fprintf(f, "  node [shape=box fontname=\"Consolas\" fontsize=10 style=filled];\n");
+            std::fprintf(f, "  edge [fontname=\"Consolas\" fontsize=8 color=\"#555555\"];\n");
+            std::fprintf(f, "  graph [nodesep=0.3 ranksep=0.8 compound=true];\n\n");
+
+            auto& plan = wave_plans_[perm];
+
+            // Non-wave components (visuals + fibers).
+            for (int i = 0; i < total; ++i) {
+                auto* c = all[i];
+                bool in_wave = false;
+                for (auto& wave : plan.waves)
+                    for (auto* wc : wave)
+                        if (wc == c) { in_wave = true; break; }
+                if (in_wave) continue;
+                std::string label = c->description().empty()
+                    ? c->name() : c->description() + "\\n" + c->name();
+                std::fprintf(f, "  n%d [label=\"%s\" fillcolor=\"#dddddd\"];\n",
+                             i, label.c_str());
+            }
+            std::fprintf(f, "\n");
+
+            // Wave subgraphs.
+            for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
+                std::fprintf(f, "  subgraph cluster_wave%d {\n", w);
+                std::fprintf(f, "    label=\"wave %d\";\n", w);
+                std::fprintf(f, "    style=filled; color=\"%s\";\n", wave_colors[w % 8]);
+                std::fprintf(f, "    fontname=\"Consolas\"; fontsize=11;\n");
+                for (auto* c : plan.waves[w]) {
+                    int idx = idx_of(c);
+                    std::string label = c->description().empty()
+                        ? c->name() : c->description() + "\\n" + c->name();
+                    std::fprintf(f, "    n%d [label=\"%s\" fillcolor=\"white\"];\n",
+                                 idx, label.c_str());
+                }
+                std::fprintf(f, "  }\n\n");
+            }
+
+            // Compute per-component effective outputs/inputs for this permutation.
+            // Bidir pins are resolved to directed based on the permutation bit.
+            std::vector<std::array<uint64_t, W>> eff_out(total), eff_in(total);
+            for (int i = 0; i < total; ++i) {
+                auto* c = all[i];
+                for (int w = 0; w < W; ++w) {
+                    eff_out[i][w] = c->outputs()[w] & ~c->inputs()[w];
+                    eff_in[i][w]  = c->inputs()[w]  & ~c->async_inputs()[w];
+                }
+            }
+            for (int b = 0; b < num_bidir; ++b) {
+                int ci = bidir_all_idx[b];
+                if (ci < 0) continue;
+                bool is_output = (perm >> b) & 1;
+                for (int w = 0; w < W; ++w) {
+                    if (is_output) {
+                        eff_out[ci][w] |= bidir_refs_[b].block->mask[w];
+                        eff_in[ci][w]  &= ~bidir_refs_[b].block->mask[w];
+                    } else {
+                        eff_out[ci][w] &= ~bidir_refs_[b].block->mask[w];
+                    }
+                }
+            }
+
+            // Edges: directed based on this permutation's effective pins.
+            // Ordering edges (solid grey), async edges (dashed red).
+            for (int a = 0; a < total; ++a) {
+                for (int b2 = 0; b2 < total; ++b2) {
+                    if (a == b2) continue;
+                    // Collect signal names for ordering edges and async edges.
+                    for (int s = 1; s < SignalPool::count; ++s) {
+                        const char* nm = SignalPool::names[s];
+                        if (!nm) continue;
+                        int w = s / 64;
+                        uint64_t bit = uint64_t(1) << (s % 64);
+                        bool a_drives = (eff_out[a][w] & bit) != 0;
+                        if (!a_drives) continue;
+                        bool b_reads  = (eff_in[b2][w] & bit) != 0;
+                        bool b_async  = (all[b2]->async_inputs()[w] & bit) != 0;
+                        if (b_reads)
+                            std::fprintf(f, "  n%d -> n%d [label=\"%s\"];\n", a, b2, nm);
+                        else if (b_async)
+                            std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc4444\"];\n", a, b2, nm);
+                    }
+                }
+            }
+
+            std::fprintf(f, "}\n");
+            std::fclose(f);
+            spdlog::info("[Scheduler] wrote {}", dot_path);
+
+            std::string cmd = "\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg "
+                              + dot_path + " -o " + svg_path + " 2>&1";
+            if (std::system(cmd.c_str()) == 0)
+                spdlog::info("[Scheduler] rendered {}", svg_path);
+            else
+                spdlog::warn("[Scheduler] dot not found -- SVG not rendered");
+        }
     }
 
     // Half-cycle flag: set by the 8088 before yielding.
@@ -447,27 +599,6 @@ public:
             }
             return;
         }
-
-#if 0
-        // Legacy 3-phase fallback.
-        for (int i = 0; i < bus_ctrl_count_; ++i)
-            bus_ctrls_[i]->on_signal_change(rising, falling);
-        for (;;) {
-            for (int i = 0; i < inline_count_; ++i)
-                inlines_[i]->on_signal_change(rising, falling);
-            if (!SignalPool::commit()) break;
-        }
-        if (resolved_) {
-            for (int w = 0; w < num_waves_; ++w) {
-                for (int i = 0; i < wave_counts_[w]; ++i)
-                    waves_[w][i]->on_signal_change(rising, falling);
-                SignalPool::commit();
-            }
-        } else {
-            for (int i = 0; i < callback_count_; ++i)
-                callbacks_[i]->on_signal_change(rising, falling);
-        }
-#endif
     }
 
 private:
