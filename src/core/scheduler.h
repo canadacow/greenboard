@@ -635,33 +635,32 @@ public:
     void evaluate(Fiber caller = nullptr, bool rising = true, bool falling = true) {
         SignalPool::commit();
 
-        if (unified_resolved_) {
-            // Select DAG permutation by checking bidir block lambdas.
-            // Map BidirDir bit flags to base-3 digits: HiZ(1)->0, Input(2)->1, Output(4)->2.
-            static constexpr int dir_to_digit[] = {-1, 0, 1, -1, 2};  // indexed by uint8_t(BidirDir)
-            int perm = 0, mul = 1;
-            for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
-                perm += dir_to_digit[uint8_t(bidir_refs_[i].block->direction())] * mul;
-                mul *= 3;
-            }
+        // Select DAG permutation by checking bidir block lambdas.
+        // Map BidirDir bit flags to base-3 digits: HiZ(1)->0, Input(2)->1, Output(4)->2.
+        static constexpr int dir_to_digit[] = {-1, 0, 1, -1, 2};  // indexed by uint8_t(BidirDir)
+        int perm = 0, mul = 1;
+        for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
+            perm += dir_to_digit[uint8_t(bidir_refs_[i].block->direction())] * mul;
+            mul *= 3;
+        }
 
-            auto it = wave_plans_.find(perm);
-            if (it == wave_plans_.end()) {
-                spdlog::critical("[Scheduler] perm {} has no wave plan (cycle at build time). Block states:", perm);
-                for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
-                    auto dir = bidir_refs_[i].block->direction();
-                    using BD = Component::BidirDir;
-                    const char* ds = dir == BD::HiZ ? "HiZ" : dir == BD::Input ? "Input" : "Output";
-                    spdlog::critical("[Scheduler]   block {}: {} = {}", i, bidir_refs_[i].comp->name(), ds);
-                }
-                std::_Exit(1);
+        spdlog::info("[Scheduler] Executing perm{}", perm);
+
+        auto it = wave_plans_.find(perm);
+        if (it == wave_plans_.end()) {
+            spdlog::critical("[Scheduler] perm {} has no wave plan (cycle at build time). Block states:", perm);
+            for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
+                auto dir = bidir_refs_[i].block->direction();
+                using BD = Component::BidirDir;
+                const char* ds = dir == BD::HiZ ? "HiZ" : dir == BD::Input ? "Input" : "Output";
+                spdlog::critical("[Scheduler]   block {}: {} = {}", i, bidir_refs_[i].comp->name(), ds);
             }
-            for (auto& wave : it->second.waves) {
-                for (auto* c : wave)
-                    c->on_signal_change(caller, rising, falling);
-                SignalPool::commit();
-            }
-            return;
+            std::_Exit(1);
+        }
+        for (auto& wave : it->second.waves) {
+            for (auto* c : wave)
+                c->on_signal_change(caller, rising, falling);
+            SignalPool::commit();
         }
     }
 
