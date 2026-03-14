@@ -67,6 +67,7 @@ protected:
     std::vector<Signal*> connected_signals_;
 
     friend class Signal;
+    friend class Scheduler;
 
 private:
     std::string name_;

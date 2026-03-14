@@ -60,16 +60,17 @@ public:
 
         constexpr int W = Component::SLOT_WORDS;
 
-        // Build adjacency: depends[b][a] = true means b depends on a
-        // (a's outputs overlap b's inputs).
+        // Build adjacency: depends[b][a] = true means b depends on a.
+        // Uses effective outputs (output & ~input) to exclude bidirectional pins,
+        // and effective inputs (input & ~async) to exclude cross-cycle signals.
         bool depends[MAX_CALLBACKS][MAX_CALLBACKS] = {};
         for (int a = 0; a < n; ++a) {
             for (int b = 0; b < n; ++b) {
                 if (a == b) continue;
-                const uint64_t* a_out = callbacks_[a]->outputs();
-                const uint64_t* b_in  = callbacks_[b]->inputs();
                 for (int w = 0; w < W; ++w) {
-                    if (a_out[w] & b_in[w]) {
+                    uint64_t eff_out = callbacks_[a]->outputs()[w] & ~callbacks_[a]->inputs()[w];
+                    uint64_t eff_in  = callbacks_[b]->inputs()[w]  & ~callbacks_[b]->async_inputs()[w];
+                    if (eff_out & eff_in) {
                         depends[b][a] = true;
                         break;
                     }
@@ -99,7 +100,13 @@ public:
                 if (--in_deg[v] == 0) queue[back++] = v;
             }
         }
-        assert(sorted == n && "Scheduler::resolve: cycle in callback dependencies");
+        if (sorted != n) {
+            spdlog::critical("[Scheduler] cycle in callback dependencies (sorted {} of {})", sorted, n);
+            for (int i = 0; i < n; ++i)
+                if (in_deg[i] > 0)
+                    spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", callbacks_[i]->name(), in_deg[i]);
+            std::_Exit(1);
+        }
 
         // Populate waves.
         num_waves_ = 0;
@@ -334,11 +341,11 @@ public:
         }
 
         if (sorted != n) {
-            spdlog::error("[Scheduler] unified sort: cycle detected! sorted={} of {}", sorted, n);
+            spdlog::critical("[Scheduler] unified sort: cycle detected (sorted {} of {})", sorted, n);
             for (int i = 0; i < n; ++i)
                 if (in_deg[i] > 0)
-                    spdlog::error("[Scheduler]   stuck: {} (in_deg={})", evals[i]->name(), in_deg[i]);
-            return;
+                    spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", evals[i]->name(), in_deg[i]);
+            std::_Exit(1);
         }
 
         // Group into waves.
@@ -355,6 +362,32 @@ public:
             spdlog::info("[Scheduler] wave {}: {} components", w, waves[w].size());
             for (auto* c : waves[w])
                 spdlog::info("[Scheduler]   - {}", c->name());
+        }
+
+        // Store unified waves for execution (excluding fibers -- they resume separately).
+        auto is_fiber = [&](Component* c) {
+            for (int i = 0; i < fiber_count_; ++i)
+                if (fibers_[i] == c) return true;
+            return false;
+        };
+        unified_num_waves_ = 0;
+        for (int w = 0; w < num_w; ++w) {
+            int count = 0;
+            for (auto* c : waves[w]) {
+                if (is_fiber(c)) continue;
+                unified_waves_[unified_num_waves_][count++] = c;
+            }
+            if (count > 0) {
+                unified_wave_counts_[unified_num_waves_] = count;
+                ++unified_num_waves_;
+            }
+        }
+        unified_resolved_ = true;
+        spdlog::info("[Scheduler] === unified execution plan ({} waves) ===", unified_num_waves_);
+        for (int w = 0; w < unified_num_waves_; ++w) {
+            spdlog::info("[Scheduler] exec wave {}: {} components", w, unified_wave_counts_[w]);
+            for (int i = 0; i < unified_wave_counts_[w]; ++i)
+                spdlog::info("[Scheduler]   - {}", unified_waves_[w][i]->name());
         }
 
         // Dump DOT with wave subgraph clustering.
@@ -496,30 +529,29 @@ public:
             fibers_[i]->resume(caller);
     }
 
-    // Commit + bus controllers + settle inlines + callback waves. No fiber resume.
-    //
-    // Order matches real hardware propagation within a clock period:
-    //   1. Commit pending signals (8088 status lines become visible)
-    //   2. Bus controllers (8288 decodes S0-S2, drives ~IOW/~MEMR/ALE/etc.)
-    //      -- 8288 uses drive_immediate() so outputs are in current[] already
-    //   3. Commit + settle inlines (74S373 latches address, 74S138 decodes ~CS)
-    //   4. Callback waves -- each wave followed by commit(), so producers'
-    //      outputs are visible to consumer waves.
+    // Commit pending signals, then evaluate all non-fiber components.
+    // Fibers are resumed separately in evaluate().
     void evaluate_no_wake(bool rising = true, bool falling = true) {
         SignalPool::commit();
-        for (int i = 0; i < bus_ctrl_count_; ++i)
-            bus_ctrls_[i]->on_signal_change(rising, falling);
 
-        // Phase 2: Fixed-point inline IC evaluation.
-        for (;;)
-        {
-            for (int i = 0; i < inline_count_; ++i)
-                inlines_[i]->on_signal_change(rising, falling);
-
-            if (!SignalPool::commit()) break;
+        if (false && unified_resolved_) {
+            // Unified DAG: one loop, commit between each wave.
+            for (int w = 0; w < unified_num_waves_; ++w) {
+                for (int i = 0; i < unified_wave_counts_[w]; ++i)
+                    unified_waves_[w][i]->on_signal_change(rising, falling);
+                SignalPool::commit();
+            }
+            return;
         }
 
-        // Phase 3: Callback waves (resolved dependency order).
+        // Legacy 3-phase fallback.
+        for (int i = 0; i < bus_ctrl_count_; ++i)
+            bus_ctrls_[i]->on_signal_change(rising, falling);
+        for (;;) {
+            for (int i = 0; i < inline_count_; ++i)
+                inlines_[i]->on_signal_change(rising, falling);
+            if (!SignalPool::commit()) break;
+        }
         if (resolved_) {
             for (int w = 0; w < num_waves_; ++w) {
                 for (int i = 0; i < wave_counts_[w]; ++i)
@@ -527,7 +559,6 @@ public:
                 SignalPool::commit();
             }
         } else {
-            // Fallback: no resolve() called, run flat (legacy behavior).
             for (int i = 0; i < callback_count_; ++i)
                 callbacks_[i]->on_signal_change(rising, falling);
         }
@@ -536,12 +567,14 @@ public:
 private:
     bool half_cycle_ = false;
     bool resolved_ = false;
+    bool unified_resolved_ = false;
 
     static constexpr int MAX_BUS_CTRLS = 4;
     static constexpr int MAX_INLINES = 32;
     static constexpr int MAX_CALLBACKS = 32;
     static constexpr int MAX_FIBERS = 256;
-    static constexpr int MAX_WAVES = 8;
+    static constexpr int MAX_WAVES = 16;
+    static constexpr int MAX_UNIFIED = MAX_BUS_CTRLS + MAX_INLINES + MAX_CALLBACKS;
 
     BusControllerComponent* bus_ctrls_[MAX_BUS_CTRLS] = {};
     int bus_ctrl_count_ = 0;
@@ -552,10 +585,15 @@ private:
     CallbackComponent* callbacks_[MAX_CALLBACKS] = {};
     int callback_count_ = 0;
 
-    // Resolved callback waves (populated by resolve()).
+    // Resolved callback waves (populated by resolve(), legacy fallback).
     CallbackComponent* waves_[MAX_WAVES][MAX_CALLBACKS] = {};
     int wave_counts_[MAX_WAVES] = {};
     int num_waves_ = 0;
+
+    // Unified DAG waves (populated by dump_unified_waves(), excludes fibers).
+    Component* unified_waves_[MAX_WAVES][MAX_UNIFIED] = {};
+    int unified_wave_counts_[MAX_WAVES] = {};
+    int unified_num_waves_ = 0;
 
     FiberComponent* fibers_[MAX_FIBERS] = {};
     int fiber_count_ = 0;
