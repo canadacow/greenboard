@@ -644,7 +644,24 @@ public:
             mul *= 3;
         }
 
-        spdlog::info("[Scheduler] Executing perm{}", perm);
+        auto dir_name = [](Component::BidirDir d) -> const char* {
+            switch (d) {
+                case Component::BidirDir::HiZ:    return "HiZ";
+                case Component::BidirDir::Input:  return "IN";
+                case Component::BidirDir::Output: return "OUT";
+            }
+            return "?";
+        };
+        {
+            std::string blk;
+            for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
+                if (!blk.empty()) blk += ", ";
+                blk += bidir_refs_[i].comp->name();
+                blk += "=";
+                blk += dir_name(bidir_refs_[i].block->direction());
+            }
+            spdlog::trace("[Scheduler] perm {} [{}]", perm, blk);
+        }
 
         auto it = wave_plans_.find(perm);
         if (it == wave_plans_.end()) {

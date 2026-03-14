@@ -58,8 +58,13 @@ void IC_74S373::on_signal_change(Fiber /*caller*/, bool rising, bool /*falling*/
     le_prev_ = le;
 
     // Transparent mode: Q tracks D continuously
-    if (le == Level::High)
+    if (le == Level::High) {
         for (int i = 0; i < 8; ++i) latch_[i] = d_[i].level();
+        uint8_t val = 0;
+        for (int i = 0; i < 8; ++i)
+            if (latch_[i] == Level::High) val |= (1 << i);
+        spdlog::trace("[{}] LE=High, latched 0x{:02X}", name(), val);
+    }
 
     update_outputs();
 }

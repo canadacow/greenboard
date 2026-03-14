@@ -97,7 +97,18 @@ void IC_8088::install(Socket& socket) {
     // input during read data.
     declare_bidir_block({pin_ad_[0], pin_ad_[1], pin_ad_[2], pin_ad_[3],
                          pin_ad_[4], pin_ad_[5], pin_ad_[6], pin_ad_[7]},
-                        [this]() { return ad_driving_ ? BidirDir::Output : BidirDir::Input; });
+                        [this]() {
+                            return (bus_t_ == BusT::T1 || bus_t_ == BusT::T2_Write)
+                                   ? BidirDir::Output : BidirDir::Input;
+                        });
+
+    // S0-S2: Output unless AD is in Input mode (T2_Read), where they
+    // vanish from the DAG to break the 8088->8288->74S245->8088 cycle.
+    declare_bidir_block({pin_s0_, pin_s1_, pin_s2_},
+                        BidirDir::Output | BidirDir::HiZ,
+                        [this]() {
+                            return bus_t_ == BusT::T2_Read ? BidirDir::HiZ : BidirDir::Output;
+                        });
 }
 
 void IC_8088::check_nmi() {
@@ -156,7 +167,8 @@ void IC_8088::run() {
 // ========================================================================
 
 void IC_8088::drive_address(uint32_t address) {
-    ad_driving_ = true;
+    bus_t_ = BusT::T1;
+    spdlog::trace("[8088] drive_address 0x{:05X}", address & 0xFFFFF);
     for (int i = 0; i < 8; ++i)
         pin_ad_[i].drive((address >> i) & 1 ? Level::High : Level::Low);
     for (int i = 0; i < 12; ++i)
@@ -164,27 +176,30 @@ void IC_8088::drive_address(uint32_t address) {
 }
 
 void IC_8088::drive_data(uint8_t value) {
-    ad_driving_ = true;
+    bus_t_ = BusT::T2_Write;
     for (int i = 0; i < 8; ++i)
         pin_ad_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
 }
 
 uint8_t IC_8088::read_data() {
-    ad_driving_ = false;
+    bus_t_ = BusT::T2_Read;
     uint8_t val = 0;
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i].level() == Level::High)
             val |= (1 << i);
+    spdlog::trace("[8088] read_data = 0x{:02X}", val);
     return val;
 }
 
 void IC_8088::release_data() {
-    ad_driving_ = false;
+    spdlog::trace("[8088] release_data");
+    bus_t_ = BusT::T2_Read;
     for (int i = 0; i < 8; ++i)
         pin_ad_[i].release();
 }
 
 void IC_8088::drive_status(uint8_t s2, uint8_t s1, uint8_t s0) {
+    spdlog::trace("[8088] drive_status S2={} S1={} S0={}", s2, s1, s0);
     pin_s0_.drive(s0 ? Level::High : Level::Low);
     pin_s1_.drive(s1 ? Level::High : Level::Low);
     pin_s2_.drive(s2 ? Level::High : Level::Low);
@@ -233,12 +248,12 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
         full_wait_clk();                                         // Tw
     }
 
-    // T3 -- split cycle: rising half lets BusGlue drive data,
-    //        falling half commits it through 74S245 to AD pins.
-    half_wait_clk();                                             // T3
-    uint8_t data = read_data();                                  // read AFTER falling half
+    // T3 -- BusGlue/74S245 drive data (earlier in DAG wave), then we read.
+    uint8_t data = read_data();
+    full_wait_clk();                                             // T3
 
     // T4 -- bus cycle complete
+    bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk();                                             // T4
     return data;
 }
@@ -265,6 +280,7 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
 
     // T4 -- bus cycle complete, release data bus
     release_data();
+    bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk();                                             // T4
 }
 
@@ -296,12 +312,12 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
         full_wait_clk();                                         // Tw
     }
 
-    // T3 -- split cycle: rising half lets BusGlue drive data,
-    //        falling half commits it through 74S245 to AD pins.
-    half_wait_clk();                                             // T3
-    uint8_t data = read_data();                                  // read AFTER falling half
+    // T3 -- BusGlue/74S245 drive data (earlier in DAG wave), then we read.
+    uint8_t data = read_data();
+    full_wait_clk();                                             // T3
 
     // T4 -- bus cycle complete
+    bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk();                                             // T4
     return data;
 }
@@ -328,6 +344,7 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
 
     // T4 -- bus cycle complete, release data bus
     release_data();
+    bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk();                                             // T4
 }
 
@@ -1246,6 +1263,7 @@ void IC_8088::execute() {
             drive_status_passive();
             full_wait_clk();                                     // T2
             full_wait_clk();                                     // T3
+            bus_t_ = BusT::T1;
             full_wait_clk();                                     // T4
 
             // Second INTA pulse (PIC drives vector on data bus) -- 4 T-states
@@ -1254,8 +1272,9 @@ void IC_8088::execute() {
             release_data();
             drive_status_passive();
             full_wait_clk();                                     // T2
-            half_wait_clk();                                     // T3 (split for PIC vector)
             uint8_t vector = read_data();
+            full_wait_clk();                                     // T3
+            bus_t_ = BusT::T1;
             full_wait_clk();                                     // T4
 
             pc_interrupt(vector);

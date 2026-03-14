@@ -274,8 +274,13 @@ private:
         {0,2,4,6,7,8,9,10,11},
     };
 
-    // True when the 8088 is driving AD0-AD7 (T1 address, or write-cycle data).
-    bool ad_driving_ = false;
+    // Bus T-state tracking for DAG bidir blocks.
+    // T1: driving AD (address) + S0-S2 (status)  -> AD=Output, S0-S2=Output
+    // T2_READ: AD released (input), S0-S2 passive -> AD=Input,  S0-S2=HiZ
+    // T2_WRITE: AD driving (data), S0-S2 passive  -> AD=Output, S0-S2=HiZ
+    // T3/T4/Tw: same as T2 for their respective read/write direction
+    enum class BusT { T1, T2_Read, T2_Write };
+    BusT bus_t_ = BusT::T1;  // CPU starts by fetching -- first action is T1
 
     // Interrupt state
     bool nmi_pending_ = false;

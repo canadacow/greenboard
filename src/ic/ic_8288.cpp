@@ -45,8 +45,8 @@ void IC_8288::install(Socket& socket) {
 
     // Pin directions for wiring visualization.
     declare_input(pin_clk_);
-    declare_async_input(pin_s0_); declare_async_input(pin_s1_);
-    declare_async_input(pin_s2_);
+    declare_input(pin_s0_); declare_input(pin_s1_);
+    declare_input(pin_s2_);
     declare_input(pin_cen_); declare_input(pin_aen_);
     declare_output(pin_ale_); declare_output(pin_den_); declare_output(pin_dtr_);
     declare_output(pin_memr_); declare_output(pin_memw_);
@@ -112,28 +112,31 @@ void IC_8288::on_clk_rising() {
     }
 
     switch (state_) {
-        case State::Idle: {
+        case State::Idle:
+        idle_recheck:
+        {
             BusCycle bus = decode_status();
+            spdlog::trace("[8288] Idle: S0={} S1={} S2={} -> bus={}",
+                pin_s0_.level()==Level::Low ? 1 : 0,
+                pin_s1_.level()==Level::Low ? 1 : 0,
+                pin_s2_.level()==Level::Low ? 1 : 0,
+                static_cast<int>(bus));
             if (bus != BusCycle::Passive && bus != BusCycle::Halt) {
                 cycle_ = bus;
                 state_ = State::T1;
 
-                // T1: Assert ALE, set DT/~R direction.
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
                 pin_ale_.drive_immediate(Level::High);
                 pin_dtr_.drive_immediate(is_write ? Level::High : Level::Low);
+                spdlog::trace("[8288] -> T1: ALE=High, DT/~R={}", is_write ? "High" : "Low");
             }
             break;
         }
 
         case State::T1: {
             state_ = State::T2;
-
-            // T2 CLK rise: Deassert ALE (latches capture on falling edge).
-            // ~DEN and command strobe are deferred to T2 CLK fall to avoid
-            // bus contention: the 74S245 must not drive AD while the 74S373
-            // is capturing the address from AD.
             pin_ale_.drive_immediate(Level::Low);
+            spdlog::trace("[8288] T1->T2: ALE=Low");
             break;
         }
 
@@ -149,7 +152,9 @@ void IC_8288::on_clk_rising() {
             pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
-            break;
+            // Back-to-back bus cycles: T4 of one overlaps T1 of the next.
+            // Re-check status immediately for a new bus cycle.
+            goto idle_recheck;
         }
     }
 }

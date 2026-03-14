@@ -271,6 +271,7 @@ private:
                 // Read address now and start DRAM row phase so that row+RAS
                 // gets its own commit before col+CAS is driven at T2 falling.
                 cycle_addr = read_address();
+                spdlog::trace("[BusGlue] IDLE->T1 status={} addr=0x{:05X} dram={}", cycle_type, cycle_addr & 0xFFFFF, is_dram_range(cycle_addr & 0xFFFFF));
                 if (!is_io_cycle() && !is_inta_cycle()
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
@@ -280,31 +281,26 @@ private:
             break;
 
         case TState::T1:
-            // ALE drops this CLK rising (8288 T1->T2). 74S373 inlines have
-            // latched the address. Row+RAS were driven last tick (IDLE->T1
-            // or T4->T1) and are now committed -- DRAM latched the row
-            // during this tick's inline eval.
             t_state = TState::T2;
             break;
 
         case TState::T2:
-            // For DRAM: CAS was driven at T2 falling, committed now.
-            // DRAM inline eval responded to CAS. Read DOUT for reads.
-            // For non-DRAM: drive data directly (same timing as before).
             t_state = TState::T3;
             if (dram_cycle) {
                 if (is_read_cycle()) {
-                    // DOUT settled during inline eval. Read MD, drive D.
                     uint8_t val = read_dram_dout();
+                    spdlog::trace("[BusGlue] T3 DRAM read addr=0x{:05X} val=0x{:02X}", cycle_addr & 0xFFFFF, val);
                     drive_d(val);
                 }
             } else if (is_read_cycle()) {
                 if (is_inta_cycle()) {
                 } else if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
-                    // PIC (and other U66-decoded ports) -- handled by real hardware.
                 } else if (is_io_cycle()) {
                     uint8_t val = io_read(cycle_addr & 0xFFFF);
+                    spdlog::trace("[BusGlue] T3 IO read port=0x{:04X} val=0x{:02X}", cycle_addr & 0xFFFF, val);
                     drive_d(val);
+                } else {
+                    spdlog::trace("[BusGlue] T3 non-DRAM read addr=0x{:05X} (ROM/hw path)", cycle_addr & 0xFFFFF);
                 }
             } else if (is_write_cycle()) {
                 if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
@@ -329,6 +325,7 @@ private:
                 bus_cycle_count++;
                 // Back-to-back cycle: same as IDLE->T1, read addr + start row.
                 cycle_addr = read_address();
+                spdlog::trace("[BusGlue] T4->T1 status={} addr=0x{:05X} dram={}", cycle_type, cycle_addr & 0xFFFFF, is_dram_range(cycle_addr & 0xFFFFF));
                 if (!is_io_cycle() && !is_inta_cycle()
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
