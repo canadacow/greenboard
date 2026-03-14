@@ -271,7 +271,6 @@ private:
                 // Read address now and start DRAM row phase so that row+RAS
                 // gets its own commit before col+CAS is driven at T2 falling.
                 cycle_addr = read_address();
-                spdlog::trace("[BusGlue] IDLE->T1 status={} addr=0x{:05X} dram={}", cycle_type, cycle_addr & 0xFFFFF, is_dram_range(cycle_addr & 0xFFFFF));
                 if (!is_io_cycle() && !is_inta_cycle()
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
@@ -289,7 +288,6 @@ private:
             if (dram_cycle) {
                 if (is_read_cycle()) {
                     uint8_t val = read_dram_dout();
-                    spdlog::trace("[BusGlue] T3 DRAM read addr=0x{:05X} val=0x{:02X}", cycle_addr & 0xFFFFF, val);
                     drive_d(val);
                 }
             } else if (is_read_cycle()) {
@@ -297,10 +295,8 @@ private:
                 } else if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
                 } else if (is_io_cycle()) {
                     uint8_t val = io_read(cycle_addr & 0xFFFF);
-                    spdlog::trace("[BusGlue] T3 IO read port=0x{:04X} val=0x{:02X}", cycle_addr & 0xFFFF, val);
                     drive_d(val);
                 } else {
-                    spdlog::trace("[BusGlue] T3 non-DRAM read addr=0x{:05X} (ROM/hw path)", cycle_addr & 0xFFFFF);
                 }
             } else if (is_write_cycle()) {
                 if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
@@ -325,7 +321,6 @@ private:
                 bus_cycle_count++;
                 // Back-to-back cycle: same as IDLE->T1, read addr + start row.
                 cycle_addr = read_address();
-                spdlog::trace("[BusGlue] T4->T1 status={} addr=0x{:05X} dram={}", cycle_type, cycle_addr & 0xFFFFF, is_dram_range(cycle_addr & 0xFFFFF));
                 if (!is_io_cycle() && !is_inta_cycle()
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;

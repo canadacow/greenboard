@@ -560,7 +560,6 @@ public:
                 blk += "=";
                 blk += dir_name(bidir_refs_[i].block->direction());
             }
-            spdlog::trace("[Scheduler] perm {} [{}]", perm, blk);
         }
 
         auto it = wave_plans_.find(perm);

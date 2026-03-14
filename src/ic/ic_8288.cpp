@@ -116,11 +116,6 @@ void IC_8288::on_clk_rising() {
         idle_recheck:
         {
             BusCycle bus = decode_status();
-            spdlog::trace("[8288] Idle: S0={} S1={} S2={} -> bus={}",
-                pin_s0_.level()==Level::Low ? 1 : 0,
-                pin_s1_.level()==Level::Low ? 1 : 0,
-                pin_s2_.level()==Level::Low ? 1 : 0,
-                static_cast<int>(bus));
             if (bus != BusCycle::Passive && bus != BusCycle::Halt) {
                 cycle_ = bus;
                 state_ = State::T1;
@@ -128,7 +123,6 @@ void IC_8288::on_clk_rising() {
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
                 pin_ale_.drive_immediate(Level::High);
                 pin_dtr_.drive_immediate(is_write ? Level::High : Level::Low);
-                spdlog::trace("[8288] -> T1: ALE=High, DT/~R={}", is_write ? "High" : "Low");
             }
             break;
         }
@@ -136,7 +130,6 @@ void IC_8288::on_clk_rising() {
         case State::T1: {
             state_ = State::T2;
             pin_ale_.drive_immediate(Level::Low);
-            spdlog::trace("[8288] T1->T2: ALE=Low");
             break;
         }
 
