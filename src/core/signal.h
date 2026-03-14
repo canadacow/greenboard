@@ -33,6 +33,10 @@ struct SignalPool {
     static uint64_t valid_read_[SLOT_WORDS];
     static uint64_t valid_hiz_release_[SLOT_WORDS];
 
+    static bool validation_enabled_;
+    static void enable_validation()  { validation_enabled_ = true; }
+    static void disable_validation() { validation_enabled_ = false; }
+
     static void begin_component(Component* c);
     static void end_component() { active_comp_ = nullptr; }
 

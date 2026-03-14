@@ -15,6 +15,7 @@ const char* SignalPool::names[MAX_SIGNALS] = {};
 int SignalPool::count = 1;  // slot 0 reserved as dummy (reads HiZ, writes vanish)
 
 #ifdef BENCH_PIN_VALIDATION
+bool SignalPool::validation_enabled_ = true;
 Component* SignalPool::active_comp_ = nullptr;
 uint64_t SignalPool::valid_write_[SLOT_WORDS] = {};
 uint64_t SignalPool::valid_read_[SLOT_WORDS] = {};
@@ -27,7 +28,7 @@ static bool is_power_rail(int idx) {
 }
 
 void SignalPool::check_write(int idx, Level lvl) {
-    if (!active_comp_ || idx == 0 || is_power_rail(idx)) return;
+    if (!validation_enabled_ || !active_comp_ || idx == 0 || is_power_rail(idx)) return;
     uint64_t bit = uint64_t(1) << (idx % 64);
     int word = idx / 64;
     if (valid_write_[word] & bit) return;
@@ -38,7 +39,7 @@ void SignalPool::check_write(int idx, Level lvl) {
 }
 
 void SignalPool::check_read(int idx) {
-    if (!active_comp_ || idx == 0 || is_power_rail(idx)) return;
+    if (!validation_enabled_ || !active_comp_ || idx == 0 || is_power_rail(idx)) return;
     if (!(valid_read_[idx / 64] & (uint64_t(1) << (idx % 64)))) {
         spdlog::critical("[PinValidation] {} reading slot {} ({}) without input declaration",
                          active_comp_->name(), idx, names[idx] ? names[idx] : "???");

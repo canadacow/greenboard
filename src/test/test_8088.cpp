@@ -388,7 +388,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::trace);
+    spdlog::set_level(spdlog::level::info);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -951,6 +951,9 @@ int main() {
             spdlog::error("  benchmark skipped -- cannot load binary");
         } else {
             cpu->clear_halt();
+#ifdef BENCH_PIN_VALIDATION
+            SignalPool::enable_validation();
+#endif
             pic->power_on();
             bc->power_on();
             xcvr->power_on();
@@ -995,6 +998,9 @@ int main() {
             nmi.drive(Level::Low);
             res.drive(Level::Low);
             vcc.drive(Level::HiZ);
+#ifdef BENCH_PIN_VALIDATION
+            SignalPool::disable_validation();
+#endif
             scheduler.evaluate();
             clk_gen->power_off();
             cpu->power_off();
@@ -1052,6 +1058,9 @@ int main() {
 
         // Seat all ICs (threads start, block on wait_mailbox).
         cpu->clear_halt();
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::enable_validation();
+#endif
         pic->power_on();
         bc->power_on();
         xcvr->power_on();
@@ -1100,6 +1109,9 @@ int main() {
         // then delete fibers (safe -- no more evaluate() calls).
         res.drive(Level::Low);
         vcc.drive(Level::HiZ);
+#ifdef BENCH_PIN_VALIDATION
+        SignalPool::disable_validation();
+#endif
         scheduler.evaluate();
         clk_gen->power_off();   // stop clock first -- joins 8284A thread
         cpu->power_off();       // then delete fibers
