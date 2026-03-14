@@ -534,7 +534,7 @@ public:
     void evaluate_no_wake(bool rising = true, bool falling = true) {
         SignalPool::commit();
 
-        if (false && unified_resolved_) {
+        if (unified_resolved_) {
             // Unified DAG: one loop, commit between each wave.
             for (int w = 0; w < unified_num_waves_; ++w) {
                 for (int i = 0; i < unified_wave_counts_[w]; ++i)
