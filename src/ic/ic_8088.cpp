@@ -212,21 +212,6 @@ void IC_8088::full_wait_clk() {
     check_nmi();
 }
 
-void IC_8088::half_wait_clk() {
-    // Request the 8284A to split the next cycle into rising/falling halves.
-    // This gives intermediate components (8288, BusGlue) a commit gap
-    // between their rising-half output and the 8088's read.
-    scheduler_->request_half_cycle();
-    yield();                        // exits current evaluate, returns to 8284A
-    // 8284A sees flag, calls evaluate(rising=true, falling=false)
-    // We get resumed here after the rising half:
-    check_nmi();
-    yield();                        // back to 8284A
-    // 8284A calls evaluate(rising=false, falling=true)
-    // We get resumed here after the falling half:
-    check_nmi();
-}
-
 // ---- Memory read: 4 T-states (T1, T2, T3, T4) + optional Tw ----
 uint8_t IC_8088::bus_read_byte(uint32_t address) {
     // T1 -- drive S0-S2 (MEMR), drive address on AD0-AD7 / A8-A19

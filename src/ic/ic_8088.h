@@ -70,8 +70,7 @@ private:
     void release_data();
     void drive_status(uint8_t s2, uint8_t s1, uint8_t s0);
     void drive_status_passive();
-    void full_wait_clk();  // One CLK cycle = one yield
-    void half_wait_clk();  // One CLK cycle = two yields (rising/falling split)
+    void full_wait_clk();
 
     // --- Memory routing (register file or bus) ---
     static constexpr uint32_t REGS_BASE = 0xF0000;

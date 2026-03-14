@@ -108,13 +108,7 @@ void IC_8284A::run(std::stop_token stop) {
         bool res = pin_res_.level() == Level::High;
         pin_reset_.drive(res ? Level::Low : Level::High);
 
-        if (scheduler_->half_cycle_requested()) {
-            scheduler_->clear_half_cycle();
-            scheduler_->evaluate(self, true, false);   // rising half
-            scheduler_->evaluate(self, false, true);   // falling half
-        } else {
-            scheduler_->evaluate(self);                // full cycle
-        }
+        scheduler_->evaluate(self);
 
         ++clk_ticks;
     }
