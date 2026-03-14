@@ -92,6 +92,10 @@ public:
         for (int i = 0; i < 8; ++i) { declare_input(d[i]); declare_output(d[i]); }
         declare_input(pin_s0); declare_input(pin_s1); declare_input(pin_s2);
         declare_input(clk.pin());
+
+        // D pins are bidirectional: read cycles drive D (output), write cycles read D (input).
+        declare_bidir_block({d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]},
+                            [this]() { return is_read_cycle(); });
     }
 
     void init_dram(Signal* md_sigs[], Signal* ma_sigs[],

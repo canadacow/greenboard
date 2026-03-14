@@ -1,6 +1,7 @@
 #pragma once
 #include "core/types.h"
 #include "core/signal.h"
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,24 @@ public:
     const uint64_t* outputs() const { return outputs_; }
     const uint64_t* async_inputs() const { return async_inputs_; }
 
+    // Bidirectional pin blocks whose direction changes at runtime.
+    // The scheduler builds a DAG per direction permutation and selects at runtime.
+    struct BidirBlock {
+        uint64_t mask[SLOT_WORDS] = {};
+        std::function<bool()> is_output;  // true = component drives these pins
+    };
+
+    void declare_bidir_block(std::initializer_list<Pin> pins, std::function<bool()> dir_fn) {
+        bidir_blocks_.emplace_back();
+        auto& b = bidir_blocks_.back();
+        for (auto p : pins)
+            if (p.idx != 0)
+                b.mask[p.idx / 64] |= uint64_t(1) << (p.idx % 64);
+        b.is_output = std::move(dir_fn);
+    }
+
+    const std::vector<BidirBlock>& bidir_blocks() const { return bidir_blocks_; }
+
 protected:
     // Called when a connected signal changes.
     // rising/falling indicate which CLK half-cycle is active.
@@ -75,6 +94,7 @@ private:
     uint64_t inputs_[SLOT_WORDS]       = {};
     uint64_t outputs_[SLOT_WORDS]      = {};
     uint64_t async_inputs_[SLOT_WORDS] = {};
+    std::vector<BidirBlock> bidir_blocks_;
 };
 
 } // namespace bench

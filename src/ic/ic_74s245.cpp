@@ -38,6 +38,10 @@ void IC_74S245::install(Socket& socket) {
     declare_input(g_); declare_input(dir_);
     for (int i = 0; i < 8; ++i) { declare_input(a_[i]); declare_output(a_[i]); }
     for (int i = 0; i < 8; ++i) { declare_input(b_[i]); declare_output(b_[i]); }
+
+    // B-side is bidirectional: DIR=High -> A->B (B is output), DIR=Low -> B->A (B is input).
+    declare_bidir_block({b_[0], b_[1], b_[2], b_[3], b_[4], b_[5], b_[6], b_[7]},
+                        [this]() { return dir_.level() == Level::High; });
 }
 
 void IC_74S245::on_signal_change(bool /*rising*/, bool /*falling*/) {

@@ -272,12 +272,11 @@ public:
             spdlog::warn("[Scheduler] dot not found -- SVG not rendered");
     }
 
-    // Prototype: topologically sort ALL evaluable components (bus controllers +
-    // inlines + callbacks) using effective outputs (output & ~input) to break
-    // bidirectional cycles. Logs wave assignment and dumps a DOT/SVG graph.
-    // Does NOT change evaluation order -- purely for visualization/planning.
+    // Build per-permutation wave plans for all bidirectional pin configurations.
+    // For N bidir blocks across all components, builds 2^N DAGs. At runtime,
+    // evaluate_no_wake() checks each block's lambda to select the correct plan.
     void dump_unified_waves() {
-        // Collect ALL components into a flat list (fibers included).
+        // Collect ALL evaluable components (fibers included for DAG, excluded from exec).
         std::vector<Component*> evals;
         for (int i = 0; i < fiber_count_;     ++i) evals.push_back(fibers_[i]);
         for (int i = 0; i < bus_ctrl_count_;  ++i) evals.push_back(bus_ctrls_[i]);
@@ -288,232 +287,131 @@ public:
 
         constexpr int W = Component::SLOT_WORDS;
 
-        // Effective outputs: output-only pins (exclude bidirectional).
-        // Effective inputs: exclude async inputs (cross-cycle, no ordering).
-        std::vector<std::array<uint64_t, W>> eff_out(n), eff_in(n);
-        for (int i = 0; i < n; ++i)
-            for (int w = 0; w < W; ++w) {
-                eff_out[i][w] = evals[i]->outputs()[w] & ~evals[i]->inputs()[w];
-                eff_in[i][w]  = evals[i]->inputs()[w]  & ~evals[i]->async_inputs()[w];
-            }
+        // Collect all bidir blocks from all components.
+        bidir_refs_.clear();
+        for (auto* c : evals) {
+            for (auto& block : c->bidir_blocks())
+                bidir_refs_.push_back({c, &block});
+        }
 
-        // Build adjacency: depends[b][a] means b depends on a.
-        std::vector<std::vector<bool>> depends(n, std::vector<bool>(n, false));
-        for (int a = 0; a < n; ++a)
-            for (int b = 0; b < n; ++b) {
-                if (a == b) continue;
-                for (int w = 0; w < W; ++w)
-                    if (eff_out[a][w] & eff_in[b][w]) {
-                        depends[b][a] = true;
-                        // Log the signals that cause this edge.
-                        uint64_t overlap = eff_out[a][w] & eff_in[b][w];
-                        for (int bit = 0; bit < 64; ++bit) {
-                            if ((overlap >> bit) & 1) {
-                                int slot = w * 64 + bit;
-                                const char* nm = (slot < SignalPool::count) ? SignalPool::names[slot] : "?";
-                                spdlog::info("[unified]   {} -> {} via {}",
-                                             evals[a]->name(), evals[b]->name(), nm ? nm : "?");
-                            }
-                        }
-                        break;
-                    }
-            }
+        const int num_bidir = static_cast<int>(bidir_refs_.size());
+        const int num_perms = 1 << num_bidir;  // 2^N permutations (N is small: 2-3)
 
-        // Kahn's algorithm with level assignment.
-        std::vector<int> in_deg(n, 0), level(n, 0);
-        for (int b = 0; b < n; ++b)
-            for (int a = 0; a < n; ++a)
-                if (depends[b][a]) ++in_deg[b];
+        spdlog::info("[Scheduler] {} bidir blocks -> {} DAG permutations", num_bidir, num_perms);
+        for (int i = 0; i < num_bidir; ++i)
+            spdlog::info("[Scheduler]   block {}: {} (bidir)", i, bidir_refs_[i].comp->name());
 
-        std::vector<int> queue;
-        for (int i = 0; i < n; ++i)
-            if (in_deg[i] == 0) queue.push_back(i);
-
-        int front = 0, sorted = 0;
-        while (front < static_cast<int>(queue.size())) {
-            int u = queue[front++];
-            ++sorted;
-            for (int v = 0; v < n; ++v) {
-                if (!depends[v][u]) continue;
-                level[v] = std::max(level[v], level[u] + 1);
-                if (--in_deg[v] == 0) queue.push_back(v);
+        // Which component index owns each bidir block?
+        std::vector<int> bidir_comp_idx(num_bidir);
+        for (int b = 0; b < num_bidir; ++b) {
+            for (int i = 0; i < n; ++i) {
+                if (evals[i] == bidir_refs_[b].comp) { bidir_comp_idx[b] = i; break; }
             }
         }
 
-        if (sorted != n) {
-            spdlog::critical("[Scheduler] unified sort: cycle detected (sorted {} of {})", sorted, n);
-            for (int i = 0; i < n; ++i)
-                if (in_deg[i] > 0)
-                    spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", evals[i]->name(), in_deg[i]);
-            std::_Exit(1);
-        }
-
-        // Group into waves.
-        int num_w = 0;
-        for (int i = 0; i < n; ++i)
-            num_w = std::max(num_w, level[i] + 1);
-
-        std::vector<std::vector<Component*>> waves(num_w);
-        for (int i = 0; i < n; ++i)
-            waves[level[i]].push_back(evals[i]);
-
-        spdlog::info("[Scheduler] === unified wave plan ({} waves, {} components) ===", num_w, n);
-        for (int w = 0; w < num_w; ++w) {
-            spdlog::info("[Scheduler] wave {}: {} components", w, waves[w].size());
-            for (auto* c : waves[w])
-                spdlog::info("[Scheduler]   - {}", c->name());
-        }
-
-        // Store unified waves for execution (excluding fibers -- they resume separately).
         auto is_fiber = [&](Component* c) {
             for (int i = 0; i < fiber_count_; ++i)
                 if (fibers_[i] == c) return true;
             return false;
         };
-        unified_num_waves_ = 0;
-        for (int w = 0; w < num_w; ++w) {
-            int count = 0;
-            for (auto* c : waves[w]) {
-                if (is_fiber(c)) continue;
-                unified_waves_[unified_num_waves_][count++] = c;
+
+        // Build one wave plan per permutation.
+        wave_plans_.resize(num_perms);
+        for (int perm = 0; perm < num_perms; ++perm) {
+            // Start with base effective outputs/inputs.
+            std::vector<std::array<uint64_t, W>> eff_out(n), eff_in(n);
+            for (int i = 0; i < n; ++i)
+                for (int w = 0; w < W; ++w) {
+                    eff_out[i][w] = evals[i]->outputs()[w] & ~evals[i]->inputs()[w];
+                    eff_in[i][w]  = evals[i]->inputs()[w]  & ~evals[i]->async_inputs()[w];
+                }
+
+            // Apply bidir overrides for this permutation.
+            for (int b = 0; b < num_bidir; ++b) {
+                int ci = bidir_comp_idx[b];
+                bool is_output = (perm >> b) & 1;
+                for (int w = 0; w < W; ++w) {
+                    if (is_output) {
+                        // Component drives these pins: add to eff_out, remove from eff_in.
+                        eff_out[ci][w] |= bidir_refs_[b].block->mask[w];
+                        eff_in[ci][w]  &= ~bidir_refs_[b].block->mask[w];
+                    } else {
+                        // Component reads these pins: remove from eff_out, keep in eff_in.
+                        eff_out[ci][w] &= ~bidir_refs_[b].block->mask[w];
+                    }
+                }
             }
-            if (count > 0) {
-                unified_wave_counts_[unified_num_waves_] = count;
-                ++unified_num_waves_;
+
+            // Build adjacency: depends[b][a] means b depends on a.
+            std::vector<std::vector<bool>> depends(n, std::vector<bool>(n, false));
+            for (int a = 0; a < n; ++a)
+                for (int b2 = 0; b2 < n; ++b2) {
+                    if (a == b2) continue;
+                    for (int w = 0; w < W; ++w)
+                        if (eff_out[a][w] & eff_in[b2][w]) {
+                            depends[b2][a] = true;
+                            break;
+                        }
+                }
+
+            // Kahn's algorithm with level assignment.
+            std::vector<int> in_deg(n, 0), level(n, 0);
+            for (int b2 = 0; b2 < n; ++b2)
+                for (int a = 0; a < n; ++a)
+                    if (depends[b2][a]) ++in_deg[b2];
+
+            std::vector<int> queue;
+            for (int i = 0; i < n; ++i)
+                if (in_deg[i] == 0) queue.push_back(i);
+
+            int front = 0, sorted = 0;
+            while (front < static_cast<int>(queue.size())) {
+                int u = queue[front++];
+                ++sorted;
+                for (int v = 0; v < n; ++v) {
+                    if (!depends[v][u]) continue;
+                    level[v] = std::max(level[v], level[u] + 1);
+                    if (--in_deg[v] == 0) queue.push_back(v);
+                }
+            }
+
+            if (sorted != n) {
+                spdlog::critical("[Scheduler] perm {}: cycle detected (sorted {} of {})", perm, sorted, n);
+                for (int i = 0; i < n; ++i)
+                    if (in_deg[i] > 0)
+                        spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", evals[i]->name(), in_deg[i]);
+                std::_Exit(1);
+            }
+
+            // Group into waves, excluding fibers from execution plan.
+            int num_w = 0;
+            for (int i = 0; i < n; ++i)
+                num_w = std::max(num_w, level[i] + 1);
+
+            auto& plan = wave_plans_[perm];
+            plan.waves.clear();
+            for (int w = 0; w < num_w; ++w) {
+                std::vector<Component*> wave;
+                for (int i = 0; i < n; ++i) {
+                    if (level[i] == w && !is_fiber(evals[i]))
+                        wave.push_back(evals[i]);
+                }
+                if (!wave.empty())
+                    plan.waves.push_back(std::move(wave));
+            }
+
+            spdlog::info("[Scheduler] perm {} ({} waves):", perm, plan.waves.size());
+            for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
+                std::string names;
+                for (auto* c : plan.waves[w]) {
+                    if (!names.empty()) names += ", ";
+                    names += c->name();
+                }
+                spdlog::info("[Scheduler]   wave {}: {}", w, names);
             }
         }
+
         unified_resolved_ = true;
-        spdlog::info("[Scheduler] === unified execution plan ({} waves) ===", unified_num_waves_);
-        for (int w = 0; w < unified_num_waves_; ++w) {
-            spdlog::info("[Scheduler] exec wave {}: {} components", w, unified_wave_counts_[w]);
-            for (int i = 0; i < unified_wave_counts_[w]; ++i)
-                spdlog::info("[Scheduler]   - {}", unified_waves_[w][i]->name());
-        }
-
-        // Dump DOT with wave subgraph clustering.
-        // Visuals are outside waves; fibers are already in evals.
-        std::vector<Component*> all;
-        for (int i = 0; i < visual_count_; ++i) all.push_back(visuals_[i]);
-        for (auto* c : evals) all.push_back(c);
-        int total = static_cast<int>(all.size());
-        int eval_start = visual_count_;  // evals start here in 'all'
-
-        // Build a map from component pointer to index in 'all'.
-        auto idx_of = [&](Component* c) -> int {
-            for (int i = 0; i < total; ++i)
-                if (all[i] == c) return i;
-            return -1;
-        };
-
-        FILE* f = std::fopen("unified_waves.dot", "w");
-        if (!f) return;
-
-        std::fprintf(f, "digraph unified_waves {\n");
-        std::fprintf(f, "  rankdir=LR;\n");
-        std::fprintf(f, "  node [shape=box fontname=\"Consolas\" fontsize=10 style=filled];\n");
-        std::fprintf(f, "  edge [fontname=\"Consolas\" fontsize=8 color=\"#555555\"];\n");
-        std::fprintf(f, "  graph [nodesep=0.3 ranksep=0.8 compound=true];\n\n");
-
-        // Wave colors (cycle through a palette).
-        const char* wave_colors[] = {
-            "#e8f4f8", "#e8f8e8", "#f8f4e8", "#f8e8e8",
-            "#e8e8f8", "#f4e8f8", "#e8f8f4", "#f8f8e8",
-        };
-        int ncolors = 8;
-
-        // Non-wave components (visuals, fibers).
-        for (int i = 0; i < eval_start; ++i) {
-            auto* c = all[i];
-            std::string label = c->description().empty()
-                ? c->name() : c->description() + "\\n" + c->name();
-            std::fprintf(f, "  n%d [label=\"%s\" fillcolor=\"#dddddd\"];\n",
-                         i, label.c_str());
-        }
-        std::fprintf(f, "\n");
-
-        // Wave subgraphs.
-        for (int w = 0; w < num_w; ++w) {
-            std::fprintf(f, "  subgraph cluster_wave%d {\n", w);
-            std::fprintf(f, "    label=\"wave %d\";\n", w);
-            std::fprintf(f, "    style=filled; color=\"%s\";\n", wave_colors[w % ncolors]);
-            std::fprintf(f, "    fontname=\"Consolas\"; fontsize=11;\n");
-            for (auto* c : waves[w]) {
-                int idx = idx_of(c);
-                std::string label = c->description().empty()
-                    ? c->name() : c->description() + "\\n" + c->name();
-                std::fprintf(f, "    n%d [label=\"%s\" fillcolor=\"white\"];\n",
-                             idx, label.c_str());
-            }
-            std::fprintf(f, "  }\n\n");
-        }
-
-        // Edges:
-        //   solid grey  = ordering edge (out -> in, must eval producer first)
-        //   dashed orange = bidirectional bus (io -- shared, no ordering)
-        //   dashed red    = async input (sampled on a future cycle, no ordering)
-        struct PinInfo { int slot; const char* name; };
-        std::vector<std::vector<PinInfo>> in_pins(total), async_pins(total),
-                                          out_pins(total), io_pins(total);
-        for (int i = 0; i < total; ++i) {
-            auto* c = all[i];
-            for (int s = 1; s < SignalPool::count; ++s) {
-                const char* nm = SignalPool::names[s];
-                if (!nm) continue;
-                bool is_in    = (c->inputs()[s / 64]       >> (s % 64)) & 1;
-                bool is_out   = (c->outputs()[s / 64]      >> (s % 64)) & 1;
-                bool is_async = (c->async_inputs()[s / 64]  >> (s % 64)) & 1;
-                if (is_in && is_out)  io_pins[i].push_back({s, nm});
-                else if (is_async)    async_pins[i].push_back({s, nm});
-                else if (is_in)       in_pins[i].push_back({s, nm});
-                else if (is_out)      out_pins[i].push_back({s, nm});
-            }
-        }
-
-        auto has_slot = [](const std::vector<PinInfo>& v, int slot) {
-            for (auto& p : v) if (p.slot == slot) return true;
-            return false;
-        };
-
-        for (int a = 0; a < total; ++a) {
-            for (int b = 0; b < total; ++b) {
-                if (a == b) continue;
-                // out -> in (ordering edge)
-                for (auto& op : out_pins[a])
-                    if (has_slot(in_pins[b], op.slot))
-                        std::fprintf(f, "  n%d -> n%d [label=\"%s\"];\n", a, b, op.name);
-                // out -> async_in (cross-cycle, no ordering)
-                for (auto& op : out_pins[a])
-                    if (has_slot(async_pins[b], op.slot))
-                        std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc4444\"];\n", a, b, op.name);
-                // out -> io
-                for (auto& op : out_pins[a])
-                    if (has_slot(io_pins[b], op.slot))
-                        std::fprintf(f, "  n%d -> n%d [label=\"%s\"];\n", a, b, op.name);
-                // io -> in
-                for (auto& bp : io_pins[a])
-                    if (has_slot(in_pins[b], bp.slot))
-                        std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc8800\"];\n", a, b, bp.name);
-                // io -> async_in (cross-cycle, no ordering)
-                for (auto& bp : io_pins[a])
-                    if (has_slot(async_pins[b], bp.slot))
-                        std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc4444\"];\n", a, b, bp.name);
-                // io <-> io (no ordering, show as bidirectional dashed)
-                if (a < b)
-                    for (auto& bp : io_pins[a])
-                        if (has_slot(io_pins[b], bp.slot))
-                            std::fprintf(f, "  n%d -> n%d [label=\"%s\" dir=both style=dashed color=\"#cc8800\"];\n", a, b, bp.name);
-            }
-        }
-
-        std::fprintf(f, "}\n");
-        std::fclose(f);
-        spdlog::info("[Scheduler] wrote unified_waves.dot");
-
-        std::string cmd = "\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg unified_waves.dot -o unified_waves.svg 2>&1";
-        if (std::system(cmd.c_str()) == 0)
-            spdlog::info("[Scheduler] rendered unified_waves.svg");
-        else
-            spdlog::warn("[Scheduler] dot not found -- SVG not rendered");
     }
 
     // Half-cycle flag: set by the 8088 before yielding.
@@ -535,15 +433,22 @@ public:
         SignalPool::commit();
 
         if (unified_resolved_) {
-            // Unified DAG: one loop, commit between each wave.
-            for (int w = 0; w < unified_num_waves_; ++w) {
-                for (int i = 0; i < unified_wave_counts_[w]; ++i)
-                    unified_waves_[w][i]->on_signal_change(rising, falling);
+            // Select DAG permutation by checking bidir block lambdas.
+            int perm = 0;
+            for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i)
+                if (bidir_refs_[i].block->is_output())
+                    perm |= (1 << i);
+
+            auto& plan = wave_plans_[perm];
+            for (auto& wave : plan.waves) {
+                for (auto* c : wave)
+                    c->on_signal_change(rising, falling);
                 SignalPool::commit();
             }
             return;
         }
 
+#if 0
         // Legacy 3-phase fallback.
         for (int i = 0; i < bus_ctrl_count_; ++i)
             bus_ctrls_[i]->on_signal_change(rising, falling);
@@ -562,6 +467,7 @@ public:
             for (int i = 0; i < callback_count_; ++i)
                 callbacks_[i]->on_signal_change(rising, falling);
         }
+#endif
     }
 
 private:
@@ -590,10 +496,18 @@ private:
     int wave_counts_[MAX_WAVES] = {};
     int num_waves_ = 0;
 
-    // Unified DAG waves (populated by dump_unified_waves(), excludes fibers).
-    Component* unified_waves_[MAX_WAVES][MAX_UNIFIED] = {};
-    int unified_wave_counts_[MAX_WAVES] = {};
-    int unified_num_waves_ = 0;
+    // Per-permutation wave plans (populated by dump_unified_waves()).
+    struct WavePlan {
+        std::vector<std::vector<Component*>> waves;
+    };
+    std::vector<WavePlan> wave_plans_;
+
+    // Bidir block references for runtime DAG selection.
+    struct BidirRef {
+        Component* comp;
+        const Component::BidirBlock* block;
+    };
+    std::vector<BidirRef> bidir_refs_;
 
     FiberComponent* fibers_[MAX_FIBERS] = {};
     int fiber_count_ = 0;
