@@ -9,8 +9,7 @@ namespace bench {
 
 // --- SignalPool ---
 
-alignas(64) Level SignalPool::current[MAX_SIGNALS] = {};
-alignas(64) Level SignalPool::pending[MAX_SIGNALS] = {};
+alignas(64) Level SignalPool::levels[MAX_SIGNALS] = {};
 const char* SignalPool::names[MAX_SIGNALS] = {};
 int SignalPool::count = 1;  // slot 0 reserved as dummy (reads HiZ, writes vanish)
 
@@ -109,23 +108,20 @@ Scheduler* Signal::scheduler_ = nullptr;
 Signal::Signal(std::string name) : name_(std::move(name)) {
     int idx = SignalPool::allocate();
     assert(idx < SignalPool::MAX_SIGNALS && "Signal pool exhausted");
-    current_ = &SignalPool::current[idx];
-    pending_ = &SignalPool::pending[idx];
-    *current_ = Level::HiZ;
-    *pending_ = Level::HiZ;
+    level_ = &SignalPool::levels[idx];
+    *level_ = Level::HiZ;
     SignalPool::names[idx] = name_.c_str();
 }
 
 void Signal::set_pull(Level pull) {
     pull_ = pull;
-    if (*current_ == Level::HiZ && pull != Level::HiZ) {
+    if (*level_ == Level::HiZ && pull != Level::HiZ) {
         drive(pull);
     }
 }
 
 void Signal::reset() {
-    *current_ = Level::HiZ;
-    *pending_ = Level::HiZ;
+    *level_ = Level::HiZ;
 }
 
 void Signal::connect(Component* c) {

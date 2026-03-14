@@ -5,7 +5,6 @@
 #include <memory>
 #include <atomic>
 #include <cassert>
-#include <immintrin.h>
 #include <cstring>
 
 namespace bench {
@@ -14,13 +13,11 @@ class Component;
 class InlineComponent;
 class Scheduler;
 
-// Global signal pool -- two contiguous arrays for cache-friendly commit.
-// Signals allocate a slot at construction. The scheduler commits by
-// copying pending[] -> current[] in a tight loop.
+// Global signal pool -- single flat array. Signals allocate a slot at
+// construction. drive() writes directly, level() reads directly.
 struct SignalPool {
     static constexpr int MAX_SIGNALS = 512;
-    alignas(64) static Level current[MAX_SIGNALS];
-    alignas(64) static Level pending[MAX_SIGNALS];
+    alignas(64) static Level levels[MAX_SIGNALS];
     static const char* names[MAX_SIGNALS];
     static int count;
 
@@ -47,23 +44,6 @@ struct SignalPool {
     static void check_read(int idx);
 #endif
 
-    // Copy pending -> current. Returns true if anything changed.
-    // AVX2: compare + copy 32 bytes at a time. MAX_SIGNALS is
-    // a multiple of 32, so we process the full array -- no tail.
-    static bool commit() {
-        int any = 0;
-        for (int i = 0; i < MAX_SIGNALS; i += 32) {
-            __m256i cur = _mm256_load_si256((__m256i*)(current + i));
-            __m256i pen = _mm256_load_si256((__m256i*)(pending + i));
-            __m256i eq = _mm256_cmpeq_epi8(cur, pen);
-            int mask = _mm256_movemask_epi8(eq);
-            if (mask != -1) {
-                _mm256_store_si256((__m256i*)(current + i), pen);
-                any = 1;
-            }
-        }
-        return any != 0;
-    }
 };
 
 // Lightweight handle into the SignalPool. Stores an index, not a pointer.
@@ -76,30 +56,23 @@ struct Pin {
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::check_read(idx);
 #endif
-        return SignalPool::current[idx];
+        return SignalPool::levels[idx];
     }
     void drive(Level lvl) {
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::check_write(idx, lvl);
 #endif
-        SignalPool::pending[idx] = lvl;
+        SignalPool::levels[idx] = lvl;
     }
     void release() {
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::check_write(idx, Level::HiZ);
 #endif
-        SignalPool::pending[idx] = Level::HiZ;
+        SignalPool::levels[idx] = Level::HiZ;
     }
 
-    // Write to both pending[] and current[] so inlines see the value
-    // immediately without a full pool commit. Used by bus controller ICs.
-    void drive_immediate(Level lvl) {
-#ifdef BENCH_PIN_VALIDATION
-        SignalPool::check_write(idx, lvl);
-#endif
-        SignalPool::pending[idx] = lvl;
-        SignalPool::current[idx] = lvl;
-    }
+    // Alias for drive() -- no double buffering, so immediate is the default.
+    void drive_immediate(Level lvl) { drive(lvl); }
 };
 
 // Contiguous block of N pool slots. Stores one base index; read/write
@@ -113,19 +86,19 @@ struct PinBlock {
 #ifdef BENCH_PIN_VALIDATION
         for (int i = 0; i < N; ++i) SignalPool::check_write(base + i, src[i]);
 #endif
-        std::memcpy(&SignalPool::pending[base], src, N);
+        std::memcpy(&SignalPool::levels[base], src, N);
     }
     void read(Level* dst) const {
 #ifdef BENCH_PIN_VALIDATION
         for (int i = 0; i < N; ++i) SignalPool::check_read(base + i);
 #endif
-        std::memcpy(dst, &SignalPool::current[base], N);
+        std::memcpy(dst, &SignalPool::levels[base], N);
     }
     void fill(Level lvl) {
 #ifdef BENCH_PIN_VALIDATION
         for (int i = 0; i < N; ++i) SignalPool::check_write(base + i, lvl);
 #endif
-        std::memset(&SignalPool::pending[base], static_cast<uint8_t>(lvl), N);
+        std::memset(&SignalPool::levels[base], static_cast<uint8_t>(lvl), N);
     }
     void release() { fill(Level::HiZ); }
 
@@ -134,13 +107,13 @@ struct PinBlock {
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::check_read(base + i);
 #endif
-        return SignalPool::current[base + i];
+        return SignalPool::levels[base + i];
     }
     void drive(int i, Level lvl) {
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::check_write(base + i, lvl);
 #endif
-        SignalPool::pending[base + i] = lvl;
+        SignalPool::levels[base + i] = lvl;
     }
 
     // Build from socket pin array, asserting contiguity. Defined after Signal.
@@ -150,27 +123,25 @@ struct PinBlock {
 
 // A single named signal line -- a wire/trace on the motherboard.
 //
-// Double-buffered via SignalPool: drive() writes pending[idx],
-// level() reads current[idx]. No per-signal bookkeeping.
-// Scheduler commits the entire pool each pass.
+// Backed by a single slot in SignalPool::levels[]. drive() and level()
+// hit the same array entry -- no double buffering.
 class Signal {
 public:
     explicit Signal(std::string name);
 
     const std::string& name() const { return name_; }
 
-    Level level() const { return *current_; }
+    Level level() const { return *level_; }
 
     void drive(Level lvl) {
-        *pending_ = lvl;
+        *level_ = lvl;
     }
 
-    // Raw pool pointers -- for hot-path ICs that cache these directly.
-    Level* current_ptr() const { return current_; }
-    Level* pending_ptr() const { return pending_; }
+    // Raw pool pointer -- for hot-path ICs that cache directly.
+    Level* level_ptr() const { return level_; }
 
     // Index-based handle -- no pointer chase on the hot path.
-    Pin pin() const { return Pin{static_cast<int>(current_ - SignalPool::current)}; }
+    Pin pin() const { return Pin{static_cast<int>(level_ - SignalPool::levels)}; }
 
     // Release the signal (go Hi-Z, or to pull level if set).
     void release() { drive(pull_); }
@@ -199,8 +170,7 @@ public:
 
 private:
     std::string name_;
-    Level* current_;    // -> SignalPool::current[idx]
-    Level* pending_;    // -> SignalPool::pending[idx]
+    Level* level_;      // -> SignalPool::levels[idx]
     Level pull_ = Level::HiZ;
 
     static Scheduler* scheduler_;

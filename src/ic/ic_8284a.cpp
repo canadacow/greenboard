@@ -45,7 +45,6 @@ void IC_8284A::run(std::stop_token stop) {
             psu_s2_.drive(Level::High);
             psu_aen_.drive(Level::High);
             psu_vcc_.drive(Level::High);
-            SignalPool::commit();
             psu_res_.drive(Level::High);
             break;
         }
@@ -80,7 +79,6 @@ void IC_8284A::run(std::stop_token stop) {
             psu_cmd_.store(PsuCmd::None, std::memory_order_relaxed);
             psu_res_.drive(Level::Low);
             psu_vcc_.drive(Level::HiZ);
-            SignalPool::commit();
             spdlog::debug("[8284A] PSU power-off, oscillator stopped after {} CLK cycles", clk_ticks);
             break;
         }

@@ -18,9 +18,8 @@ namespace bench {
 
 // Central synchronous evaluator -- the beating heart of the simulation.
 //
-// Called by the 8284A at each CLK edge. Commits all signals via
-// SignalPool::commit(), evaluates inline ICs to fixed-point,
-// then resumes all fiber components cooperatively.
+// Called by the 8284A at each CLK edge. Evaluates all components
+// in topological wave order, then resumes fiber components cooperatively.
 //
 // Callback execution order is auto-resolved from pin declarations:
 // resolve() builds a dependency DAG (A.outputs & B.inputs != 0 => A before B),
@@ -530,10 +529,8 @@ public:
     void request_half_cycle() { half_cycle_ = true; }
     void clear_half_cycle() { half_cycle_ = false; }
 
-    // Commit + bus controllers + inlines (fixed-point) + callback waves + fibers.
+    // Evaluate all components in topological wave order.
     void evaluate(Fiber caller = nullptr, bool rising = true, bool falling = true) {
-        SignalPool::commit();
-
         // Select DAG permutation by checking bidir block lambdas.
         // Map BidirDir bit flags to base-3 digits: HiZ(1)->0, Input(2)->1, Output(4)->2.
         // Lambdas may read pin levels -- suspend validation during selection.
@@ -579,7 +576,6 @@ public:
                 SignalPool::end_component();
 #endif
             }
-            SignalPool::commit();
         }
     }
 
