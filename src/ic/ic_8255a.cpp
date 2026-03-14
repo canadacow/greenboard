@@ -63,7 +63,7 @@ void IC_8255A::install(Socket& socket) {
     declare_input(pin_a0_); declare_input(pin_a1_); declare_input(pin_reset_);
 }
 
-void IC_8255A::on_signal_change(bool rising, bool /*falling*/) {
+void IC_8255A::on_signal_change(Fiber /*caller*/, bool rising, bool /*falling*/) {
     if (!rising) return;  // compute once per cycle
     Level reset_cur = pin_reset_.level();
     Level wr_cur = pin_wr_.level();

@@ -41,7 +41,7 @@ public:
     void install(Socket& socket);
 
 protected:
-    void on_signal_change(bool rising, bool falling) override;
+    void on_signal_change(Fiber caller, bool rising, bool falling) override;
 
 private:
     void on_clk_rising();

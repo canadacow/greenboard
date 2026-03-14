@@ -41,7 +41,7 @@ void IC_74S175::install(Socket& socket) {
     for (int i = 0; i < 4; ++i) { declare_output(pin_q_[i]); declare_output(pin_nq_[i]); }
 }
 
-void IC_74S175::on_signal_change(bool rising, bool /*falling*/) {
+void IC_74S175::on_signal_change(Fiber /*caller*/, bool rising, bool /*falling*/) {
     if (!rising) return;  // only process on rising half
 
     // ~CLR: async clear when driven Low.

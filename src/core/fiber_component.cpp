@@ -27,18 +27,22 @@ void FiberComponent::power_off() {
     spdlog::debug("[{}] powered off (fiber)", name());
 }
 
-void FiberComponent::resume(Fiber caller) {
-    if (!fiber_ || !alive_) return;
+void FiberComponent::on_signal_change(Fiber caller, bool /*rising*/, bool /*falling*/) {
+    if (!caller || !fiber_ || !alive_) return;
+
     return_fiber_ = caller;
     fiber_switch(fiber_);
 }
 
 void FiberComponent::run() {
+    assert(false);
+#if 0
     on_power_on();
     for (;;) {
         yield();
         on_signal_change(true, true);
     }
+#endif
 }
 
 void FiberComponent::yield() {
@@ -53,9 +57,6 @@ void FiberComponent::fiber_entry(void* user_data) {
     auto* self = static_cast<FiberComponent*>(user_data);
     self->run();
     self->alive_ = false;
-    // run() returned -- yield forever so we never fall off the fiber proc.
-    for (;;)
-        fiber_switch(self->return_fiber_);
 }
 
 } // namespace bench

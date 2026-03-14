@@ -1,6 +1,7 @@
 #pragma once
 #include "core/types.h"
 #include "core/signal.h"
+#include "host_platform/fiber.h"
 #include <functional>
 #include <string>
 #include <vector>
@@ -129,7 +130,7 @@ protected:
     // Called when a connected signal changes.
     // rising/falling indicate which CLK half-cycle is active.
     // Full cycle: both true.  Half cycle: one at a time.
-    virtual void on_signal_change(bool /*rising*/, bool /*falling*/) {}
+    virtual void on_signal_change(Fiber caller, bool /*rising*/, bool /*falling*/) {}
     virtual void on_power_on() {}
     virtual void on_power_off() {}
 

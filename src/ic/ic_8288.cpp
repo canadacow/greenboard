@@ -53,7 +53,7 @@ void IC_8288::install(Socket& socket) {
     declare_output(pin_ior_); declare_output(pin_iow_); declare_output(pin_inta_);
 }
 
-void IC_8288::on_signal_change(bool rising, bool falling) {
+void IC_8288::on_signal_change(Fiber /*caller*/, bool rising, bool falling) {
     if (rising) on_clk_rising();
     if (falling) on_clk_falling();
 }

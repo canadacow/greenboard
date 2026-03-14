@@ -48,7 +48,7 @@ void IC_74S373::on_power_on() {
     le_prev_ = Level::HiZ;
 }
 
-void IC_74S373::on_signal_change(bool rising, bool /*falling*/) {
+void IC_74S373::on_signal_change(Fiber /*caller*/, bool rising, bool /*falling*/) {
     if (!rising) return;  // edge-tracking: run once per cycle
     Level le = le_.level();
 

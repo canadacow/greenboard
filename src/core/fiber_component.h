@@ -29,9 +29,10 @@ public:
     void power_off() override;
     bool is_powered() const override { return fiber_ != nullptr; }
 
-    // Resume this fiber. Called by Scheduler::evaluate().
-    // Switches to the fiber; returns when the fiber calls yield().
-    void resume(Fiber caller);
+    // Called by the wave executor, same as any other component.
+    // If a caller fiber is set, resumes the fiber (which runs until yield()).
+    // If no caller (pre-clock init), does nothing.
+    void on_signal_change(Fiber caller, bool rising, bool falling) override;
 
 protected:
     // Override for active components (e.g. CPU).

@@ -7,6 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(spdlog CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 
+# Collect all headers so they appear in Visual Studio Solution Explorer
+file(GLOB_RECURSE BENCH_HEADERS CONFIGURE_DEPENDS src/*.h)
+
 add_executable(bench
     src/main.cpp
     src/core/signal.cpp
@@ -36,10 +39,14 @@ add_executable(bench
     src/ic/ic_74s138.cpp
     src/ic/ic_74s20.cpp
     src/ic/ic_dram_256k.cpp
+    ${BENCH_HEADERS}
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt)
+
+# Organize source files into VS filters matching directory structure
+source_group(TREE ${CMAKE_SOURCE_DIR}/src PREFIX "Source Files" FILES ${BENCH_HEADERS})
 
 # AVX2 for SignalPool::commit() SIMD optimization
 if(MSVC)
@@ -72,6 +79,7 @@ add_executable(test_8088
     src/ic/ic_74s20.cpp
     src/ic/ic_rom_8k.cpp
     src/ic/ic_dram_256k.cpp
+    ${BENCH_HEADERS}
 )
 target_include_directories(test_8088 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_8088 PRIVATE spdlog::spdlog fmt::fmt)

@@ -49,7 +49,7 @@ void ThreadedComponent::run(std::stop_token stop) {
     while (!stop.stop_requested()) {
         wait_mailbox(stop);
         if (stop.stop_requested()) break;
-        on_signal_change(true, true);
+        on_signal_change(nullptr, true, true);
     }
 
     on_power_off();

@@ -51,7 +51,7 @@ protected:
     }
     void on_power_on() override {}
     void on_power_off() override {}
-    void on_signal_change(bool, bool) override {}
+    void on_signal_change(Fiber, bool, bool) override {}
 };
 
 // =========================================================================
@@ -134,7 +134,7 @@ public:
     }
 
 protected:
-    void on_signal_change(bool rising, bool falling) override {
+    void on_signal_change(Fiber caller, bool rising, bool falling) override {
         if (rising) on_clk_rising();
         if (falling) on_clk_falling();
     }
@@ -975,7 +975,7 @@ int main() {
             s2.drive(Level::High);
             aen_bar.drive(Level::High);
             vcc.drive(Level::High);
-            scheduler.evaluate_no_wake();
+            scheduler.evaluate();
             res.drive(Level::High);
 
             // Let it run for BENCH_SECONDS, then fire NMI.
@@ -998,7 +998,7 @@ int main() {
             nmi.drive(Level::Low);
             res.drive(Level::Low);
             vcc.drive(Level::HiZ);
-            scheduler.evaluate_no_wake();
+            scheduler.evaluate();
             clk_gen->power_off();
             cpu->power_off();
             bc->power_off();
@@ -1080,7 +1080,7 @@ int main() {
         vcc.drive(Level::High);
         // Commit VCC (and other initial drives) so ICs see them on first wake.
         // No async wake -- 8284A's run() is polling VCC directly.
-        scheduler.evaluate_no_wake();
+        scheduler.evaluate();
         spdlog::debug("VCC driven High, pending={}", Signal::pending_count.load());
 
         // Drive RES (power good) -- 8284A deasserts RESET on next CLK fall.
@@ -1103,7 +1103,7 @@ int main() {
         // then delete fibers (safe -- no more evaluate() calls).
         res.drive(Level::Low);
         vcc.drive(Level::HiZ);
-        scheduler.evaluate_no_wake();
+        scheduler.evaluate();
         clk_gen->power_off();   // stop clock first -- joins 8284A thread
         cpu->power_off();       // then delete fibers
         bc->power_off();

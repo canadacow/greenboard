@@ -341,12 +341,6 @@ public:
             }
         }
 
-        auto is_fiber = [&](Component* c) {
-            for (int i = 0; i < fiber_count_; ++i)
-                if (fibers_[i] == c) return true;
-            return false;
-        };
-
         // Build one wave plan per valid permutation.
         wave_plans_.clear();
         for (int perm = 0; perm < num_slots; ++perm) {
@@ -434,7 +428,7 @@ public:
             for (int w = 0; w < num_w; ++w) {
                 std::vector<Component*> wave;
                 for (int i = 0; i < n; ++i) {
-                    if (level[i] == w && !is_fiber(evals[i]))
+                    if (level[i] == w)
                         wave.push_back(evals[i]);
                 }
                 if (!wave.empty())
@@ -455,7 +449,7 @@ public:
         unified_resolved_ = true;
 
         // Dump DOT/SVG for each permutation.
-        dump_permutation_dots(evals, n);
+        //dump_permutation_dots(evals, n);
     }
 
     // Dump one DOT/SVG per DAG permutation, showing wave clustering and edges.
@@ -638,15 +632,7 @@ public:
     void clear_half_cycle() { half_cycle_ = false; }
 
     // Commit + bus controllers + inlines (fixed-point) + callback waves + fibers.
-    void evaluate(Fiber caller, bool rising = true, bool falling = true) {
-        evaluate_no_wake(rising, falling);
-        for (int i = 0; i < fiber_count_; ++i)
-            fibers_[i]->resume(caller);
-    }
-
-    // Commit pending signals, then evaluate all non-fiber components.
-    // Fibers are resumed separately in evaluate().
-    void evaluate_no_wake(bool rising = true, bool falling = true) {
+    void evaluate(Fiber caller = nullptr, bool rising = true, bool falling = true) {
         SignalPool::commit();
 
         if (unified_resolved_) {
@@ -672,8 +658,8 @@ public:
             }
             for (auto& wave : it->second.waves) {
                 for (auto* c : wave)
-                    c->on_signal_change(rising, falling);
-                    SignalPool::commit();
+                    c->on_signal_change(caller, rising, falling);
+                SignalPool::commit();
             }
             return;
         }

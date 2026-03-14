@@ -101,7 +101,7 @@ void IC_8284A::run(std::stop_token stop) {
     pin_pclk_.release();
     pin_ready_.release();
     pin_reset_.release();
-    scheduler_->evaluate_no_wake();
+    scheduler_->evaluate();
 
     spdlog::debug("[8284A] oscillator stopped after {} CLK cycles", clk_ticks);
 

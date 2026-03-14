@@ -100,8 +100,7 @@ void IC_8088::install(Socket& socket) {
                         [this]() { return ad_driving_ ? BidirDir::Output : BidirDir::Input; });
 }
 
-void IC_8088::on_signal_change(bool /*rising*/, bool /*falling*/) {
-    // NMI rising edge detection
+void IC_8088::check_nmi() {
     Level cur = pin_nmi_.level();
     if (cur == Level::High && nmi_prev_ != Level::High)
         nmi_pending_ = true;
@@ -135,7 +134,11 @@ void IC_8088::run() {
 
     for (;;) {
         if (pin_vcc_.level() != Level::High) break;
-        on_signal_change(true, true);  // process NMI
+        check_nmi();  // process NMI
+        if (halted_.load(std::memory_order_acquire)) {
+            yield();
+            continue;
+        }
         execute();
     }
 
@@ -195,7 +198,7 @@ void IC_8088::drive_status_passive() {
 
 void IC_8088::full_wait_clk() {
     yield();
-    on_signal_change(true, true);
+    check_nmi();
 }
 
 void IC_8088::half_wait_clk() {
@@ -206,11 +209,11 @@ void IC_8088::half_wait_clk() {
     yield();                        // exits current evaluate, returns to 8284A
     // 8284A sees flag, calls evaluate(rising=true, falling=false)
     // We get resumed here after the rising half:
-    on_signal_change(true, false);
+    check_nmi();
     yield();                        // back to 8284A
     // 8284A calls evaluate(rising=false, falling=true)
     // We get resumed here after the falling half:
-    on_signal_change(false, true);
+    check_nmi();
 }
 
 // ---- Memory read: 4 T-states (T1, T2, T3, T4) + optional Tw ----

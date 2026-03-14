@@ -53,9 +53,9 @@ public:
 
 protected:
     void run() override;
-    void on_signal_change(bool rising, bool falling) override;
 
 private:
+    void check_nmi();
     // --- Bus operations ---
     uint8_t bus_read_byte(uint32_t address);
     void bus_write_byte(uint32_t address, uint8_t value);
