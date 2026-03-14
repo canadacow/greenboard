@@ -34,10 +34,21 @@ void IC_8284A::run(std::stop_token stop) {
     // Convert this thread to a fiber so we can switch to component fibers.
     Fiber self = fiber_convert_thread();
 
-    // Wait for VCC to go High (poll -- nobody wakes us before the loop starts).
+    // Wait for PSU power-on command (main thread calls psu_power_on()).
     while (!stop.stop_requested()) {
-        if (pin_vcc_.level() == Level::High) break;
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        auto cmd = psu_cmd_.load(std::memory_order_relaxed);
+        if (cmd == PsuCmd::PowerOn) {
+            psu_cmd_.store(PsuCmd::None, std::memory_order_relaxed);
+            psu_gnd_.drive(Level::Low);
+            psu_s0_.drive(Level::High);
+            psu_s1_.drive(Level::High);
+            psu_s2_.drive(Level::High);
+            psu_aen_.drive(Level::High);
+            psu_vcc_.drive(Level::High);
+            SignalPool::commit();
+            psu_res_.drive(Level::High);
+            break;
+        }
     }
     if (stop.stop_requested()) {
         fiber_revert_thread(self);
@@ -63,6 +74,18 @@ void IC_8284A::run(std::stop_token stop) {
     // a counter -- and nothing on the board observes OSC directly.
     // So we skip the divide-by-3 and just strobe CLK high/low.
     while (!stop.stop_requested()) {
+        // PSU commands (checked each cycle, relaxed is fine).
+        auto cmd = psu_cmd_.load(std::memory_order_relaxed);
+        if (cmd == PsuCmd::PowerOff) {
+            psu_cmd_.store(PsuCmd::None, std::memory_order_relaxed);
+            psu_res_.drive(Level::Low);
+            psu_vcc_.drive(Level::HiZ);
+            SignalPool::commit();
+            spdlog::debug("[8284A] PSU power-off, oscillator stopped after {} CLK cycles", clk_ticks);
+            break;
+        }
+        psu_nmi_pin_.drive(psu_nmi_.load(std::memory_order_relaxed) ? Level::High : Level::Low);
+
         // Check VCC each cycle.
         if (pin_vcc_.level() != Level::High) {
             spdlog::debug("[8284A] VCC dropped, oscillator stopped after {} CLK cycles", clk_ticks);

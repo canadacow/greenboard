@@ -1,6 +1,7 @@
 #pragma once
 #include "core/threaded_component.h"
 #include "board/socket.h"
+#include <atomic>
 
 namespace bench {
 
@@ -35,6 +36,21 @@ public:
     void set_scheduler(Scheduler* s) { scheduler_ = s; }
     uint64_t clk_cycles() const { return clk_cycles_; }
 
+    // --- Mock PSU (driven from main thread via atomics, acted on by clock thread) ---
+    // Call from main thread. The 8284A thread picks these up each cycle.
+    void psu_power_on()  { psu_cmd_.store(PsuCmd::PowerOn, std::memory_order_release); }
+    void psu_power_off() { psu_cmd_.store(PsuCmd::PowerOff, std::memory_order_release); }
+    void psu_nmi_raise() { psu_nmi_.store(true, std::memory_order_release); }
+    void psu_nmi_lower() { psu_nmi_.store(false, std::memory_order_release); }
+
+    // Give the PSU pin handles to signals it needs to drive.
+    // Call once during wiring, before power_on().
+    void psu_wire(Pin vcc, Pin gnd, Pin res, Pin nmi,
+                  Pin s0, Pin s1, Pin s2, Pin aen) {
+        psu_vcc_ = vcc; psu_gnd_ = gnd; psu_res_ = res; psu_nmi_pin_ = nmi;
+        psu_s0_ = s0; psu_s1_ = s1; psu_s2_ = s2; psu_aen_ = aen;
+    }
+
 protected:
     void run(std::stop_token stop) override;
 
@@ -54,6 +70,13 @@ private:
 
     Scheduler* scheduler_ = nullptr;
     uint64_t clk_cycles_ = 0;
+
+    // --- PSU state ---
+    enum class PsuCmd : int { None, PowerOn, PowerOff };
+    std::atomic<PsuCmd> psu_cmd_{PsuCmd::None};
+    std::atomic<bool> psu_nmi_{false};
+    Pin psu_vcc_, psu_gnd_, psu_res_, psu_nmi_pin_;
+    Pin psu_s0_, psu_s1_, psu_s2_, psu_aen_;
 };
 
 } // namespace bench

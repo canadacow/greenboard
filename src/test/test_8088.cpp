@@ -629,6 +629,8 @@ int main() {
     clk_socket.wire(12, osc);    // OSC output
     clk_socket.wire(18, vcc);    // VCC
     auto* clk_gen = clk_socket.emplace<IC_8284A>();
+    clk_gen->psu_wire(vcc.pin(), gnd.pin(), res.pin(), nmi.pin(),
+                      s0.pin(), s1.pin(), s2.pin(), aen_bar.pin());
 
     // U3: 8088 CPU
     Socket cpu_socket{"U3", "8088", 40};
@@ -969,19 +971,11 @@ int main() {
             clk_gen->power_on();
             cpu->power_on();
 
-            gnd.drive(Level::Low);
-            s0.drive(Level::High);
-            s1.drive(Level::High);
-            s2.drive(Level::High);
-            aen_bar.drive(Level::High);
-            vcc.drive(Level::High);
-            scheduler.evaluate();
-            res.drive(Level::High);
+            clk_gen->psu_power_on();
 
             // Let it run for BENCH_SECONDS, then fire NMI.
             auto start = std::chrono::steady_clock::now();
-            std::this_thread::sleep_for(std::chrono::seconds(BENCH_SECONDS));
-            nmi.drive(Level::High);
+            clk_gen->psu_nmi_raise();
 
             // Wait for CPU to halt (NMI handler does HLT).
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -995,13 +989,9 @@ int main() {
                 spdlog::warn("  benchmark timeout -- CPU did not halt");
 
             // Power off.
-            nmi.drive(Level::Low);
-            res.drive(Level::Low);
-            vcc.drive(Level::HiZ);
-#ifdef BENCH_PIN_VALIDATION
-            SignalPool::disable_validation();
-#endif
-            scheduler.evaluate();
+            clk_gen->psu_nmi_lower();
+            clk_gen->psu_power_off();
+            // Wait for 8284A to see VCC drop and stop.
             clk_gen->power_off();
             cpu->power_off();
             bc->power_off();
@@ -1077,26 +1067,10 @@ int main() {
         cpu->power_on();
         spdlog::debug("All ICs seated, pending={}", Signal::pending_count.load());
 
-        // Flip the switch.
-        gnd.drive(Level::Low);
-        s0.drive(Level::High);
-        s1.drive(Level::High);
-        s2.drive(Level::High);
-        aen_bar.drive(Level::High);  // No DMA -- CPU always owns bus
-        vcc.drive(Level::High);
-        // Commit VCC (and other initial drives) so ICs see them on first wake.
-        // No async wake -- 8284A's run() is polling VCC directly.
-        scheduler.evaluate();
-        spdlog::debug("VCC driven High, pending={}", Signal::pending_count.load());
+        // Flip the switch (PSU drives GND, VCC, S0-S2, AEN, RES on clock thread).
+        clk_gen->psu_power_on();
 
-        // Drive RES (power good) -- 8284A deasserts RESET on next CLK fall.
-        res.drive(Level::High);
-        spdlog::debug("RES driven High, pending={}", Signal::pending_count.load());
-
-        // 8284A's thread is already running (power_on above), polling for VCC.
-        // Now that VCC is committed, it will start oscillating.
-
-        // Wait for CPU to halt, with 10s safety timeout
+        // Wait for CPU to halt, with 10s safety timeout.
         {
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
             while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
@@ -1105,14 +1079,8 @@ int main() {
                 spdlog::warn("  timeout -- CPU did not halt within 10s");
         }
 
-        // Power off: drop VCC, stop the clock FIRST (joins the 8284A thread),
-        // then delete fibers (safe -- no more evaluate() calls).
-        res.drive(Level::Low);
-        vcc.drive(Level::HiZ);
-#ifdef BENCH_PIN_VALIDATION
-        SignalPool::disable_validation();
-#endif
-        scheduler.evaluate();
+        // Power off (PSU drops VCC on clock thread, 8284A stops).
+        clk_gen->psu_power_off();
         clk_gen->power_off();   // stop clock first -- joins 8284A thread
         cpu->power_off();       // then delete fibers
         bc->power_off();
