@@ -28,7 +28,7 @@ namespace bench {
 //   Y = ~(A & B & C & D)
 //   Output is Low only when all four inputs are High.
 //
-// Threading: InlineComponent -- combinational, no thread.
+// Threading: CallbackComponent -- combinational, no fiber.
 class IC_74S20 : public CallbackComponent {
 public:
     IC_74S20();

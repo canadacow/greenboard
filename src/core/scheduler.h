@@ -500,11 +500,19 @@ public:
 
             std::string cmd = "\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg "
                               + dot_path + " -o " + svg_path + " 2>&1";
-            if (std::system(cmd.c_str()) == 0)
+            if (std::system(cmd.c_str()) == 0) {
                 spdlog::info("[Scheduler] rendered {}", svg_path);
-            else
+                std::remove(dot_path.c_str());
+            } else {
                 spdlog::warn("[Scheduler] dot not found -- SVG not rendered");
+            }
         }
+    }
+
+    // Render SVG for every DAG permutation encountered at runtime.
+    // Deletes intermediate .dot files.
+    void dump_permutation_svgs() {
+        dump_permutation_dots(evals_, static_cast<int>(evals_.size()));
     }
 
     // Evaluate all components in topological wave order.

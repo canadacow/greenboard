@@ -8,9 +8,9 @@ Emulate the motherboard at the **interconnect level**. ICs are behaviorally emul
 
 The simulation runs on a single OS thread. The 8284A clock generator owns that thread (via `std::jthread`) and acts as the crystal oscillator -- its spin loop IS the clock. All other ICs run as **Windows Fibers** on the 8284A's thread, cooperatively scheduled by the `Scheduler`.
 
-- The 8284A toggles OSC, divides to CLK/PCLK. On each CLK edge it calls `scheduler->evaluate(self)`.
-- `evaluate()` commits all pending signal changes, then resumes every registered fiber in order.
-- Each fiber runs until it `yield()`s, then control returns to the scheduler which resumes the next fiber.
+- The 8284A drives PCLK/READY/RESET each cycle, then calls `scheduler->evaluate(self)`.
+- `evaluate()` resolves the current DAG permutation (based on bidirectional pin state), then calls `on_signal_change()` on each component in topological wave order.
+- FiberComponents are resumed via context switch; CallbackComponents are invoked directly.
 - Completely deterministic, single-threaded, zero synchronization overhead.
 
 ### Fiber Abstraction (`src/host_platform/fiber.h`)
@@ -30,18 +30,15 @@ void  fiber_switch(Fiber target);       // switch to target fiber
 ```
 Component (abstract base)
   +-- ThreadedComponent    -- 8284A only (owns an OS thread)
-  +-- InlineComponent      -- combinational logic (74S373, 74S138, 74S245, 74S20)
-  +-- CallbackComponent    -- clocked/reactive ICs (8288, 8259A, 8253, 8255A, 8237A)
+  +-- CallbackComponent    -- all non-yielding ICs (8288, 74S373, 74S138, 74S245, 8259A, 8253, etc.)
   +-- FiberComponent       -- ICs that suspend mid-operation (8088)
 ```
 
-Three evaluation tiers, in order:
+Two evaluation modes:
 
-1. **InlineComponent** (`src/core/inline_component.h`): Combinational logic. Evaluated in a fixed-point loop after signal commit -- called repeatedly until outputs stabilize. No fiber, no context switch. Used for 74-series glue logic.
+1. **CallbackComponent** (`src/core/callback_component.h`): ICs that complete all work in a single `on_signal_change()` call. Invoked via direct function call -- no fiber overhead. Used for all non-CPU ICs: bus controller (8288), glue logic (74S373, 74S138, 74S245, 74S20, 74S175), peripherals (8259A, 8253, 8255A, 8237A), ROM, DRAM.
 
-2. **CallbackComponent** (`src/core/callback_component.h`): Clocked/reactive ICs that complete all work in a single `on_signal_change()` call. Invoked once per `evaluate()` via direct function call -- no fiber overhead. Used for ICs that react to clock edges and bus signals but never need to suspend mid-operation (8288, 8259A, 8253, 8255A, 8237A).
-
-3. **FiberComponent** (`src/core/fiber_component.h`): ICs that need to suspend mid-operation via `yield()`. Context switch on every `evaluate()`. Reserved for the 8088 CPU, which yields at each T-state boundary.
+2. **FiberComponent** (`src/core/fiber_component.h`): ICs that need to suspend mid-operation via `yield()`. Context switch on every `evaluate()`. Reserved for the 8088 CPU, which yields at each T-state boundary.
    - `power_on()`: Creates a fiber. First `resume()` enters `run()`.
    - `power_off()`: Calls `on_power_off()`, deletes the fiber.
    - `resume(caller)`: Switches to the fiber. The fiber runs until it calls `yield()`.
@@ -50,35 +47,44 @@ Three evaluation tiers, in order:
 
 ### Scheduler (`src/core/scheduler.h`)
 
-Lightweight, non-owning. Called by the 8284A at each CLK edge.
+Lightweight, non-owning. Called by the 8284A at each CLK cycle.
 
 ```
 evaluate(Fiber caller):
-  1. SignalPool::commit() -- AVX2 SIMD copy of pending[] -> current[]
-  2. Fixed-point inline IC evaluation (repeat until no signal changes)
-  3. Call on_signal_change() on every registered CallbackComponent
-  4. Resume every registered FiberComponent (context switch)
+  1. Compute DAG permutation from bidirectional pin state
+  2. Look up (or solve on cache miss) the topological wave plan
+  3. For each wave: call on_signal_change() on every component in that wave
 ```
 
-### SignalPool and Double-Buffered Signals
+The scheduler builds a dependency DAG from pin declarations (`declare_input`/`declare_output`). Bidirectional pins (e.g. 74S245 data bus) create multiple DAG permutations -- one per combination of directions. Permutations are solved on demand and cached in an `unordered_map<int, WavePlan>`.
 
-All signals are backed by a global `SignalPool` -- two contiguous, 64-byte-aligned arrays of `Level` (enum class : uint8_t). Each `Signal` holds pointers into these arrays.
+### SignalPool
 
-- `drive(lvl)`: Writes to `SignalPool::pending[idx]`. Single comparison + store, zero bookkeeping.
-- `level()`: Reads from `SignalPool::current[idx]`.
-- `SignalPool::commit()`: AVX2 SIMD loop -- compares and copies 32 bytes at a time (16 iterations for 512 signals). Returns true if anything changed. No per-signal dirty tracking.
+All signals are backed by a global `SignalPool` -- a single contiguous, 64-byte-aligned array of `Level` (enum class : uint8_t). No double buffering.
 
-Double-buffering prevents mid-cycle glitches: an IC driving a signal during evaluation doesn't affect other ICs reading that signal until the next commit.
+- `drive(lvl)`: Writes directly to `SignalPool::levels[idx]`.
+- `level()`: Reads directly from `SignalPool::levels[idx]`.
+
+Writes are immediately visible to all subsequent reads within the same evaluate cycle. The DAG wave ordering ensures producers run before consumers.
+
+### Pin Validation (debug)
+
+Compile-time `#define BENCH_PIN_VALIDATION` enables runtime checks on every `Pin::drive()` and `Pin::level()` call, verifying the active component has declared the correct direction for that pin. Catches missing or incorrect `declare_input`/`declare_output` calls. Disabled by default for performance.
+
+### PSU Device (inside 8284A)
+
+The 8284A contains a mock PSU driven via atomics from the main thread (`psu_power_on()`, `psu_power_off()`, `psu_nmi_raise()`, `psu_nmi_lower()`). On the clock thread, the PSU drives GND, VCC, RES, S0-S2, AEN, and NMI. This avoids any main-thread signal writes or scheduler calls.
 
 ### Shutdown Order
 
-1. Stop the 8284A (joins thread) -- no more `evaluate()` calls.
-2. Delete fiber components (safe -- fibers are never resumed again).
+1. `psu_power_off()` -- 8284A drops VCC/RES on its thread, stops oscillating.
+2. `power_off()` on 8284A (joins thread) -- no more `evaluate()` calls.
+3. Delete fiber components (safe -- fibers are never resumed again).
 
 ## What Gets Modeled
 
 Everything on the physical motherboard:
-- **ICs**: 8088 CPU, 8284 clock gen, 8288 bus controller, 8259 PIC, 8253 PIT, 8237 DMA, 8255 PPI, 74S373 latches, 74S245 transceivers, 74S138 decoders, ROM chips
+- **ICs**: 8088 CPU, 8284 clock gen, 8288 bus controller, 8259 PIC, 8253 PIT, 8237 DMA, 8255 PPI, 74S373 latches, 74S245 transceivers, 74S138 decoders, 74S175 flip-flops, 74S20 NAND gates, ROM chips, DRAM
 - **Passive components**: resistors, capacitors, DIP switches (SW1/SW2), jumpers
 - **Power**: +5V, +12V, -5V, -12V rails from PSU -- modeled as enable signals, no power = nothing ticks
 - **Connectors**: ISA slots (62-pin edge connectors), keyboard DIN, cassette, speaker
@@ -97,16 +103,18 @@ All motherboard wiring is sourced at runtime from the KiCad legacy BRD file (`as
 ## Signal/Wire Abstraction
 
 Implemented in `src/core/signal.h`:
-- `Signal` class: named wire with tri-state logic (Low, High, Hi-Z), double-buffered (pending/committed). `connect(Component*)` adds the component to the signal's subscriber list.
+- `Signal` class: named wire with tri-state logic (Low, High, Hi-Z). `connect(Component*)` adds the component to the signal's subscriber list.
 - `Bus` class: bundle of N signal lines (e.g., address bus = 20 signals).
+- `Pin` struct: lightweight index-based handle into the SignalPool. `drive()`/`level()` use static array base + index.
+- `PinBlock<N>` struct: contiguous block of N pool slots for bulk read/write via memcpy.
 
 ## VCC-Driven Power
 
 Components don't execute until the board is powered on. The pattern is:
 1. `power_on()` initializes the component (creates fiber for FiberComponent, sets powered flag for others).
-2. `Motherboard::power_on()` drives VCC High. The scheduler commits it and evaluates all components.
+2. The 8284A's PSU drives VCC High on the clock thread. The scheduler evaluates all components.
 3. Active ICs (8088) override `run()` and `yield()` in a loop waiting for VCC High.
-4. `Motherboard::power_off()` drives VCC Low. ICs detect VCC drop and exit their run loops.
+4. `psu_power_off()` drops VCC. ICs detect VCC drop and exit their run loops.
 
 ## IC Install / Insert Pattern
 
@@ -129,13 +137,11 @@ A virtual test instrument for verifying board wiring:
 
 18-pin DIP, generates the master clock. The only ThreadedComponent.
 
-- **OSC** (pin 12): 14.31818 MHz oscillator output -- toggles every tick.
-- **CLK** (pin 8): OSC / 3 = 4.77 MHz, 33% duty cycle (high 2 OSC half-periods, low 4).
 - **PCLK** (pin 2): CLK / 2 = 2.38 MHz, 50% duty cycle.
-- **RESET** (pin 10): Synchronized to CLK falling edge. Inverted RES input.
-- **READY** (pin 5): Synchronized to CLK falling edge. RDY1 gated by ~AEN1.
+- **RESET** (pin 10): Inverted RES input.
+- **READY** (pin 5): RDY1 gated by ~AEN1.
 
-Its thread converts to a fiber (`fiber_convert_thread()`) so it can switch to component fibers during `evaluate()`. Reverts back to a plain thread before returning.
+Contains a mock PSU device (driven via atomics from the main thread). On its thread, drives GND, VCC, RES, S0-S2, AEN, NMI. Converts to a fiber (`fiber_convert_thread()`) so it can switch to component fibers during `evaluate()`. Reverts back to a plain thread before returning.
 
 ## Performance
 
@@ -147,13 +153,14 @@ Key optimizations and their measured impact (64-bit increment benchmark, 5-secon
 | Remove atomics from Signal (single-threaded hot path) | 7,695 | 1.6x |
 | SignalPool (contiguous arrays, no dirty tracking) + AVX2 commit | 9,801 | 2.1x |
 | CallbackComponent (eliminate fiber context switches for 8288/PIC) | 11,643 | 2.5x |
-| Convert all non-yielding ICs to callback (8288, 8259A, 8253, 8255A, 8237A, BusGlue) | 18,377 | 3.9x |
+| Convert all non-yielding ICs to callback | 18,377 | 3.9x |
+| Remove double buffering (single array, no commit) + DAG wave ordering | 50,499 | 10.7x |
 
 Design principles:
-- **No per-signal overhead**: `drive()` is a single comparison + store. No dirty flags, no subscriber notification, no atomic ops.
-- **Brute-force commit**: Copy all 512 signals every tick via SIMD rather than tracking which changed. Cache-friendly and branch-free.
+- **No per-signal overhead**: `drive()` is a single store. No dirty flags, no subscriber notification, no atomic ops.
+- **No double buffering**: DAG-based wave ordering guarantees producers run before consumers, eliminating the need for pending/current arrays and commit passes.
 - **Minimize context switches**: Only the 8088 needs fibers. Everything else is a direct function call.
-- **AVX2 (not AVX-512)**: Intel hybrid architectures (Alder Lake through Arrow Lake) disable AVX-512 when E-cores are present.
+- **On-demand DAG solving**: Bidirectional pin permutations are solved on first encounter and cached, avoiding upfront enumeration of all 3^N combinations.
 
 ## Future
 

@@ -1024,7 +1024,7 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-#define RUN_BENCHMARK
+//#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---
@@ -1113,6 +1113,13 @@ int main() {
                 sig->reset();
         }
     }
+#endif
+
+    #define DUMP_PERMUTATIONS
+
+#if defined(DUMP_PERMUTATIONS)
+    spdlog::info("--- Dumping encountered DAG permutations as SVG ---");
+    scheduler.dump_permutation_svgs();
 #endif
 
 

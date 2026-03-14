@@ -2,7 +2,7 @@
 
 Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets)
 
-## Implemented (12 IC types, 21 sockets)
+## Implemented (14 IC types, 57 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -17,9 +17,11 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U8 | 74S245 | Data bus transceiver |
 | U26 | 74S175 | PCLK divider / kbd sync |
 | U46,U47,U48,U65,U66 | 74S138 | Address decode (ROM/RAM/IO/ISA chip selects) |
+| U64 | 74S20 | Dual 4-input NAND (ROM address decode) |
+| U37-U45,U53-U61,U69-U77,U85-U93 | 4164 (IC_DRAM_256K) | DRAM banks 0-3 (36 chips, 256KB + parity) |
 | U28-U33 | 8K_X_8ROS | ROM (6 sockets) |
 
-## Not Implemented -- Meaningful ICs (20 sockets)
+## Not Implemented -- Meaningful ICs (16 sockets)
 
 | Ref | IC | Pins | Role |
 |---|---|---|---|
@@ -30,10 +32,6 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U19 | L670 (74LS670) | 16 | DMA page register (4x4 register file) |
 | U24 | 74S322 | 20 | Keyboard shift register (serial->parallel) |
 | U98 | 74S175 | 16 | Quad D FF (second instance, kbd/timing) |
-| U37-U45 | RAM_64K_X_1 | 16 | DRAM bank 0 (9 chips: 8 data + 1 parity) |
-| U53-U61 | RAM_64K_X_1 | 16 | DRAM bank 1 (optional) |
-| U69-U77 | RAM_64K_X_1 | 16 | DRAM bank 2 (optional) |
-| U85-U93 | RAM_64K_X_1 | 16 | DRAM bank 3 (optional) |
 | U62,U79 | 74S158 | 16 | DRAM address multiplexers (row/col select) |
 | U94 | 74S280 | 14 | Parity generator/checker |
 | U67,U82,U96 | 74S74 | 14 | D flip-flops (DMA req, wait state, NMI gate) |
@@ -44,7 +42,7 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U100 | 20DIP300 | 20 | Empty socket (unpopulated) |
 | XU4 | 8087 socket | 40 | Math coprocessor (optional) |
 
-## Not Implemented -- Glue Logic (14 sockets)
+## Not Implemented -- Glue Logic (13 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -55,7 +53,6 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U51,U83,U99 | 74S04 | Hex inverter |
 | U52,U81 | 74S00 | Quad NAND (RAS/CAS timing) |
 | U63 | 74S38 | Quad OC NAND |
-| U64 | 74S20 | Dual 4-input NAND |
 | U80 | 74S125 | Quad tri-state buffer |
 | U84 | 74S10 | Triple 3-input NAND |
 | U101 | 74LS32 | Quad OR |
@@ -66,9 +63,8 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 - J6: Cassette port, J7: Keyboard port, J8: +RUN jumper
 - SW1, SW2: DIP switch banks (config: RAM size, display, FPU)
 
-## Bus Timing Fix (8088 + 8288 + 74S373 + 74S245)
+## Bus Timing (8088 + 8288 + 74S373 + 74S245)
 
-The 8088 holds address on AD through T2 CLK fall (not T1 fall as originally coded).
-The 8288 drops ALE at T2 CLK rise but defers ~DEN/command to T2 CLK fall.
-This avoids bus contention: the 74S245 must not drive AD while the 74S373 is capturing.
-BusGlue reads latched address (XA) at T2 CLK fall, drives/reads data at T2->T3 CLK rise.
+Half-cycle evaluation has been removed -- the scheduler evaluates all components once per full CLK cycle.
+The 8288 drops ALE and asserts command strobes (~MEMR/~MEMW/~IOR/~IOW/~INTA) and ~DEN at the T1->T2 transition.
+BusGlue reads latched address (XA) and drives/reads data based on T-state progression.
