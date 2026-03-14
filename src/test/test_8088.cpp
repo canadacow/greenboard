@@ -932,95 +932,6 @@ int main() {
     clk_gen->set_scheduler(&scheduler);
     cpu->set_scheduler(&scheduler);
 
-    //#define RUN_BENCHMARK
-
-#if defined(RUN_BENCHMARK)
-    // --- Benchmark: 64-bit increment loop, timed by NMI ---
-    constexpr int BENCH_SECONDS = 5;
-    spdlog::info("--- Benchmark: 64-bit increment ({} seconds) ---", BENCH_SECONDS);
-    {
-        std::memset(bus.io.get(), 0xFF, 1 << 16);
-        std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
-        bus.reset();
-
-        std::string path = std::string(ASM_TEST_DIR) + "/test_bench64.bin";
-        if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) {
-            spdlog::error("  benchmark skipped -- cannot load binary");
-        } else {
-            cpu->clear_halt();
-#ifdef BENCH_PIN_VALIDATION
-            SignalPool::enable_validation();
-#endif
-            pic->power_on();
-            bc->power_on();
-            xcvr->power_on();
-            io_dec->power_on();
-            nand_ic->power_on();
-            rom_dec->power_on();
-            rom_ic->power_on();
-            dram.power_on();
-            latch_lo_ic->power_on();
-            latch_mid_ic->power_on();
-            latch_hi_ic->power_on();
-            bus.power_on();
-            clk_gen->power_on();
-            cpu->power_on();
-
-            clk_gen->psu_power_on();
-
-            // Let it run for BENCH_SECONDS, then fire NMI.
-            auto start = std::chrono::steady_clock::now();
-            clk_gen->psu_nmi_raise();
-
-            // Wait for CPU to halt (NMI handler does HLT).
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            auto end = std::chrono::steady_clock::now();
-
-            double elapsed = std::chrono::duration<double>(end - start).count();
-
-            if (!cpu->halted())
-                spdlog::warn("  benchmark timeout -- CPU did not halt");
-
-            // Power off.
-            clk_gen->psu_nmi_lower();
-            clk_gen->psu_power_off();
-            // Wait for 8284A to see VCC drop and stop.
-            clk_gen->power_off();
-            cpu->power_off();
-            bc->power_off();
-            pic->power_off();
-            bus.power_off();
-            dram.power_off();
-            rom_ic->power_off();
-            xcvr->power_off();
-            io_dec->power_off();
-            nand_ic->power_off();
-            rom_dec->power_off();
-            latch_lo_ic->power_off();
-            latch_mid_ic->power_off();
-            latch_hi_ic->power_off();
-
-            // Read 64-bit counter directly from DRAM.
-            uint64_t count = 0;
-            for (int i = 0; i < 8; ++i)
-                count |= (uint64_t)dram.data()[0x0500 + i] << (i * 8);
-
-            double rate = (elapsed > 0) ? (double)count / elapsed : 0;
-            uint64_t cycles = clk_gen->clk_cycles();
-            double mhz = (elapsed > 0) ? (double)cycles / elapsed / 1e6 : 0;
-            spdlog::info("  count: {} increments in {:.3f}s ({:.0f} inc/s)",
-                count, elapsed, rate);
-            spdlog::info("  CLK: {} cycles ({:.3f} MHz, target 4.77 MHz)",
-                cycles, mhz);
-
-            for (auto* sig : all_traces)
-                sig->reset();
-        }
-    }
-#endif
-
     // --- Run tests (power cycle between each) ---
     int passed = 0, failed = 0;
 
@@ -1113,6 +1024,98 @@ int main() {
     }
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
+
+#define RUN_BENCHMARK
+
+#if defined(RUN_BENCHMARK)
+    // --- Benchmark: 64-bit increment loop, timed by NMI ---
+    constexpr int BENCH_SECONDS = 5;
+    spdlog::info("--- Benchmark: 64-bit increment ({} seconds) ---", BENCH_SECONDS);
+    {
+        std::memset(bus.io.get(), 0xFF, 1 << 16);
+        std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
+        bus.reset();
+
+        std::string path = std::string(ASM_TEST_DIR) + "/test_bench64.bin";
+        if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) {
+            spdlog::error("  benchmark skipped -- cannot load binary");
+        }
+        else {
+            cpu->clear_halt();
+#ifdef BENCH_PIN_VALIDATION
+            SignalPool::enable_validation();
+#endif
+            pic->power_on();
+            bc->power_on();
+            xcvr->power_on();
+            io_dec->power_on();
+            nand_ic->power_on();
+            rom_dec->power_on();
+            rom_ic->power_on();
+            dram.power_on();
+            latch_lo_ic->power_on();
+            latch_mid_ic->power_on();
+            latch_hi_ic->power_on();
+            bus.power_on();
+            clk_gen->power_on();
+            cpu->power_on();
+
+            clk_gen->psu_power_on();
+
+            // Let it run for BENCH_SECONDS, then fire NMI.
+            auto start = std::chrono::steady_clock::now();
+            std::this_thread::sleep_for(std::chrono::seconds(BENCH_SECONDS));
+            clk_gen->psu_nmi_raise();
+
+            // Wait for CPU to halt (NMI handler does HLT).
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            auto end = std::chrono::steady_clock::now();
+
+            double elapsed = std::chrono::duration<double>(end - start).count();
+
+            if (!cpu->halted())
+                spdlog::warn("  benchmark timeout -- CPU did not halt");
+
+            // Power off.
+            clk_gen->psu_nmi_lower();
+            clk_gen->psu_power_off();
+            // Wait for 8284A to see VCC drop and stop.
+            clk_gen->power_off();
+            cpu->power_off();
+            bc->power_off();
+            pic->power_off();
+            bus.power_off();
+            dram.power_off();
+            rom_ic->power_off();
+            xcvr->power_off();
+            io_dec->power_off();
+            nand_ic->power_off();
+            rom_dec->power_off();
+            latch_lo_ic->power_off();
+            latch_mid_ic->power_off();
+            latch_hi_ic->power_off();
+
+            // Read 64-bit counter directly from DRAM.
+            uint64_t count = 0;
+            for (int i = 0; i < 8; ++i)
+                count |= (uint64_t)dram.data()[0x0500 + i] << (i * 8);
+
+            double rate = (elapsed > 0) ? (double)count / elapsed : 0;
+            uint64_t cycles = clk_gen->clk_cycles();
+            double mhz = (elapsed > 0) ? (double)cycles / elapsed / 1e6 : 0;
+            spdlog::info("  count: {} increments in {:.3f}s ({:.0f} inc/s)",
+                count, elapsed, rate);
+            spdlog::info("  CLK: {} cycles ({:.3f} MHz, target 4.77 MHz)",
+                cycles, mhz);
+
+            for (auto* sig : all_traces)
+                sig->reset();
+        }
+    }
+#endif
+
 
     return failed > 0 ? 1 : 0;
 }

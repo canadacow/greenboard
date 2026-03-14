@@ -544,24 +544,6 @@ public:
             mul *= 3;
         }
 
-        auto dir_name = [](Component::BidirDir d) -> const char* {
-            switch (d) {
-                case Component::BidirDir::HiZ:    return "HiZ";
-                case Component::BidirDir::Input:  return "IN";
-                case Component::BidirDir::Output: return "OUT";
-            }
-            return "?";
-        };
-        {
-            std::string blk;
-            for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
-                if (!blk.empty()) blk += ", ";
-                blk += bidir_refs_[i].comp->name();
-                blk += "=";
-                blk += dir_name(bidir_refs_[i].block->direction());
-            }
-        }
-
         auto it = wave_plans_.find(perm);
         if (it == wave_plans_.end())
             it = wave_plans_.emplace(perm, solve_perm(perm)).first;
