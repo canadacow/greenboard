@@ -334,117 +334,16 @@ public:
                          bidir_refs_[i].comp->name(), uint8_t(bidir_refs_[i].block->possible));
 
         // Which component index owns each bidir block?
-        std::vector<int> bidir_comp_idx(num_bidir);
+        bidir_comp_idx_.resize(num_bidir);
         for (int b = 0; b < num_bidir; ++b) {
             for (int i = 0; i < n; ++i) {
-                if (evals[i] == bidir_refs_[b].comp) { bidir_comp_idx[b] = i; break; }
+                if (evals[i] == bidir_refs_[b].comp) { bidir_comp_idx_[b] = i; break; }
             }
         }
 
-        // Build one wave plan per valid permutation.
+        // Store evals list for on-demand solve_perm().
+        evals_.assign(evals.begin(), evals.end());
         wave_plans_.clear();
-        for (int perm = 0; perm < num_slots; ++perm) {
-            if (!perm_valid(perm)) continue;
-            // Start with base effective outputs/inputs.
-            std::vector<std::array<uint64_t, W>> eff_out(n), eff_in(n);
-            for (int i = 0; i < n; ++i)
-                for (int w = 0; w < W; ++w) {
-                    eff_out[i][w] = evals[i]->outputs()[w] & ~evals[i]->inputs()[w];
-                    eff_in[i][w]  = evals[i]->inputs()[w]  & ~evals[i]->async_inputs()[w];
-                }
-
-            // Apply bidir overrides for this permutation.
-            for (int b = 0; b < num_bidir; ++b) {
-                int ci = bidir_comp_idx[b];
-                BidirDir dir = perm_dir(perm, b);
-                for (int w = 0; w < W; ++w) {
-                    uint64_t om = bidir_refs_[b].block->out_mask[w];
-                    uint64_t im = bidir_refs_[b].block->in_mask[w];
-                    switch (dir) {
-                        case BidirDir::Output:
-                            // out_mask pins driven, in_mask pins read.
-                            eff_out[ci][w] |= om;  eff_in[ci][w] &= ~om;
-                            eff_out[ci][w] &= ~im;
-                            break;
-                        case BidirDir::Input:
-                            // out_mask pins read, in_mask pins driven.
-                            eff_out[ci][w] &= ~om;
-                            eff_out[ci][w] |= im;  eff_in[ci][w] &= ~im;
-                            break;
-                        case BidirDir::HiZ:
-                            // Both sides disconnected.
-                            eff_out[ci][w] &= ~om;  eff_in[ci][w] &= ~om;
-                            eff_out[ci][w] &= ~im;  eff_in[ci][w] &= ~im;
-                            break;
-                    }
-                }
-            }
-
-            // Build adjacency: depends[b][a] means b depends on a.
-            std::vector<std::vector<bool>> depends(n, std::vector<bool>(n, false));
-            for (int a = 0; a < n; ++a)
-                for (int b2 = 0; b2 < n; ++b2) {
-                    if (a == b2) continue;
-                    for (int w = 0; w < W; ++w)
-                        if (eff_out[a][w] & eff_in[b2][w]) {
-                            depends[b2][a] = true;
-                            break;
-                        }
-                }
-
-            // Kahn's algorithm with level assignment.
-            std::vector<int> in_deg(n, 0), level(n, 0);
-            for (int b2 = 0; b2 < n; ++b2)
-                for (int a = 0; a < n; ++a)
-                    if (depends[b2][a]) ++in_deg[b2];
-
-            std::vector<int> queue;
-            for (int i = 0; i < n; ++i)
-                if (in_deg[i] == 0) queue.push_back(i);
-
-            int front = 0, sorted = 0;
-            while (front < static_cast<int>(queue.size())) {
-                int u = queue[front++];
-                ++sorted;
-                for (int v = 0; v < n; ++v) {
-                    if (!depends[v][u]) continue;
-                    level[v] = std::max(level[v], level[u] + 1);
-                    if (--in_deg[v] == 0) queue.push_back(v);
-                }
-            }
-
-            if (sorted != n) {
-                spdlog::warn("[Scheduler] perm {}: cycle -- impossible state, skipping", perm);
-                continue;
-            }
-
-            // Group into waves, excluding fibers from execution plan.
-            int num_w = 0;
-            for (int i = 0; i < n; ++i)
-                num_w = std::max(num_w, level[i] + 1);
-
-            auto& plan = wave_plans_[perm];
-            plan.waves.clear();
-            for (int w = 0; w < num_w; ++w) {
-                std::vector<Component*> wave;
-                for (int i = 0; i < n; ++i) {
-                    if (level[i] == w)
-                        wave.push_back(evals[i]);
-                }
-                if (!wave.empty())
-                    plan.waves.push_back(std::move(wave));
-            }
-
-            spdlog::info("[Scheduler] perm {} ({} waves):", perm, plan.waves.size());
-            for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
-                std::string names;
-                for (auto* c : plan.waves[w]) {
-                    if (!names.empty()) names += ", ";
-                    names += c->name();
-                }
-                spdlog::info("[Scheduler]   wave {}: {}", w, names);
-            }
-        }
 
         unified_resolved_ = true;
 
@@ -664,16 +563,8 @@ public:
         }
 
         auto it = wave_plans_.find(perm);
-        if (it == wave_plans_.end()) {
-            spdlog::critical("[Scheduler] perm {} has no wave plan (cycle at build time). Block states:", perm);
-            for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
-                auto dir = bidir_refs_[i].block->direction();
-                using BD = Component::BidirDir;
-                const char* ds = dir == BD::HiZ ? "HiZ" : dir == BD::Input ? "Input" : "Output";
-                spdlog::critical("[Scheduler]   block {}: {} = {}", i, bidir_refs_[i].comp->name(), ds);
-            }
-            std::_Exit(1);
-        }
+        if (it == wave_plans_.end())
+            it = wave_plans_.emplace(perm, solve_perm(perm)).first;
         for (auto& wave : it->second.waves) {
             for (auto* c : wave)
                 c->on_signal_change(caller, rising, falling);
@@ -719,6 +610,115 @@ private:
         const Component::BidirBlock* block;
     };
     std::vector<BidirRef> bidir_refs_;
+    std::vector<Component*> evals_;
+    std::vector<int> bidir_comp_idx_;
+
+    WavePlan solve_perm(int perm) {
+        constexpr int W = Component::SLOT_WORDS;
+        using BidirDir = Component::BidirDir;
+        static constexpr BidirDir digit_to_dir[3] = {
+            BidirDir::HiZ, BidirDir::Input, BidirDir::Output
+        };
+        auto perm_dir = [](int p, int b) -> BidirDir {
+            for (int i = 0; i < b; ++i) p /= 3;
+            return digit_to_dir[p % 3];
+        };
+
+        const int n = static_cast<int>(evals_.size());
+        const int num_bidir = static_cast<int>(bidir_refs_.size());
+
+        std::vector<std::array<uint64_t, W>> eff_out(n), eff_in(n);
+        for (int i = 0; i < n; ++i)
+            for (int w = 0; w < W; ++w) {
+                eff_out[i][w] = evals_[i]->outputs()[w] & ~evals_[i]->inputs()[w];
+                eff_in[i][w]  = evals_[i]->inputs()[w]  & ~evals_[i]->async_inputs()[w];
+            }
+
+        for (int b = 0; b < num_bidir; ++b) {
+            int ci = bidir_comp_idx_[b];
+            BidirDir dir = perm_dir(perm, b);
+            for (int w = 0; w < W; ++w) {
+                uint64_t om = bidir_refs_[b].block->out_mask[w];
+                uint64_t im = bidir_refs_[b].block->in_mask[w];
+                switch (dir) {
+                    case BidirDir::Output:
+                        eff_out[ci][w] |= om;  eff_in[ci][w] &= ~om;
+                        eff_out[ci][w] &= ~im;
+                        break;
+                    case BidirDir::Input:
+                        eff_out[ci][w] &= ~om;
+                        eff_out[ci][w] |= im;  eff_in[ci][w] &= ~im;
+                        break;
+                    case BidirDir::HiZ:
+                        eff_out[ci][w] &= ~om;  eff_in[ci][w] &= ~om;
+                        eff_out[ci][w] &= ~im;  eff_in[ci][w] &= ~im;
+                        break;
+                }
+            }
+        }
+
+        std::vector<std::vector<bool>> depends(n, std::vector<bool>(n, false));
+        for (int a = 0; a < n; ++a)
+            for (int b2 = 0; b2 < n; ++b2) {
+                if (a == b2) continue;
+                for (int w = 0; w < W; ++w)
+                    if (eff_out[a][w] & eff_in[b2][w]) {
+                        depends[b2][a] = true;
+                        break;
+                    }
+            }
+
+        std::vector<int> in_deg(n, 0), level(n, 0);
+        for (int b2 = 0; b2 < n; ++b2)
+            for (int a = 0; a < n; ++a)
+                if (depends[b2][a]) ++in_deg[b2];
+
+        std::vector<int> queue;
+        for (int i = 0; i < n; ++i)
+            if (in_deg[i] == 0) queue.push_back(i);
+
+        int front = 0, sorted = 0;
+        while (front < static_cast<int>(queue.size())) {
+            int u = queue[front++];
+            ++sorted;
+            for (int v = 0; v < n; ++v) {
+                if (!depends[v][u]) continue;
+                level[v] = std::max(level[v], level[u] + 1);
+                if (--in_deg[v] == 0) queue.push_back(v);
+            }
+        }
+
+        if (sorted != n) {
+            spdlog::critical("[Scheduler] solve_perm {}: cycle in DAG", perm);
+            std::_Exit(1);
+        }
+
+        int num_w = 0;
+        for (int i = 0; i < n; ++i)
+            num_w = std::max(num_w, level[i] + 1);
+
+        WavePlan plan;
+        for (int w = 0; w < num_w; ++w) {
+            std::vector<Component*> wave;
+            for (int i = 0; i < n; ++i)
+                if (level[i] == w)
+                    wave.push_back(evals_[i]);
+            if (!wave.empty())
+                plan.waves.push_back(std::move(wave));
+        }
+
+        spdlog::info("[Scheduler] solved perm {} ({} waves):", perm, plan.waves.size());
+        for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
+            std::string names;
+            for (auto* c : plan.waves[w]) {
+                if (!names.empty()) names += ", ";
+                names += c->name();
+            }
+            spdlog::info("[Scheduler]   wave {}: {}", w, names);
+        }
+
+        return plan;
+    }
 
     FiberComponent* fibers_[MAX_FIBERS] = {};
     int fiber_count_ = 0;
