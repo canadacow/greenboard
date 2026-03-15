@@ -42,6 +42,18 @@ public:
         visuals_[visual_count_++] = c;
     }
 
+    // Power on/off all registered components (called by PSU on clock thread).
+    // Order: callbacks first, then fibers (mirrors the old manual sequence).
+    void power_on_all() {
+        for (int i = 0; i < callback_count_; ++i) callbacks_[i]->power_on();
+        for (int i = 0; i < fiber_count_;    ++i) fibers_[i]->power_on();
+    }
+    void power_off_all() {
+        // Fibers first (CPU), then callbacks (reverse of power-on).
+        for (int i = 0; i < fiber_count_;    ++i) fibers_[i]->power_off();
+        for (int i = 0; i < callback_count_; ++i) callbacks_[i]->power_off();
+    }
+
     // Build the callback dependency graph and topologically sort into waves.
     // Call once after all callbacks are registered, before the first evaluate().
     void resolve() {

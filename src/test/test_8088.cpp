@@ -1082,36 +1082,12 @@ int main() {
             dram.data()[0x1100], dram.data()[0x1101], dram.data()[0x1102], dram.data()[0x1103],
             dram.data()[0x1104], dram.data()[0x1105], dram.data()[0x1106], dram.data()[0x1107]);
 
-        // Seat all ICs (threads start, block on wait_mailbox).
+        // Power on: 8284A thread starts, PSU powers all components, drives VCC.
         cpu->clear_halt();
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::enable_validation();
 #endif
-        pic->power_on();
-        bc->power_on();
-        xcvr->power_on();
-        mem_xcvr->power_on();
-        io_dec->power_on();
-        nand_ic->power_on();
-        rom_dec->power_on();
-        rom_ic->power_on();
-        dram.power_on();
-        mux_lo_ic->power_on();
-        mux_hi_ic->power_on();
-        nand81_ic->power_on();
-        ram_range_ic->power_on();
-        ras_dec->power_on();
-        ras_gate_ic->power_on();
-        cas_dec->power_on();
-        latch_lo_ic->power_on();
-        latch_mid_ic->power_on();
-        latch_hi_ic->power_on();
-        bus.power_on();
         clk_gen->power_on();
-        cpu->power_on();
-        spdlog::debug("All ICs seated, pending={}", Signal::pending_count.load());
-
-        // Flip the switch (PSU drives GND, VCC, S0-S2, AEN, RES on clock thread).
         clk_gen->psu_power_on();
 
         // Wait for CPU to halt, with 10s safety timeout.
@@ -1123,30 +1099,9 @@ int main() {
                 spdlog::warn("  timeout -- CPU did not halt within 10s");
         }
 
-        // Power off (PSU drops VCC on clock thread, 8284A stops).
+        // Power off: PSU drops VCC, 8284A stops clock and powers off all components.
         clk_gen->psu_power_off();
-        clk_gen->power_off();   // stop clock first -- joins 8284A thread
-        cpu->power_off();       // then delete fibers
-        bc->power_off();
-        pic->power_off();
-        bus.power_off();
-        dram.power_off();
-        mux_lo_ic->power_off();
-        mux_hi_ic->power_off();
-        nand81_ic->power_off();
-        ram_range_ic->power_off();
-        ras_dec->power_off();
-        ras_gate_ic->power_off();
-        cas_dec->power_off();
-        rom_ic->power_off();
-        xcvr->power_off();
-        mem_xcvr->power_off();
-        io_dec->power_off();
-        nand_ic->power_off();
-        rom_dec->power_off();
-        latch_lo_ic->power_off();
-        latch_mid_ic->power_off();
-        latch_hi_ic->power_off();
+        clk_gen->power_off();
 
         // Power loss: every trace on the board discharges.
         for (auto* sig : all_traces)
@@ -1191,29 +1146,7 @@ int main() {
 #ifdef BENCH_PIN_VALIDATION
             SignalPool::enable_validation();
 #endif
-            pic->power_on();
-            bc->power_on();
-            xcvr->power_on();
-            mem_xcvr->power_on();
-            io_dec->power_on();
-            nand_ic->power_on();
-            rom_dec->power_on();
-            rom_ic->power_on();
-            dram.power_on();
-            mux_lo_ic->power_on();
-            mux_hi_ic->power_on();
-            nand81_ic->power_on();
-            ram_range_ic->power_on();
-            ras_dec->power_on();
-            ras_gate_ic->power_on();
-            cas_dec->power_on();
-            latch_lo_ic->power_on();
-            latch_mid_ic->power_on();
-            latch_hi_ic->power_on();
-            bus.power_on();
             clk_gen->power_on();
-            cpu->power_on();
-
             clk_gen->psu_power_on();
 
             // Let it run for BENCH_SECONDS, then fire NMI.
@@ -1235,29 +1168,7 @@ int main() {
             // Power off.
             clk_gen->psu_nmi_lower();
             clk_gen->psu_power_off();
-            // Wait for 8284A to see VCC drop and stop.
             clk_gen->power_off();
-            cpu->power_off();
-            bc->power_off();
-            pic->power_off();
-            bus.power_off();
-            dram.power_off();
-            mux_lo_ic->power_off();
-            mux_hi_ic->power_off();
-            nand81_ic->power_off();
-            ram_range_ic->power_off();
-            ras_dec->power_off();
-            ras_gate_ic->power_off();
-            cas_dec->power_off();
-            rom_ic->power_off();
-            xcvr->power_off();
-            mem_xcvr->power_off();
-            io_dec->power_off();
-            nand_ic->power_off();
-            rom_dec->power_off();
-            latch_lo_ic->power_off();
-            latch_mid_ic->power_off();
-            latch_hi_ic->power_off();
 
             // Read 64-bit counter from DRAM (through 74S158 translation).
             uint64_t count = 0;

@@ -39,6 +39,8 @@ void IC_8284A::run(std::stop_token stop) {
         auto cmd = psu_cmd_.load(std::memory_order_relaxed);
         if (cmd == PsuCmd::PowerOn) {
             psu_cmd_.store(PsuCmd::None, std::memory_order_relaxed);
+            // Power on all components before driving VCC (like seating ICs).
+            scheduler_->power_on_all();
             psu_gnd_.drive(Level::Low);
             psu_s0_.drive(Level::High);
             psu_s1_.drive(Level::High);
@@ -113,13 +115,14 @@ void IC_8284A::run(std::stop_token stop) {
         ++clk_ticks;
     }
 
-    // Power down: release all outputs.
+    // Power down: release all outputs, then power off all components.
     pin_osc_.release();
     pin_clk_.release();
     pin_pclk_.release();
     pin_ready_.release();
     pin_reset_.release();
     scheduler_->evaluate();
+    scheduler_->power_off_all();
 
     spdlog::debug("[8284A] oscillator stopped after {} CLK cycles", clk_ticks);
 
