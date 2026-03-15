@@ -296,10 +296,11 @@ struct TestBoard {
         mem_xcvr = mem_xcvr_socket.emplace<IC_74S245>();
 
         // U10: 74S373 Address Latch (low byte: AD0-AD7 -> XA0-XA7)
-        // BRD: pin 1 (~OE) = AEN_BRD.  Without DMA, AEN_BRD = ALE.
-        // ~OE=High during ALE pulse (T1) tri-states outputs, preventing
-        // glitch during address transition. Outputs re-enable when ALE drops.
-        latch_lo.wire(1, ale);       // ~OE = ALE (= AEN_BRD w/o DMA)
+        // BRD: pin 1 (~OE) = AEN_BRD.  During normal CPU ops AEN_BRD is Low
+        // (outputs enabled).  During DMA, AEN_BRD goes High to tri-state
+        // latch outputs so the DMA controller can drive XA.
+        // Without full DMA handshake, tie ~OE to GND (always enabled).
+        latch_lo.wire(1, gnd);       // ~OE = GND (real board: AEN_BRD)
         latch_lo.wire(11, ale);      // LE = ALE
         latch_lo.wire(10, gnd);
         latch_lo.wire(20, vcc);
@@ -315,7 +316,7 @@ struct TestBoard {
         latch_lo_ic = latch_lo.emplace<IC_74S373>();
 
         // U9: 74S373 Address Latch (mid byte: A0-A7 -> XA8-XA15)
-        latch_mid.wire(1, ale);      // ~OE = ALE (= AEN_BRD w/o DMA)
+        latch_mid.wire(1, gnd);      // ~OE = GND (real board: AEN_BRD)
         latch_mid.wire(11, ale);     // LE = ALE
         latch_mid.wire(10, gnd);
         latch_mid.wire(20, vcc);
@@ -330,7 +331,7 @@ struct TestBoard {
         latch_mid_ic = latch_mid.emplace<IC_74S373>();
 
         // U7: 74S373 Address Latch (high nibble: A8-A11 -> XA16-XA19)
-        latch_hi.wire(1, ale);       // ~OE = ALE (= AEN_BRD w/o DMA)
+        latch_hi.wire(1, gnd);       // ~OE = GND (real board: AEN_BRD)
         latch_hi.wire(11, ale);      // LE = ALE
         latch_hi.wire(10, gnd);
         latch_hi.wire(20, vcc);
