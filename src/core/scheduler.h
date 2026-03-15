@@ -653,7 +653,10 @@ private:
         }
 
         if (sorted != n) {
-            spdlog::critical("[Scheduler] solve_perm {}: cycle in DAG", perm);
+            spdlog::critical("[Scheduler] solve_perm {}: cycle in DAG (sorted {} of {})", perm, sorted, n);
+            for (int i = 0; i < n; ++i)
+                if (in_deg[i] > 0)
+                    spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", evals_[i]->name(), in_deg[i]);
             std::_Exit(1);
         }
 

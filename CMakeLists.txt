@@ -40,7 +40,9 @@ add_executable(bench
     src/ic/ic_74s00.cpp
     src/ic/ic_74s08.cpp
     src/ic/ic_74s158.cpp
+    src/ic/ic_td1.cpp
     src/ic/ic_74s74.cpp
+    src/ic/ic_74s00_u81.cpp
     src/ic/ic_dram_256k.cpp
     ${BENCH_HEADERS}
 )
@@ -86,7 +88,9 @@ add_executable(test_8088
     src/ic/ic_74s00.cpp
     src/ic/ic_74s08.cpp
     src/ic/ic_74s158.cpp
+    src/ic/ic_td1.cpp
     src/ic/ic_74s74.cpp
+    src/ic/ic_74s00_u81.cpp
     src/ic/ic_rom_8k.cpp
     src/ic/ic_dram_256k.cpp
     ${BENCH_HEADERS}
