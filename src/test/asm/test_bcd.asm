@@ -21,6 +21,20 @@
 ;   [0514] = 0x1234   LEA loads effective address
 ;   [0516] = 0x0001   LDS loads pointer (segment:offset)
 
+; @name BCD/Exotic
+; @expect 0500 0042 DAA
+; @expect 0502 0022 DAS
+; @expect 0504 0105 AAA
+; @expect 0506 0035 AAD
+; @expect 0508 0305 AAM
+; @expect 050A 00A0 ROL
+; @expect 050C 0028 ROR
+; @expect 050E 0001 LAHF/SAHF
+; @expect 0510 0055 XLAT
+; @expect 0512 0001 STC/CLC/CMC
+; @expect 0514 1234 LEA
+; @expect 0516 0001 LDS
+;
 cpu 8086
 org 0x0100
 

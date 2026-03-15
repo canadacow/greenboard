@@ -13,6 +13,14 @@
 ;   [0508] = 0x0001   JMP FAR imm16:imm16 reached target
 ;   [050A] = 0x2000   CS value inside far call
 
+; @name FAR CALL
+; @expect 0500 0001 CALL FAR imm
+; @expect 0502 0001 RETF
+; @expect 0504 0001 CALL FAR indirect
+; @expect 0506 0001 RETF imm16
+; @expect 0508 0001 JMP FAR imm
+; @expect 050A 2000 CS after far call
+;
 cpu 8086
 org 0x0100
 

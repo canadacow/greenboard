@@ -17,6 +17,12 @@
 ;   [0504] = 0x0032   last string byte ('2' = 0x32)
 ;   [0506] = 0xB000   16-bit byte sum of 8K ROM
 
+; @name ROM (BIOS U33)
+; @expect 0500 0001 ID string match
+; @expect 0502 0031 first ROM byte ('1')
+; @expect 0504 0032 last string byte ('2')
+; @expect 0506 B000 8K byte sum
+;
 cpu 8086
 org 0x0100
 

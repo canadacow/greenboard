@@ -8,6 +8,13 @@
 ;   [0506] = 0xDEF0   XCHG
 ;   [0508] = 0x9ABC   XCHG (other half)
 
+; @name MOV/XCHG
+; @expect 0500 1234 MOV imm16
+; @expect 0502 5678 MOV reg-reg
+; @expect 0504 00AB MOV byte
+; @expect 0506 DEF0 XCHG ax
+; @expect 0508 9ABC XCHG bx
+;
 cpu 8086
 org 0x0100
 

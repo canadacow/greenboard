@@ -11,6 +11,16 @@
 ;   [050C] = 0x0005   LOOP counter (5 iterations)
 ;   [050E] = 0x0037   LOOP sum (1+2+...+10 = 55 = 0x37)
 
+; @name Jumps/Loops
+; @expect 0500 0001 JE
+; @expect 0502 0001 JNE
+; @expect 0504 0001 JL
+; @expect 0506 0001 JG
+; @expect 0508 0001 JB
+; @expect 050A 0001 JA
+; @expect 050C 0005 LOOP count
+; @expect 050E 0037 LOOP sum
+;
 cpu 8086
 org 0x0100
 

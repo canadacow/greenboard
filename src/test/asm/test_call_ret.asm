@@ -8,6 +8,12 @@
 ;   [0504] = 0x000A   nested CALL (factorial-ish: add_n(4) = 4+3+2+1 = 10)
 ;   [0506] = 0xBEEF   PUSH reg / POP cross-reg
 
+; @name CALL/RET
+; @expect 0500 0007 near CALL/RET
+; @expect 0502 1234 PUSH/POP
+; @expect 0504 000A nested CALL
+; @expect 0506 BEEF PUSH/POP cross
+;
 cpu 8086
 org 0x0100
 

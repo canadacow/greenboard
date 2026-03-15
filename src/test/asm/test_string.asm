@@ -12,6 +12,16 @@
 ;   [050C] = 0x0001   MOVSW (word move) works
 ;   [050E] = 0x0001   STD reverses direction
 
+; @name Strings
+; @expect 0500 0001 REP MOVSB
+; @expect 0502 0001 REP STOSB
+; @expect 0504 0044 LODSB
+; @expect 0506 0001 REPNE SCASB found
+; @expect 0508 0001 SCASB position
+; @expect 050A 0001 REPE CMPSB
+; @expect 050C 0001 MOVSW
+; @expect 050E 0001 STD reverse
+;
 cpu 8086
 org 0x0100
 

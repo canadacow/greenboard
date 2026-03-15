@@ -16,6 +16,20 @@
 ;   [0514] = 0x008A   ADC chain
 ;   [0516] = 0x00FE   SBB
 
+; @name ALU
+; @expect 0500 0042 ADD
+; @expect 0502 0010 SUB
+; @expect 0504 FFBE NEG
+; @expect 0506 1234 AND
+; @expect 0508 FFFF OR
+; @expect 050A EDCB XOR
+; @expect 050C EDCA NOT
+; @expect 050E 2468 SHL
+; @expect 0510 048D SHR
+; @expect 0512 0001 CMP/JE
+; @expect 0514 008A ADC
+; @expect 0516 00FE SBB
+;
 cpu 8086
 org 0x0100
 

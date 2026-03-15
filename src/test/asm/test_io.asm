@@ -17,6 +17,16 @@
 ;   [050C] = 0x0001   EOI cleared ISR (read ISR = 0 after EOI)
 ;   [050E] = 0x0001   I/O write doesn't corrupt memory
 
+; @name I/O (PIC ports)
+; @expect 0500 00AB OUT imm8 / IN imm8 byte
+; @expect 0502 00CD OUT DX / IN DX byte
+; @expect 0504 BEEF OUT/IN word
+; @expect 0506 00FE PIC IMR readback
+; @expect 0508 0001 Timer IRQ0 -> INT 8
+; @expect 050A 0008 INT 8 vector correct
+; @expect 050C 0001 EOI clears ISR
+; @expect 050E 0001 I/O doesn't touch memory
+;
 cpu 8086
 org 0x0100
 

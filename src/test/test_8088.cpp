@@ -23,6 +23,7 @@
 #include "board/socket.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -275,13 +276,54 @@ static uint32_t dram_xlat(uint32_t phys) {
     return (bank << 16) | (static_cast<uint32_t>(row) << 8) | col;
 }
 
-struct Expect { uint32_t addr; uint16_t value; const char* label; };
+struct Expect { uint32_t addr; uint16_t value; std::string label; };
 
 struct TestCase {
-    const char* name;
-    const char* bin_file;
+    std::string name;
+    std::string bin_file;
     std::vector<Expect> expects;
 };
+
+// Parse @name and @expect tags from an assembly source file.
+// Returns a TestCase with name from @name, bin_file from short_name,
+// and expects from @expect lines.
+static TestCase parse_test_asm(const std::string& asm_dir, const std::string& short_name) {
+    TestCase tc;
+    tc.bin_file = "test_" + short_name + ".bin";
+    tc.name = short_name;  // fallback if no @name tag
+
+    std::string asm_path = asm_dir + "/test_" + short_name + ".asm";
+    std::ifstream f(asm_path);
+    if (!f) {
+        spdlog::error("cannot open asm file: {}", asm_path);
+        return tc;
+    }
+
+    std::string line;
+    while (std::getline(f, line)) {
+        // Strip trailing \r (Windows line endings).
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        // ; @name Display Name
+        if (line.rfind("; @name ", 0) == 0) {
+            tc.name = line.substr(8);
+            continue;
+        }
+        // ; @expect ADDR VALUE label text
+        if (line.rfind("; @expect ", 0) == 0) {
+            // Format: ADDR(4hex) SPACE VALUE(4hex) SPACE label...
+            const char* p = line.c_str() + 10;
+            uint32_t addr = 0;
+            uint16_t value = 0;
+            int n = 0;
+            if (sscanf(p, "%4x %4hx%n", &addr, &value, &n) >= 2) {
+                const char* label = p + n;
+                while (*label == ' ') ++label;
+                tc.expects.push_back({addr, value, label});
+            }
+        }
+    }
+    return tc;
+}
 
 static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, uint32_t mem_size) {
     std::ifstream f(path, std::ios::binary);
@@ -311,155 +353,17 @@ int main() {
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
-    // Test table
-    std::vector<TestCase> tests = {
-        {"MOV/XCHG", "test_mov.bin", {
-            {0x0500, 0x1234, "MOV imm16"},
-            {0x0502, 0x5678, "MOV reg-reg"},
-            {0x0504, 0x00AB, "MOV byte"},
-            {0x0506, 0xDEF0, "XCHG ax"},
-            {0x0508, 0x9ABC, "XCHG bx"},
-        }},
-#if 1
-        {"ALU", "test_alu.bin", {
-            {0x0500, 0x0042, "ADD"},
-            {0x0502, 0x0010, "SUB"},
-            {0x0504, 0xFFBE, "NEG"},
-            {0x0506, 0x1234, "AND"},
-            {0x0508, 0xFFFF, "OR"},
-            {0x050A, 0xEDCB, "XOR"},
-            {0x050C, 0xEDCA, "NOT"},
-            {0x050E, 0x2468, "SHL"},
-            {0x0510, 0x048D, "SHR"},
-            {0x0512, 0x0001, "CMP/JE"},
-            {0x0514, 0x008A, "ADC"},
-            {0x0516, 0x00FE, "SBB"},
-        }},
-        {"CALL/RET", "test_call_ret.bin", {
-            {0x0500, 0x0007, "near CALL/RET"},
-            {0x0502, 0x1234, "PUSH/POP"},
-            {0x0504, 0x000A, "nested CALL"},
-            {0x0506, 0xBEEF, "PUSH/POP cross"},
-        }},
-        {"Jumps/Loops", "test_jumps.bin", {
-            {0x0500, 0x0001, "JE"},
-            {0x0502, 0x0001, "JNE"},
-            {0x0504, 0x0001, "JL"},
-            {0x0506, 0x0001, "JG"},
-            {0x0508, 0x0001, "JB"},
-            {0x050A, 0x0001, "JA"},
-            {0x050C, 0x0005, "LOOP count"},
-            {0x050E, 0x0037, "LOOP sum"},
-        }},
-        {"Interrupts", "test_int.bin", {
-            {0x0500, 0xAA55, "INT 0x40"},
-            {0x0502, 0x0001, "INT 3 (breakpoint)"},
-            {0x0504, 0x0001, "INTO (OF=1)"},
-            {0x0506, 0x0000, "INTO (OF=0, skip)"},
-            {0x0508, 0x0001, "IRET restores IF"},
-            {0x050A, 0x0003, "nested INT"},
-        }},
-        {"Strings", "test_string.bin", {
-            {0x0500, 0x0001, "REP MOVSB"},
-            {0x0502, 0x0001, "REP STOSB"},
-            {0x0504, 0x0044, "LODSB"},
-            {0x0506, 0x0001, "REPNE SCASB found"},
-            {0x0508, 0x0001, "SCASB position"},
-            {0x050A, 0x0001, "REPE CMPSB"},
-            {0x050C, 0x0001, "MOVSW"},
-            {0x050E, 0x0001, "STD reverse"},
-        }},
-        {"MUL/IMUL/Shifts", "test_mul.bin", {
-            {0x0500, 0x0048, "MUL byte"},
-            {0x0502, 0x0000, "MUL byte hi"},
-            {0x0504, 0x4000, "MUL word lo"},
-            {0x0506, 0x0000, "MUL word hi"},
-            {0x0508, 0xFFC8, "IMUL byte"},
-            {0x050A, 0x0100, "MUL overflow"},
-            {0x050C, 0x00A0, "SHL AL,CL"},
-            {0x050E, 0x0003, "SHR AX,CL"},
-            {0x0510, 0xFFFE, "SAR AX,1"},
-            {0x0512, 0x0030, "SHL AX,CL"},
-        }},
-        {"BCD/Exotic", "test_bcd.bin", {
-            {0x0500, 0x0042, "DAA"},
-            {0x0502, 0x0022, "DAS"},
-            {0x0504, 0x0105, "AAA"},
-            {0x0506, 0x0035, "AAD"},
-            {0x0508, 0x0305, "AAM"},
-            {0x050A, 0x00A0, "ROL"},
-            {0x050C, 0x0028, "ROR"},
-            {0x050E, 0x0001, "LAHF/SAHF"},
-            {0x0510, 0x0055, "XLAT"},
-            {0x0512, 0x0001, "STC/CLC/CMC"},
-            {0x0514, 0x1234, "LEA"},
-            {0x0516, 0x0001, "LDS"},
-        }},
-        {"FAR CALL", "test_farcall.bin", {
-            {0x0500, 0x0001, "CALL FAR imm"},
-            {0x0502, 0x0001, "RETF"},
-            {0x0504, 0x0001, "CALL FAR indirect"},
-            {0x0506, 0x0001, "RETF imm16"},
-            {0x0508, 0x0001, "JMP FAR imm"},
-            {0x050A, 0x2000, "CS after far call"},
-        }},
-        {"I/O (PIC ports)", "test_io.bin", {
-            {0x0500, 0x00AB, "OUT imm8 / IN imm8 byte"},
-            {0x0502, 0x00CD, "OUT DX / IN DX byte"},
-            {0x0504, 0xBEEF, "OUT/IN word"},
-            {0x0506, 0x00FE, "PIC IMR readback"},
-            {0x0508, 0x0001, "Timer IRQ0 -> INT 8"},
-            {0x050A, 0x0008, "INT 8 vector correct"},
-            {0x050C, 0x0001, "EOI clears ISR"},
-            {0x050E, 0x0001, "I/O doesn't touch memory"},
-        }},
-        {"DIV/IDIV", "test_div.bin", {
-            {0x0500, 0x0003, "DIV byte quot"},
-            {0x0502, 0x0001, "DIV byte rem"},
-            {0x0504, 0x000A, "DIV word quot"},
-            {0x0506, 0x0000, "DIV word rem"},
-            {0x0508, 0xFFFD, "IDIV byte quot"},
-            {0x050A, 0xFFFF, "IDIV byte rem"},
-            {0x050C, 0x0001, "DIV by zero"},
-            {0x050E, 0x0001, "DIV overflow"},
-        }},
-        { "DOS INT 21h", "test_dos.bin", {
-            {0x0500, 0x0005, "AH=02 char count"},
-            {0x0502, 0x0048, "AH=02 first char 'H'"},
-            {0x0504, 0x006F, "AH=02 last char 'o'"},
-            {0x0506, 0x000D, "AH=09 string length"},
-            {0x0508, 0x0048, "AH=09 first char 'H'"},
-            {0x050A, 0x0021, "AH=09 last char '!'"},
-            {0x050C, 0x002A, "AH=4C exit code 42"},
-        } },
-#endif
-        {"I/O (PIC ports)", "test_io.bin", {
-            {0x0500, 0x00AB, "OUT imm8 / IN imm8 byte"},
-            {0x0502, 0x00CD, "OUT DX / IN DX byte"},
-            {0x0504, 0xBEEF, "OUT/IN word"},
-            {0x0506, 0x00FE, "PIC IMR readback"},
-            {0x0508, 0x0001, "Timer IRQ0 -> INT 8"},
-            {0x050A, 0x0008, "INT 8 vector correct"},
-            {0x050C, 0x0001, "EOI clears ISR"},
-            {0x050E, 0x0001, "I/O doesn't touch memory"},
-        }},
-        {"IRQ (advanced)", "test_irq.bin", {
-            {0x0500, 0x0001, "IRQ1 fires (INT 9)"},
-            {0x0502, 0x0001, "Priority: IRQ0 first"},
-            {0x0504, 0x0001, "Priority: IRQ1 second"},
-            {0x0506, 0x0001, "Masked IRQ blocked"},
-            {0x0508, 0x0001, "Specific EOI"},
-            {0x050A, 0x0001, "Auto-EOI"},
-            {0x050C, 0x0002, "Nested HW interrupts"},
-        }},
-        {"ROM (BIOS U33)", "test_rom.bin", {
-            {0x0500, 0x0001, "ID string match"},
-            {0x0502, 0x0031, "first ROM byte ('1')"},
-            {0x0504, 0x0032, "last string byte ('2')"},
-            {0x0506, 0xB000, "8K byte sum"},
-        }},
-
+    // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
+    // Expected results are parsed from @name / @expect tags in the asm files.
+    std::vector<std::string> test_names = {
+        "mov", "alu", "call_ret", "jumps", "int", "string",
+        "mul", "bcd", "farcall", "io", "div", "dos",
+        "io", "irq", "rom",
     };
+
+    std::vector<TestCase> tests;
+    for (auto& name : test_names)
+        tests.push_back(parse_test_asm(ASM_SRC_DIR, name));
 
     // --- Wire the test board (signals, sockets, ICs) ---
     std::string bios_path = std::string(ASSETS_DIR) + "/BIOS_IBM5150_27OCT82_1501476_U33.BIN";

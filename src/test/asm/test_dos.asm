@@ -18,6 +18,15 @@
 ;   [050A] = 0x0021   AH=09 last char = '!'
 ;   [050C] = 0x002A   AH=4C exit code = 42 (0x2A)
 
+; @name DOS INT 21h
+; @expect 0500 0005 AH=02 char count
+; @expect 0502 0048 AH=02 first char 'H'
+; @expect 0504 006F AH=02 last char 'o'
+; @expect 0506 000D AH=09 string length
+; @expect 0508 0048 AH=09 first char 'H'
+; @expect 050A 0021 AH=09 last char '!'
+; @expect 050C 002A AH=4C exit code 42
+;
 cpu 8086
 org 0x0100
 

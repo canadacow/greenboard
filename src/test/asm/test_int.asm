@@ -13,6 +13,14 @@
 ;   [0508] = 0x0001   IRET restores flags (IF was 1 before INT, 0 during handler)
 ;   [050A] = 0x0003   Nested INT: handler calls INT again
 
+; @name Interrupts
+; @expect 0500 AA55 INT 0x40
+; @expect 0502 0001 INT 3 (breakpoint)
+; @expect 0504 0001 INTO (OF=1)
+; @expect 0506 0000 INTO (OF=0, skip)
+; @expect 0508 0001 IRET restores IF
+; @expect 050A 0003 nested INT
+;
 cpu 8086
 org 0x0100
 

@@ -16,6 +16,15 @@
 ;   [050A] = 0x0001   Auto-EOI: ISR cleared automatically
 ;   [050C] = 0x0002   Nested HW interrupts: both handlers ran
 
+; @name IRQ (advanced)
+; @expect 0500 0001 IRQ1 fires (INT 9)
+; @expect 0502 0001 Priority: IRQ0 first
+; @expect 0504 0001 Priority: IRQ1 second
+; @expect 0506 0001 Masked IRQ blocked
+; @expect 0508 0001 Specific EOI
+; @expect 050A 0001 Auto-EOI
+; @expect 050C 0002 Nested HW interrupts
+;
 cpu 8086
 org 0x0100
 

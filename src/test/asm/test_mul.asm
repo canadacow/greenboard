@@ -14,6 +14,18 @@
 ;   [0510] = 0xFFFE   SAR AX, 1: 0xFFFC >> 1 = 0xFFFE (sign preserved)
 ;   [0512] = 0x0030   SHL AX, CL (CL=4): 0x0003 << 4 = 0x0030
 
+; @name MUL/IMUL/Shifts
+; @expect 0500 0048 MUL byte
+; @expect 0502 0000 MUL byte hi
+; @expect 0504 4000 MUL word lo
+; @expect 0506 0000 MUL word hi
+; @expect 0508 FFC8 IMUL byte
+; @expect 050A 0100 MUL overflow
+; @expect 050C 00A0 SHL AL,CL
+; @expect 050E 0003 SHR AX,CL
+; @expect 0510 FFFE SAR AX,1
+; @expect 0512 0030 SHL AX,CL
+;
 cpu 8086
 org 0x0100
 

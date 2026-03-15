@@ -12,6 +12,16 @@
 ;   [050C] = 0x0001   DIV by zero: INT 0 handler ran
 ;   [050E] = 0x0001   DIV overflow: INT 0 handler ran
 
+; @name DIV/IDIV
+; @expect 0500 0003 DIV byte quot
+; @expect 0502 0001 DIV byte rem
+; @expect 0504 000A DIV word quot
+; @expect 0506 0000 DIV word rem
+; @expect 0508 FFFD IDIV byte quot
+; @expect 050A FFFF IDIV byte rem
+; @expect 050C 0001 DIV by zero
+; @expect 050E 0001 DIV overflow
+;
 cpu 8086
 org 0x0100
 
