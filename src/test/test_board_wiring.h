@@ -22,6 +22,8 @@
 #include "ic/ic_74s00_u81.h"
 #include "ic/ic_74s04.h"
 #include "ic/ic_74s08.h"
+#include "ic/ic_74s244.h"
+#include "board/isa_slot.h"
 #include <string>
 #include <vector>
 
@@ -95,6 +97,14 @@ struct TestBoard {
     // ROM-specific signals
     Signal rom_addr_sel{"~ROM_ADDR_SEL"};
     Signal cs7{"~CS7"};
+
+    // ISA bus -- slots wired directly to motherboard signals (no buffer ICs).
+    // U14/U15/U16/U17 (ISA bus buffers) are not instantiated in the test bench
+    // because they require DMA direction control; series termination resistors
+    // are aliased, so ISA-side and motherboard-side nets are the same.
+    IsaSlot isa_slots[5] = {
+        IsaSlot("J1"), IsaSlot("J2"), IsaSlot("J3"), IsaSlot("J4"), IsaSlot("J5"),
+    };
 
     // All traces on this test board. On power loss, every trace discharges.
     std::vector<Signal*> all_traces;
@@ -593,6 +603,63 @@ struct TestBoard {
         inv_socket.wire(7, gnd);
         inv_socket.wire(14, vcc);
         inv_ic = inv_socket.emplace<IC_74S04>();
+
+        // --- ISA Slots (J1-J5) ---
+        // Wired directly to motherboard signals. Buffer ICs (U14-U17) omitted
+        // because series termination resistors are aliased and no DMA is present.
+        // All 5 slots share identical wiring (parallel bus).
+        for (auto& slot : isa_slots) {
+            // Data bus: SD0-SD7 = D0-D7 (pins 2-9 = SD7..SD0)
+            slot.wire_pin(2, &d7);  slot.wire_pin(3, &d6);
+            slot.wire_pin(4, &d5);  slot.wire_pin(5, &d4);
+            slot.wire_pin(6, &d3);  slot.wire_pin(7, &d2);
+            slot.wire_pin(8, &d1);  slot.wire_pin(9, &d0);
+
+            // Address bus: SA0-SA19 = XA0-XA19 (pins 31..12 = SA0..SA19)
+            for (int a = 0; a < 20; ++a)
+                slot.wire_pin(31 - a, &xa[a]);
+
+            // Control signals
+            slot.wire_pin(11, &gnd);       // AEN (A11) = Low (no DMA)
+            slot.wire_pin(42, &memw);      // ~MEMW (B11)
+            slot.wire_pin(43, &memr);      // ~MEMR (B12)
+            slot.wire_pin(44, &iow_sig);   // ~IOW (B13)
+            slot.wire_pin(45, &ior_sig);   // ~IOR (B14)
+
+            // Clocks
+            slot.wire_pin(51, &clk);       // CLK (B20)
+            slot.wire_pin(61, &osc);       // OSC (B30)
+
+            // Reset
+            slot.wire_pin(33, &reset);     // RESET DRV (B2)
+
+            // AEN_BRD on B28 (IBM 5150 uses this pin for AEN_BRD, not ALE)
+            slot.wire_pin(59, &gnd);       // AEN_BRD = Low (no DMA)
+
+            // IRQ lines
+            slot.wire_pin(35, &irq2);      // IRQ2 (B4)
+            slot.wire_pin(52, &irq7);      // IRQ7 (B21)
+            slot.wire_pin(53, &irq6);      // IRQ6 (B22)
+            slot.wire_pin(54, &irq5);      // IRQ5 (B23)
+            slot.wire_pin(55, &irq4);      // IRQ4 (B24)
+            slot.wire_pin(56, &irq3);      // IRQ3 (B25)
+
+            // DMA (inactive: ~DACKx deasserted = High, DRQx/TC unconnected)
+            slot.wire_pin(46, &vcc);       // ~DACK3 (B15)
+            slot.wire_pin(48, &vcc);       // ~DACK1 (B17)
+            slot.wire_pin(50, &vcc);       // ~DACK0 (B19)
+            slot.wire_pin(57, &vcc);       // ~DACK2 (B26)
+
+            // Power rails
+            slot.wire_pin(32, &gnd);       // GND (B1)
+            slot.wire_pin(41, &gnd);       // GND (B10)
+            slot.wire_pin(62, &gnd);       // GND (B31)
+            slot.wire_pin(34, &vcc);       // +5V (B3)
+            slot.wire_pin(60, &vcc);       // +5V (B29)
+            slot.wire_pin(36, &gnd);       // -5V (B5) stub
+            slot.wire_pin(38, &gnd);       // -12V (B7) stub
+            slot.wire_pin(40, &gnd);       // +12V (B9) stub
+        }
     }
 
     void register_all(Scheduler& scheduler) {

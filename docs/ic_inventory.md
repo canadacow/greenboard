@@ -2,7 +2,7 @@
 
 Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets)
 
-## Implemented (20 IC types, 63 sockets)
+## Implemented (21 IC types, 63 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -23,6 +23,7 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U81 | 74S00 | Quad NAND (RAS/CAS timing, virtual TD1 inside) |
 | U49 | 74S08 | Quad AND (RAS decode gating) |
 | U83 | 74S04 | Hex inverter (~WE buffer for DRAM) |
+| -- | 74S244 | Octal tri-state buffer (IC type implemented, not yet instantiated) |
 | U37-U45,U53-U61,U69-U77,U85-U93 | 4164 (IC_DRAM_256K) | DRAM banks 0-3 (36 chips, 256KB + parity) |
 | U28-U33 | 8K_X_8ROS | ROM (6 sockets) |
 
@@ -62,7 +63,7 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 
 ## Non-IC Components
 
-- J1-J5: ISA slots (62p each)
+- J1-J5: ISA slots (62p each, wired in test bench -- direct to XA/D/cmd, no buffer ICs)
 - J6: Cassette port, J7: Keyboard port, J8: +RUN jumper
 - SW1, SW2: DIP switch banks (config: RAM size, display, FPU)
 

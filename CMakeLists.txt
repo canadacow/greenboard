@@ -40,6 +40,7 @@ add_executable(bench
     src/ic/ic_74s00.cpp
     src/ic/ic_74s04.cpp
     src/ic/ic_74s08.cpp
+    src/ic/ic_74s244.cpp
     src/ic/ic_74s158.cpp
     src/ic/ic_td1.cpp
     src/ic/ic_74s74.cpp
@@ -78,6 +79,7 @@ add_executable(test_8088
     src/core/callback_component.cpp
     src/host_platform/fiber_minicoro.cpp
     src/board/socket.cpp
+    src/board/isa_slot.cpp
     src/ic/ic_8088.cpp
     src/ic/ic_8288.cpp
     src/ic/ic_74s245.cpp
@@ -89,6 +91,7 @@ add_executable(test_8088
     src/ic/ic_74s00.cpp
     src/ic/ic_74s04.cpp
     src/ic/ic_74s08.cpp
+    src/ic/ic_74s244.cpp
     src/ic/ic_74s158.cpp
     src/ic/ic_td1.cpp
     src/ic/ic_74s74.cpp
