@@ -2,7 +2,7 @@
 
 Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets)
 
-## Implemented (18 IC types, 61 sockets)
+## Implemented (19 IC types, 62 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -14,7 +14,8 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U36 | 8255A | PPI |
 | U35 | 8237A | DMA |
 | U7,U9,U10 | 74S373 | Address latches |
-| U8 | 74S245 | Data bus transceiver |
+| U8 | 74S245 | Data bus transceiver (AD<->D) |
+| U12 | 74S245 | Memory data bus transceiver (D<->MD, DRAM read/write) |
 | U26 | 74S175 | PCLK divider / kbd sync |
 | U46,U47,U48,U65,U66 | 74S138 | Address decode (ROM/RAM/IO/ISA chip selects) |
 | U64 | 74S20 | Dual 4-input NAND (ROM address decode) |
@@ -24,11 +25,11 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U37-U45,U53-U61,U69-U77,U85-U93 | 4164 (IC_DRAM_256K) | DRAM banks 0-3 (36 chips, 256KB + parity) |
 | U28-U33 | 8K_X_8ROS | ROM (6 sockets) |
 
-## Not Implemented -- Meaningful ICs (12 sockets)
+## Not Implemented -- Meaningful ICs (11 sockets)
 
 | Ref | IC | Pins | Role |
 |---|---|---|---|
-| U12,U13,U14 | 74S245 | 20 | System bus transceivers (SD0-SD7 buffering) |
+| U13,U14 | 74S245 | 20 | System bus transceivers (D<->XD, cmd strobes) |
 | U15,U16,U17 | 74S244 | 20 | Address bus buffers (A0-A19 onto system bus) |
 | U23 | 74S244 | 20 | Data bus buffer (ISA slots) |
 | U18 | 74S373 | 20 | DMA page latch |

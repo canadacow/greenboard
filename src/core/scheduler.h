@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 #include <spdlog/spdlog.h>
@@ -115,147 +117,8 @@ public:
                 spdlog::info("[Scheduler]   - {}", waves_[w][i]->name());
         }
 
-        //dump_dot("callback_graph");
         dump_unified_waves();
         resolved_ = true;
-    }
-
-    // Write a Graphviz DOT file showing ALL registered components with
-    // per-pin ports and directed edges for each signal connecting an output
-    // to an input. Flat layout -- no clustering by scheduling category.
-    void dump_dot(const char* base) {
-        std::string dot_path = std::string(base) + ".dot";
-        std::string svg_path = std::string(base) + ".svg";
-        FILE* f = std::fopen(dot_path.c_str(), "w");
-        if (!f) return;
-
-        // Gather every registered component into a flat list.
-        std::vector<Component*> all;
-        for (int i = 0; i < visual_count_;    ++i) all.push_back(visuals_[i]);
-        for (int i = 0; i < fiber_count_;     ++i) all.push_back(fibers_[i]);
-        for (int i = 0; i < callback_count_;  ++i) all.push_back(callbacks_[i]);
-        int total = static_cast<int>(all.size());
-
-        std::fprintf(f, "digraph component_graph {\n");
-        std::fprintf(f, "  rankdir=LR;\n");
-        std::fprintf(f, "  node [shape=none fontname=\"Consolas\" fontsize=10];\n");
-        std::fprintf(f, "  edge [fontname=\"Consolas\" fontsize=8 color=\"#555555\"];\n");
-        std::fprintf(f, "  graph [nodesep=0.4 ranksep=1.2];\n\n");
-
-        // Collect per-component pin lists: in-only, out-only, bidirectional (io).
-        struct PinInfo { int slot; const char* name; };
-        std::vector<std::vector<PinInfo>> in_pins(total), out_pins(total), io_pins(total);
-
-        for (int i = 0; i < total; ++i) {
-            auto* c = all[i];
-            for (int s = 1; s < SignalPool::count; ++s) {
-                const char* nm = SignalPool::names[s];
-                if (!nm) continue;
-                bool is_in  = (c->inputs()[s / 64]  >> (s % 64)) & 1;
-                bool is_out = (c->outputs()[s / 64] >> (s % 64)) & 1;
-                if (is_in && is_out) io_pins[i].push_back({s, nm});
-                else if (is_in)      in_pins[i].push_back({s, nm});
-                else if (is_out)     out_pins[i].push_back({s, nm});
-            }
-        }
-
-        // Uniform header color for all components.
-        const char* hdr_color = "#336699";
-
-        // Emit each component as an HTML table node.
-        for (int idx = 0; idx < total; ++idx) {
-            auto* c = all[idx];
-            int ni  = static_cast<int>(in_pins[idx].size());
-            int nio = static_cast<int>(io_pins[idx].size());
-            int no  = static_cast<int>(out_pins[idx].size());
-            int cols = (nio > 0) ? 5 : 3;
-            int rows = std::max({ni, nio, no, 1});
-            std::fprintf(f, "  n%d [label=<\n", idx);
-            std::fprintf(f, "    <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\">\n");
-            if (!c->description().empty())
-                std::fprintf(f, "      <TR><TD COLSPAN=\"%d\" BGCOLOR=\"%s\">"
-                                "<FONT COLOR=\"white\"><I>%s</I></FONT></TD></TR>\n",
-                             cols, hdr_color, c->description().c_str());
-            std::fprintf(f, "      <TR><TD COLSPAN=\"%d\" BGCOLOR=\"%s\">"
-                            "<FONT COLOR=\"white\"><B>%s</B></FONT></TD></TR>\n",
-                         cols, hdr_color, c->name().c_str());
-            // Column headers.
-            std::fprintf(f, "      <TR>"
-                            "<TD BGCOLOR=\"#dddddd\"><B>in</B></TD>"
-                            "<TD></TD>");
-            if (nio > 0)
-                std::fprintf(f, "<TD BGCOLOR=\"#dddddd\"><B>io</B></TD>"
-                                "<TD></TD>");
-            std::fprintf(f, "<TD BGCOLOR=\"#dddddd\"><B>out</B></TD></TR>\n");
-            for (int r = 0; r < rows; ++r) {
-                std::fprintf(f, "      <TR>");
-                if (r < ni)
-                    std::fprintf(f, "<TD PORT=\"i%d\" BGCOLOR=\"#eeffee\" ALIGN=\"LEFT\">%s</TD>",
-                                 in_pins[idx][r].slot, in_pins[idx][r].name);
-                else
-                    std::fprintf(f, "<TD></TD>");
-                std::fprintf(f, "<TD>  </TD>");
-                if (nio > 0) {
-                    if (r < nio)
-                        std::fprintf(f, "<TD PORT=\"b%d\" BGCOLOR=\"#fff3dd\" ALIGN=\"CENTER\">%s</TD>",
-                                     io_pins[idx][r].slot, io_pins[idx][r].name);
-                    else
-                        std::fprintf(f, "<TD></TD>");
-                    std::fprintf(f, "<TD>  </TD>");
-                }
-                if (r < no)
-                    std::fprintf(f, "<TD PORT=\"o%d\" BGCOLOR=\"#ffeeee\" ALIGN=\"RIGHT\">%s</TD>",
-                                 out_pins[idx][r].slot, out_pins[idx][r].name);
-                else
-                    std::fprintf(f, "<TD></TD>");
-                std::fprintf(f, "</TR>\n");
-            }
-            if (ni == 0 && nio == 0 && no == 0)
-                std::fprintf(f, "      <TR><TD COLSPAN=\"%d\"><I>(no pins declared)</I></TD></TR>\n", cols);
-            std::fprintf(f, "    </TABLE>>];\n\n");
-        }
-
-        // Helper: find a slot in a pin list.
-        auto has_slot = [](const std::vector<PinInfo>& v, int slot) {
-            for (auto& p : v) if (p.slot == slot) return true;
-            return false;
-        };
-
-        // Edges. For each pair (a,b) and shared signal slot:
-        //   out(a) -> in(b)   : directed arrow
-        //   out(a) -> io(b)   : directed arrow
-        //   io(a)  -> in(b)   : directed arrow
-        //   io(a)  <-> io(b)  : double arrow (emit once, a<b)
-        for (int a = 0; a < total; ++a) {
-            for (int b = 0; b < total; ++b) {
-                if (a == b) continue;
-                for (auto& op : out_pins[a])
-                    if (has_slot(in_pins[b], op.slot))
-                        std::fprintf(f, "  n%d:o%d -> n%d:i%d;\n", a, op.slot, b, op.slot);
-                for (auto& op : out_pins[a])
-                    if (has_slot(io_pins[b], op.slot))
-                        std::fprintf(f, "  n%d:o%d -> n%d:b%d;\n", a, op.slot, b, op.slot);
-                for (auto& bp : io_pins[a])
-                    if (has_slot(in_pins[b], bp.slot))
-                        std::fprintf(f, "  n%d:b%d -> n%d:i%d;\n", a, bp.slot, b, bp.slot);
-                if (a < b)
-                    for (auto& bp : io_pins[a])
-                        if (has_slot(io_pins[b], bp.slot))
-                            std::fprintf(f, "  n%d:b%d -> n%d:b%d [dir=both color=\"#cc8800\"];\n",
-                                         a, bp.slot, b, bp.slot);
-            }
-        }
-
-        std::fprintf(f, "}\n");
-        std::fclose(f);
-        spdlog::info("[Scheduler] wrote {}", dot_path);
-
-        // Try to render SVG.
-        std::string cmd = "\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg " + dot_path + " -o " + svg_path + " 2>&1";
-        if (std::system(cmd.c_str()) == 0)
-            spdlog::info("[Scheduler] rendered {}", svg_path);
-        else
-            spdlog::warn("[Scheduler] dot not found -- SVG not rendered");
     }
 
     // Build per-permutation wave plans for all bidirectional pin configurations.
@@ -392,125 +255,259 @@ public:
             bidir_all_idx[b] = idx_of(bidir_refs_[b].comp);
 
         for (auto& [perm, plan] : wave_plans_) {
-            std::string dot_path = "unified_waves_perm" + std::to_string(perm) + ".dot";
             std::string svg_path = "unified_waves_perm" + std::to_string(perm) + ".svg";
-            FILE* f = std::fopen(dot_path.c_str(), "w");
+            FILE* f = std::fopen(svg_path.c_str(), "w");
             if (!f) continue;
 
-            std::string title = "perm " + std::to_string(perm) + ": " + perm_label(perm);
-            std::fprintf(f, "digraph unified_perm%d {\n", perm);
-            std::fprintf(f, "  rankdir=LR;\n");
-            std::fprintf(f, "  label=\"%s\";\n", title.c_str());
-            std::fprintf(f, "  labelloc=t; fontsize=14; fontname=\"Consolas\";\n");
-            std::fprintf(f, "  node [shape=box fontname=\"Consolas\" fontsize=10 style=filled];\n");
-            std::fprintf(f, "  edge [fontname=\"Consolas\" fontsize=8 color=\"#555555\"];\n");
-            std::fprintf(f, "  graph [nodesep=0.3 ranksep=0.8 compound=true];\n\n");
+            // Layout constants.
+            constexpr int BOX_W = 130, BOX_H = 40, PAD = 30, GAP_X = 20, GAP_Y = 80;
+            constexpr int WAVE_PAD = 12, TITLE_H = 30;
 
-            // Non-wave components (visuals + fibers).
-            for (int i = 0; i < total; ++i) {
-                auto* c = all[i];
-                bool in_wave = false;
-                for (auto& wave : plan.waves)
-                    for (auto* wc : wave)
-                        if (wc == c) { in_wave = true; break; }
-                if (in_wave) continue;
-                std::string label = c->description().empty()
-                    ? c->name() : c->description() + "\\n" + c->name();
-                std::fprintf(f, "  n%d [label=\"%s\" fillcolor=\"#dddddd\"];\n",
-                             i, label.c_str());
+            // Assign each component a (wave, slot) position.
+            struct NodePos { int x, y, w, h; int wave; };
+            std::vector<NodePos> pos(total);
+            std::vector<bool> in_wave_flag(total, false);
+            for (auto& wave : plan.waves)
+                for (auto* wc : wave)
+                    in_wave_flag[idx_of(wc)] = true;
+
+            // Non-wave components (visuals).
+            std::vector<int> non_wave;
+            for (int i = 0; i < total; ++i)
+                if (!in_wave_flag[i]) non_wave.push_back(i);
+
+            // Max row width.
+            int max_cols = static_cast<int>(non_wave.size());
+            for (auto& wave : plan.waves)
+                max_cols = std::max(max_cols, static_cast<int>(wave.size()));
+
+            int svg_w = PAD * 2 + max_cols * (BOX_W + GAP_X) - GAP_X + WAVE_PAD * 2;
+            if (svg_w < 600) svg_w = 600;
+            int cur_y = PAD + TITLE_H;
+
+            // Position non-wave row.
+            if (!non_wave.empty()) {
+                int row_w = static_cast<int>(non_wave.size()) * (BOX_W + GAP_X) - GAP_X;
+                int x0 = (svg_w - row_w) / 2;
+                for (int i = 0; i < static_cast<int>(non_wave.size()); ++i)
+                    pos[non_wave[i]] = {x0 + i * (BOX_W + GAP_X), cur_y, BOX_W, BOX_H, -1};
+                cur_y += BOX_H + GAP_Y;
             }
-            std::fprintf(f, "\n");
 
-            // Wave subgraphs.
+            // Position wave rows.
+            struct WaveRect { int x, y, w, h; };
+            std::vector<WaveRect> wave_rects;
             for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
-                std::fprintf(f, "  subgraph cluster_wave%d {\n", w);
-                std::fprintf(f, "    label=\"wave %d\";\n", w);
-                std::fprintf(f, "    style=filled; color=\"%s\";\n", wave_colors[w % 8]);
-                std::fprintf(f, "    fontname=\"Consolas\"; fontsize=11;\n");
-                for (auto* c : plan.waves[w]) {
-                    int idx = idx_of(c);
-                    std::string label = c->description().empty()
-                        ? c->name() : c->description() + "\\n" + c->name();
-                    std::fprintf(f, "    n%d [label=\"%s\" fillcolor=\"white\"];\n",
-                                 idx, label.c_str());
+                int nc = static_cast<int>(plan.waves[w].size());
+                int row_w = nc * (BOX_W + GAP_X) - GAP_X;
+                int wave_w = row_w + WAVE_PAD * 2;
+                int x0 = (svg_w - wave_w) / 2;
+                int wave_h = BOX_H + WAVE_PAD * 2 + 16;
+                wave_rects.push_back({x0, cur_y, wave_w, wave_h});
+                int bx = x0 + WAVE_PAD;
+                for (int i = 0; i < nc; ++i) {
+                    int idx = idx_of(plan.waves[w][i]);
+                    pos[idx] = {bx + i * (BOX_W + GAP_X), cur_y + WAVE_PAD + 16, BOX_W, BOX_H, w};
                 }
-                std::fprintf(f, "  }\n\n");
+                cur_y += wave_h + GAP_Y;
             }
+            int svg_h = cur_y + PAD;
 
-            // Compute per-component effective outputs/inputs for this permutation.
-            // Bidir pins are resolved to directed based on the permutation bit.
+            // Compute effective outputs/inputs for this permutation.
             std::vector<std::array<uint64_t, W>> eff_out(total), eff_in(total);
             for (int i = 0; i < total; ++i) {
                 auto* c = all[i];
-                for (int w = 0; w < W; ++w) {
-                    eff_out[i][w] = c->outputs()[w] & ~c->inputs()[w];
-                    eff_in[i][w]  = c->inputs()[w]  & ~c->async_inputs()[w];
+                for (int w2 = 0; w2 < W; ++w2) {
+                    eff_out[i][w2] = c->outputs()[w2] & ~c->inputs()[w2];
+                    // Include async_inputs so CLK->CPU etc. appear as edges.
+                    eff_in[i][w2]  = c->inputs()[w2] | c->async_inputs()[w2];
                 }
             }
             for (int b = 0; b < num_bidir; ++b) {
                 int ci = bidir_all_idx[b];
                 if (ci < 0) continue;
                 BidirDir dir = perm_dir(perm, b);
-                for (int w = 0; w < W; ++w) {
-                    uint64_t om = bidir_refs_[b].block->out_mask[w];
-                    uint64_t im = bidir_refs_[b].block->in_mask[w];
+                for (int w2 = 0; w2 < W; ++w2) {
+                    uint64_t om = bidir_refs_[b].block->out_mask[w2];
+                    uint64_t im = bidir_refs_[b].block->in_mask[w2];
                     switch (dir) {
                         case BidirDir::Output:
-                            eff_out[ci][w] |= om;  eff_in[ci][w] &= ~om;
-                            eff_out[ci][w] &= ~im;
+                            eff_out[ci][w2] |= om;  eff_in[ci][w2] &= ~om;
+                            eff_out[ci][w2] &= ~im;
                             break;
                         case BidirDir::Input:
-                            eff_out[ci][w] &= ~om;
-                            eff_out[ci][w] |= im;  eff_in[ci][w] &= ~im;
+                            eff_out[ci][w2] &= ~om;
+                            eff_out[ci][w2] |= im;  eff_in[ci][w2] &= ~im;
                             break;
                         case BidirDir::HiZ:
-                            eff_out[ci][w] &= ~om;  eff_in[ci][w] &= ~om;
-                            eff_out[ci][w] &= ~im;  eff_in[ci][w] &= ~im;
+                            eff_out[ci][w2] &= ~om;  eff_in[ci][w2] &= ~om;
+                            eff_out[ci][w2] &= ~im;  eff_in[ci][w2] &= ~im;
                             break;
                     }
                 }
             }
 
-            // Edges: directed based on this permutation's effective pins.
-            // Ordering edges (solid grey), async edges (dashed red).
+            // Collapse edges by (src, dst). Distinguish sync vs async signals.
+            struct EdgeInfo {
+                std::vector<std::string> sync_names;
+                std::vector<std::string> async_names;
+            };
+            std::map<std::pair<int,int>, EdgeInfo> edges;
             for (int a = 0; a < total; ++a) {
                 for (int b2 = 0; b2 < total; ++b2) {
                     if (a == b2) continue;
-                    // Collect signal names for ordering edges and async edges.
                     for (int s = 1; s < SignalPool::count; ++s) {
                         const char* nm = SignalPool::names[s];
                         if (!nm) continue;
-                        int w = s / 64;
+                        int w2 = s / 64;
                         uint64_t bit = uint64_t(1) << (s % 64);
-                        bool a_drives = (eff_out[a][w] & bit) != 0;
-                        if (!a_drives) continue;
-                        bool b_reads  = (eff_in[b2][w] & bit) != 0;
-                        bool b_async  = (all[b2]->async_inputs()[w] & bit) != 0;
-                        if (b_reads)
-                            std::fprintf(f, "  n%d -> n%d [label=\"%s\"];\n", a, b2, nm);
+                        if (!(eff_out[a][w2] & bit)) continue;
+                        bool b_sync  = (all[b2]->inputs()[w2] & bit) != 0;
+                        bool b_async = (all[b2]->async_inputs()[w2] & bit) != 0;
+                        if (b_sync)
+                            edges[{a, b2}].sync_names.push_back(nm);
                         else if (b_async)
-                            std::fprintf(f, "  n%d -> n%d [label=\"%s\" style=dashed color=\"#cc4444\"];\n", a, b2, nm);
+                            edges[{a, b2}].async_names.push_back(nm);
                     }
                 }
             }
 
-            std::fprintf(f, "}\n");
-            std::fclose(f);
-            spdlog::info("[Scheduler] wrote {}", dot_path);
+            // Build compact label: count signals, abbreviate long lists.
+            auto compact_label = [](const std::vector<std::string>& names) -> std::string {
+                if (names.empty()) return "";
+                if (names.size() <= 3) {
+                    std::string s;
+                    for (auto& n : names) { if (!s.empty()) s += ", "; s += n; }
+                    return s;
+                }
+                return names.front() + " ... " + names.back()
+                     + " (" + std::to_string(names.size()) + ")";
+            };
 
-            std::string cmd = "\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg "
-                              + dot_path + " -o " + svg_path + " 2>&1";
-            if (std::system(cmd.c_str()) == 0) {
-                spdlog::info("[Scheduler] rendered {}", svg_path);
-                std::remove(dot_path.c_str());
-            } else {
-                spdlog::warn("[Scheduler] dot not found -- SVG not rendered");
+            // --- Emit SVG ---
+            std::fprintf(f, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+            std::fprintf(f, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" "
+                            "viewBox=\"0 0 %d %d\">\n", svg_w, svg_h, svg_w, svg_h);
+            // White background.
+            std::fprintf(f, "<rect width=\"100%%\" height=\"100%%\" fill=\"white\"/>\n");
+            std::fprintf(f, "<style>\n");
+            std::fprintf(f, "  text { font-family: Consolas, monospace; }\n");
+            std::fprintf(f, "  .title { font-size: 13px; font-weight: bold; fill: #222; }\n");
+            std::fprintf(f, "  .wave-label { font-size: 10px; fill: #666; }\n");
+            std::fprintf(f, "  .node-desc { font-size: 8px; fill: #666; text-anchor: middle; }\n");
+            std::fprintf(f, "  .node-name { font-size: 9px; font-weight: bold; text-anchor: middle; }\n");
+            std::fprintf(f, "  .edge-label { font-size: 7px; fill: #777; }\n");
+            std::fprintf(f, "</style>\n");
+            std::fprintf(f, "<defs>\n");
+            std::fprintf(f, "  <marker id=\"ah\" markerWidth=\"6\" markerHeight=\"4\" "
+                            "refX=\"6\" refY=\"2\" orient=\"auto\" markerUnits=\"strokeWidth\">"
+                            "<polygon points=\"0 0, 6 2, 0 4\" fill=\"context-stroke\"/></marker>\n");
+            std::fprintf(f, "</defs>\n");
+
+            // Title: perm number on first line, bidir states wrapped on second.
+            std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"title\" text-anchor=\"middle\">"
+                            "perm %d</text>\n", svg_w / 2, PAD + 4, perm);
+            std::string plabel = perm_label(perm);
+            std::fprintf(f, "<text x=\"%d\" y=\"%d\" text-anchor=\"middle\" "
+                            "font-size=\"9\" font-family=\"Consolas\" fill=\"#555\">%s</text>\n",
+                         svg_w / 2, PAD + 18, plabel.c_str());
+
+            // Wave backgrounds.
+            for (int w = 0; w < static_cast<int>(wave_rects.size()); ++w) {
+                auto& r = wave_rects[w];
+                std::fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" "
+                                "rx=\"6\" fill=\"%s\" stroke=\"#bbb\"/>\n",
+                             r.x, r.y, r.w, r.h, wave_colors[w % 8]);
+                std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"wave-label\">wave %d</text>\n",
+                             r.x + 6, r.y + 12, w);
             }
+
+            // Edges -- spread attachment points across bottom/top of boxes.
+            // For each node, count outgoing and incoming edge slots.
+            std::map<int, int> out_slot_count, in_slot_count;
+            std::map<int, int> out_slot_next, in_slot_next;
+            for (auto& [key, info] : edges) {
+                out_slot_count[key.first]++;
+                in_slot_count[key.second]++;
+            }
+            for (auto& [id, cnt] : out_slot_count) out_slot_next[id] = 0;
+            for (auto& [id, cnt] : in_slot_count)  in_slot_next[id] = 0;
+
+            // Color edges by wave gap: adjacent=light, skip=darker.
+            const char* gap_colors[] = {"#99bbdd", "#88aa66", "#cc9944", "#cc6666", "#9966aa", "#666666"};
+
+            for (auto& [key, info] : edges) {
+                int src = key.first, dst = key.second;
+                bool is_async = info.sync_names.empty();
+
+                // Spread x attachment across bottom/top of boxes.
+                int src_cnt = out_slot_count[src];
+                int src_idx = out_slot_next[src]++;
+                int dst_cnt = in_slot_count[dst];
+                int dst_idx = in_slot_next[dst]++;
+                int x1 = pos[src].x + (BOX_W * (src_idx + 1)) / (src_cnt + 1);
+                int y1 = pos[src].y + BOX_H;
+                int x2 = pos[dst].x + (BOX_W * (dst_idx + 1)) / (dst_cnt + 1);
+                int y2 = pos[dst].y;
+
+                // Color by wave distance (async always red).
+                int wave_gap = std::abs(pos[dst].wave - pos[src].wave);
+                if (pos[src].wave < 0 || pos[dst].wave < 0) wave_gap = 1;
+                const char* color = is_async ? "#cc4444"
+                    : gap_colors[std::min(wave_gap, 5)];
+                const char* dash = is_async ? " stroke-dasharray=\"4,3\"" : "";
+                const char* marker = "ah";
+
+                // Build full signal list for tooltip.
+                std::string tip;
+                for (auto& n : info.sync_names) { if (!tip.empty()) tip += ", "; tip += n; }
+                if (!info.async_names.empty()) {
+                    if (!tip.empty()) tip += " + ";
+                    for (auto& n : info.async_names) { if (!tip.empty()) tip += ", "; tip += n; }
+                }
+                int nsigs = static_cast<int>(info.sync_names.size() + info.async_names.size());
+
+                std::fprintf(f, "<line x1=\"%d\" y1=\"%d\" x2=\"%d\" y2=\"%d\" "
+                                "stroke=\"%s\" stroke-width=\"%.1f\" opacity=\"0.5\"%s "
+                                "marker-end=\"url(#%s)\">"
+                                "<title>%s</title></line>\n",
+                             x1, y1, x2, y2, color,
+                             nsigs > 4 ? 2.0 : 1.0,
+                             dash, marker, tip.c_str());
+
+                // Compact visible label -- only show for bundles with <= 3 signals.
+                if (nsigs <= 3) {
+                    std::string label = compact_label(
+                        info.sync_names.empty() ? info.async_names : info.sync_names);
+                    int mx = (x1 + x2) / 2 + 4, my = (y1 + y2) / 2 - 2;
+                    std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"edge-label\">%s</text>\n",
+                                 mx, my, label.c_str());
+                }
+            }
+
+            // Node boxes (drawn on top of edges).
+            for (int i = 0; i < total; ++i) {
+                auto* c = all[i];
+                auto& p = pos[i];
+                const char* fill = (p.wave >= 0) ? "white" : "#eee";
+                std::fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" "
+                                "rx=\"4\" fill=\"%s\" stroke=\"#444\" stroke-width=\"1\"/>\n",
+                             p.x, p.y, p.w, p.h, fill);
+                std::string desc = c->description();
+                if (!desc.empty())
+                    std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"node-desc\">%s</text>\n",
+                                 p.x + BOX_W / 2, p.y + 15, desc.c_str());
+                std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"node-name\">%s</text>\n",
+                             p.x + BOX_W / 2, p.y + (desc.empty() ? 24 : 30), c->name().c_str());
+            }
+
+            std::fprintf(f, "</svg>\n");
+            std::fclose(f);
+            spdlog::info("[Scheduler] wrote {}", svg_path);
         }
     }
 
     // Render SVG for every DAG permutation encountered at runtime.
-    // Deletes intermediate .dot files.
     void dump_permutation_svgs() {
         dump_permutation_dots(evals_, static_cast<int>(evals_.size()));
     }

@@ -639,10 +639,13 @@ int main() {
 
     // U12: 74S245 Memory Data Bus Transceiver
     // Bridges D0-D7 (system data bus) to MD0-MD7 (DRAM data bus).
-    // DIR = ~XMEMR (~MEMR, since U14 not implemented): Low=B->A (MD->D, reads), High=A->B (D->MD, writes)
-    // ~OE = ~RAM_ADDR_SEL: enabled when address is in RAM range.
+    // Real 74S245: pin 1=DIR, pin 19=~OE.  Our IC_74S245: pin 1=~G, pin 19=DIR.
+    // BRD: pin 1=~XMEMR (DIR), pin 19=~RAM_ADDR_SEL (~OE).
+    // Wired to match IC_74S245's swapped convention: pin 1=~G=~RAM_ADDR_SEL, pin 19=DIR=~XMEMR.
+    // DIR(~XMEMR) Low=B->A (MD->D, reads), High=A->B (D->MD, writes).
+    // ~G(~RAM_ADDR_SEL) Low=enabled when address is in RAM range.
     Socket mem_xcvr_socket{"U12", "74S245", 20};
-    mem_xcvr_socket.wire(1, ram_addr_sel);   // ~G = ~RAM_ADDR_SEL
+    mem_xcvr_socket.wire(1, ram_addr_sel);   // ~G = ~RAM_ADDR_SEL (~OE on real chip)
     mem_xcvr_socket.wire(2, d0);             // A1 = D0
     mem_xcvr_socket.wire(3, d1);             // A2 = D1
     mem_xcvr_socket.wire(4, d2);             // A3 = D2
@@ -660,7 +663,7 @@ int main() {
     mem_xcvr_socket.wire(16, md2);           // B3 = MD2
     mem_xcvr_socket.wire(17, md1);           // B2 = MD1
     mem_xcvr_socket.wire(18, md0);           // B1 = MD0
-    mem_xcvr_socket.wire(19, memr);          // DIR = ~XMEMR (~MEMR)
+    mem_xcvr_socket.wire(19, memr);          // DIR = ~XMEMR (~MEMR, since U14 not implemented)
     mem_xcvr_socket.wire(20, vcc);
     auto* mem_xcvr = mem_xcvr_socket.emplace<IC_74S245>();
 
