@@ -1,4 +1,5 @@
 #include "ic/ic_74s00_u81.h"
+#include <spdlog/spdlog.h>
 
 namespace bench {
 
@@ -25,7 +26,8 @@ void IC_74S00_U81::install(Socket& socket) {
     gates_[1].b = connect_pin(5);
     gates_[1].y = pin(6);           // RAS (output)
 
-    // Gate 3: pins 9,10 -> 8
+    // Gate 3: pins 9,10 -> 8   (~CAS output)
+    // Physical pin inputs ignored -- gate 3 uses virtual TD1 (delayed RAS).
     gates_[2].a = connect_pin(9);
     gates_[2].b = connect_pin(10);
     gates_[2].y = pin(8);
@@ -46,21 +48,21 @@ void IC_74S00_U81::install(Socket& socket) {
         declare_output(g.y);
     }
 
-    // Gate 3 inputs (pins 9,10) come from TD1's one-cycle delay.
-    // They carry the previous cycle's value -- no same-cycle dependency.
-    declare_async_input(gates_[2].a);
-    declare_async_input(gates_[2].b);
-
-    // RAS is the shared signal (gate 1 input B = gate 2 output Y).
     ras_pin_ = gates_[0].b;
 
-    // Gate 2 always drives RAS. Tell the scheduler so TD1 orders after U81.
     declare_bidir_block({ras_pin_},
         BidirDir::Output,
         []() { return BidirDir::Output; });
 }
 
+void IC_74S00_U81::connect_addr_sel(Signal& addr_sel) {
+    addr_sel_pin_ = addr_sel.pin();
+    declare_output(addr_sel_pin_);
+}
+
 void IC_74S00_U81::on_power_on() {
+    td1_pending_ = Level::HiZ;
+    if (addr_sel_pin_.idx != 0) addr_sel_pin_.drive(Level::HiZ);
     for (auto& g : gates_) {
         bool both = g.a.level() == Level::High && g.b.level() == Level::High;
         g.y.drive(both ? Level::Low : Level::High);
@@ -68,12 +70,44 @@ void IC_74S00_U81::on_power_on() {
 }
 
 void IC_74S00_U81::on_power_off() {
+    td1_pending_ = Level::HiZ;
+    if (addr_sel_pin_.idx != 0) addr_sel_pin_.release();
     for (auto& g : gates_)
         g.y.release();
 }
 
 void IC_74S00_U81::on_signal_change(Fiber /*caller*/) {
-    for (auto& g : gates_) {
+    // Gate 2 first (drives RAS)
+    {
+        auto& g = gates_[1];
+        bool both = g.a.level() == Level::High && g.b.level() == Level::High;
+        Level out = both ? Level::Low : Level::High;
+        spdlog::trace("[U81] gate2: a={} b={} -> y={}",
+            g.a.level() == Level::High ? "H" : g.a.level() == Level::Low ? "L" : "Z",
+            g.b.level() == Level::High ? "H" : g.b.level() == Level::Low ? "L" : "Z",
+            out == Level::Low ? "L" : "H");
+        g.y.drive(out);
+    }
+
+    // Gate 3: virtual TD1 -- use delayed RAS, not pin inputs
+    {
+        Level ras_now = gates_[1].y.level();
+        // Drive ADDR_SEL with delayed RAS (before updating)
+        if (addr_sel_pin_.idx != 0) addr_sel_pin_.drive(td1_pending_);
+        // NAND of two copies of delayed RAS
+        bool both = td1_pending_ == Level::High && td1_pending_ == Level::High;
+        Level out = both ? Level::Low : Level::High;
+        spdlog::trace("[U81] gate3(vTD1): ras_now={} delayed={} -> y={}",
+            ras_now == Level::High ? "H" : ras_now == Level::Low ? "L" : "Z",
+            td1_pending_ == Level::High ? "H" : td1_pending_ == Level::Low ? "L" : "Z",
+            out == Level::Low ? "L" : "H");
+        gates_[2].y.drive(out);
+        td1_pending_ = ras_now;
+    }
+
+    // Gates 1 and 4
+    for (int i : {0, 3}) {
+        auto& g = gates_[i];
         bool both = g.a.level() == Level::High && g.b.level() == Level::High;
         g.y.drive(both ? Level::Low : Level::High);
     }

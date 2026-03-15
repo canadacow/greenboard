@@ -32,7 +32,7 @@ void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank
     pin_a_[6] = pin(chip0, 13);   // A6
     pin_a_[7] = pin(chip0, 9);    // A7
 
-    pin_we_  = connect_pin(chip0, 3);   // ~WE
+    pin_we_  = connect_pin(chip0, 3);   // ~WE (set at T1, read at ~CAS time)
     pin_vcc_ = connect_pin(chip0, 8);   // VCC
 
     for (int b = 0; b < 4; ++b) {
@@ -54,13 +54,24 @@ void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank
 
     // Pin directions for wiring visualization.
     for (int i = 0; i < 8; ++i) declare_input(pin_a_[i]);   // MA0-MA7
-    declare_input(pin_we_);                                   // ~WE
+    declare_async_input(pin_we_);                              // ~WE (driven at T1, sampled at ~CAS)
     for (int b = 0; b < 4; ++b) {
         declare_input(banks_[b].ras);                         // ~RAS
         declare_input(banks_[b].cas);                         // ~CAS
-        // DIN/DOUT share the same MD signal -- bidirectional.
         for (int i = 0; i < 9; ++i) { declare_input(banks_[b].din[i]); declare_output(banks_[b].din[i]); }
     }
+
+    // MD is bidirectional: Output during read (~WE High), Input during write (~WE Low).
+    // Collect all DOUT pins across all banks for the bidir block.
+    std::vector<Pin> md_pins;
+    for (int b = 0; b < 4; ++b)
+        for (int i = 0; i < 9; ++i)
+            if (banks_[b].din[i].idx != 0)
+                md_pins.push_back(banks_[b].din[i]);
+    declare_bidir_block(
+        std::initializer_list<Pin>(md_pins.data(), md_pins.data() + md_pins.size()),
+        BidirDir::Input | BidirDir::Output,
+        [this]() { return pin_we_.level() == Level::Low ? BidirDir::Input : BidirDir::Output; });
 }
 
 void IC_DRAM_256K::on_power_on() {
@@ -85,16 +96,23 @@ void IC_DRAM_256K::on_power_off() {
 }
 
 void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
-    
+
     for (int b = 0; b < 4; ++b) {
         auto& bank = banks_[b];
         Level ras_cur = bank.ras.level();
         Level cas_cur = bank.cas.level();
 
+        spdlog::trace("[DRAM] bank {} eval: ~RAS={} ~CAS={} row_latched={} driving={}",
+            b,
+            ras_cur == Level::High ? "H" : ras_cur == Level::Low ? "L" : "Z",
+            cas_cur == Level::High ? "H" : cas_cur == Level::Low ? "L" : "Z",
+            bank.row_latched, bank.driving);
+
         // ~RAS falling edge: latch row address
         if (ras_cur == Level::Low && bank.ras_prev != Level::Low) {
             bank.row_addr = read_address();
             bank.row_latched = true;
+            spdlog::trace("[DRAM] bank {} ~RAS fell, row=0x{:02X}", b, bank.row_addr);
         }
 
         // ~RAS rising edge: end of cycle, release outputs
@@ -113,6 +131,7 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
             uint32_t addr = (static_cast<uint32_t>(b) << 16)
                           | (static_cast<uint32_t>(bank.row_addr) << 8)
                           | col_addr;
+            spdlog::trace("[DRAM] bank {} ~CAS fell, col=0x{:02X} addr=0x{:05X} we={}", b, col_addr, addr, pin_we_.level() == Level::Low ? "W" : "R");
 
             if (pin_we_.level() == Level::Low) {
                 // Write: sample DIN pins, store to RAM
@@ -126,6 +145,7 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
             } else {
                 // Read: drive DOUT pins from RAM
                 uint8_t data = ram_[addr];
+                spdlog::trace("[DRAM] bank {} READ addr=0x{:05X} data=0x{:02X} -> driving DOUT", b, addr, data);
                 for (int i = 0; i < 8; ++i) {
                     bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
                 }

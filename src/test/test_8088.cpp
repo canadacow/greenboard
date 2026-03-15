@@ -34,7 +34,7 @@
 #include "ic/ic_74s00.h"
 #include "ic/ic_74s00_u81.h"
 #include "ic/ic_74s08.h"
-#include "ic/ic_td1.h"
+// ic_td1.h no longer needed -- TD1 is virtual inside U81
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <cstring>
@@ -108,6 +108,15 @@ public:
         // Pin directions for dependency graph.
         for (int i = 0; i < 8; ++i) { declare_input(dram_md[i]); declare_output(dram_md[i]); }
         declare_output(dram_we);
+
+        // MD is bidirectional: Output during DRAM writes, Input during DRAM reads, HiZ otherwise.
+        declare_bidir_block({dram_md[0], dram_md[1], dram_md[2], dram_md[3],
+                             dram_md[4], dram_md[5], dram_md[6], dram_md[7]},
+                            BidirDir::Input | BidirDir::Output | BidirDir::HiZ,
+                            [this]() {
+                                if (!dram_cycle) return BidirDir::HiZ;
+                                return is_write_cycle() ? BidirDir::Output : BidirDir::Input;
+                            });
     }
 
     // T-state machine
@@ -194,6 +203,16 @@ private:
         for (int i = 0; i < 8; ++i)
             if (dram_md[i].level() == Level::High)
                 val |= (1u << i);
+        spdlog::trace("[BusGlue] read_dram_dout: MD7..0 = {}{}{}{}{}{}{}{} val=0x{:02X}",
+            dram_md[7].level() == Level::High ? "H" : dram_md[7].level() == Level::Low ? "L" : "Z",
+            dram_md[6].level() == Level::High ? "H" : dram_md[6].level() == Level::Low ? "L" : "Z",
+            dram_md[5].level() == Level::High ? "H" : dram_md[5].level() == Level::Low ? "L" : "Z",
+            dram_md[4].level() == Level::High ? "H" : dram_md[4].level() == Level::Low ? "L" : "Z",
+            dram_md[3].level() == Level::High ? "H" : dram_md[3].level() == Level::Low ? "L" : "Z",
+            dram_md[2].level() == Level::High ? "H" : dram_md[2].level() == Level::Low ? "L" : "Z",
+            dram_md[1].level() == Level::High ? "H" : dram_md[1].level() == Level::Low ? "L" : "Z",
+            dram_md[0].level() == Level::High ? "H" : dram_md[0].level() == Level::Low ? "L" : "Z",
+            val);
         return val;
     }
 
@@ -203,7 +222,9 @@ private:
             for (int i = 0; i < 8; ++i) dram_md[i].release();
             dram_driving_md = false;
         }
-        dram_cycle = false;
+        // NOTE: dram_cycle is NOT cleared here. It stays true so the bidir
+        // lambda returns Input (not HiZ) when the scheduler picks the perm
+        // for the next eval. Cleared only on IDLE transition.
     }
 
     uint8_t io_read(uint16_t port) { return io[port]; }
@@ -241,6 +262,7 @@ private:
 
     void on_clk_rising() {
         uint8_t status = decode_status();
+        spdlog::trace("[BusGlue] CLK rise: tstate={} status={} dram_cycle={}", tstate_name(), status, dram_cycle);
 
         switch (t_state) {
         case TState::IDLE:
@@ -248,6 +270,7 @@ private:
                 t_state = TState::T1;
                 cycle_type = status;
                 cycle_addr = read_address();
+                spdlog::trace("[BusGlue] IDLE->T1 status={} addr=0x{:05X} dram={}", cycle_type, cycle_addr & 0xFFFFF, is_dram_range(cycle_addr & 0xFFFFF));
                 if (!is_io_cycle() && !is_inta_cycle()
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
@@ -258,22 +281,25 @@ private:
 
         case TState::T1:
             t_state = TState::T2;
+            spdlog::trace("[BusGlue] T1->T2");
             break;
 
         case TState::T2:
             t_state = TState::T3;
-            if (dram_cycle) {
-                if (is_read_cycle()) {
+            spdlog::trace("[BusGlue] T2->T3 dram_cycle={} read={}", dram_cycle, is_read_cycle());
+            if (is_read_cycle()) {
+                if (dram_cycle) {
                     uint8_t val = read_dram_dout();
+                    spdlog::trace("[BusGlue] T3 DRAM read addr=0x{:05X} val=0x{:02X}", cycle_addr & 0xFFFFF, val);
                     drive_d(val);
-                }
-            } else if (is_read_cycle()) {
-                if (is_inta_cycle()) {
+                } else if (is_inta_cycle()) {
                 } else if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
                 } else if (is_io_cycle()) {
                     uint8_t val = io_read(cycle_addr & 0xFFFF);
+                    spdlog::trace("[BusGlue] T3 IO read port=0x{:04X} val=0x{:02X}", cycle_addr & 0xFFFF, val);
                     drive_d(val);
                 } else {
+                    spdlog::trace("[BusGlue] T3 non-DRAM read addr=0x{:05X} (ROM/hw path)", cycle_addr & 0xFFFFF);
                 }
             } else if (is_write_cycle()) {
                 if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
@@ -287,6 +313,7 @@ private:
 
         case TState::T3:
             t_state = TState::T4;
+            spdlog::trace("[BusGlue] T3->T4 releasing DRAM signals (dram_cycle stays {})", dram_cycle);
             if (dram_cycle)
                 release_dram_signals();
             break;
@@ -297,15 +324,19 @@ private:
                 cycle_type = status;
                 bus_cycle_count++;
                 cycle_addr = read_address();
+                spdlog::trace("[BusGlue] T4->T1 status={} addr=0x{:05X} dram={}", cycle_type, cycle_addr & 0xFFFFF, is_dram_range(cycle_addr & 0xFFFFF));
                 if (!is_io_cycle() && !is_inta_cycle()
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
                     drive_dram_we();
+                } else {
+                    dram_cycle = false;
                 }
             } else {
                 if (is_read_cycle()) {
                     release_d();
                 }
+                dram_cycle = false;
                 bus_cycle_count++;
                 t_state = TState::IDLE;
             }
@@ -562,10 +593,7 @@ int main() {
     Signal ras("RAS");                 // U81 gate 2 output → TD1 input, U65 G1
     Signal cas("~CAS");               // U81 gate 3 output → U47 ~G2B
     Signal dram_we("~WE_DRAM");
-    Signal addr_sel("ADDR_SEL");       // TD1 pin 10 output → 74S158 mux select
-    // TD1 output intermediates (delayed copies of RAS)
-    Signal td1_out8("N-000258");       // TD1 pin 8 → U81 gate 3 input
-    Signal td1_out12("N-000253");      // TD1 pin 12 → U81 gate 3 input
+    Signal addr_sel("ADDR_SEL");       // Delayed RAS, driven by U81's virtual TD1
     Signal md0("MD0"), md1("MD1"), md2("MD2"), md3("MD3");
     Signal md4("MD4"), md5("MD5"), md6("MD6"), md7("MD7");
     Signal mdp("MDP");
@@ -622,7 +650,7 @@ int main() {
     all_traces.push_back(&refrsh_gate);
     all_traces.push_back(&bank_sel_y4); all_traces.push_back(&bank_sel_y5);
     all_traces.push_back(&bank_sel_y6); all_traces.push_back(&bank_sel_y7);
-    all_traces.push_back(&td1_out8); all_traces.push_back(&td1_out12);
+    // td1_out8/td1_out12 removed -- TD1 is virtual inside U81
 
     // U11: 8284A Clock Generator
     Socket clk_socket{"U11", "8284A", 18};
@@ -953,22 +981,10 @@ int main() {
     nand81_socket.wire(6, ras);            // Y2 = RAS
     nand81_socket.wire(7, gnd);
     nand81_socket.wire(8, cas);            // Y3 = ~CAS
-    nand81_socket.wire(9, td1_out8);       // A3 = N-000258 (TD1 output)
-    nand81_socket.wire(10, td1_out12);     // B3 = N-000253 (TD1 output)
+    // Pins 9,10 not wired -- gate 3 uses virtual TD1 (delayed RAS) internally.
     nand81_socket.wire(14, vcc);
     auto* nand81_ic = nand81_socket.emplace<IC_74S00_U81>();
-
-    // TD1: DRAM timing delay line (PE-21712).
-    // Delays RAS by one evaluation cycle to produce ADDR_SEL, N-000258, N-000253.
-    Socket td1_socket{"TD1", "PE-21712", 14};
-    td1_socket.wire(1, ras);               // Input: RAS
-    td1_socket.wire(7, gnd);               // GND
-    td1_socket.wire(8, td1_out8);          // Output: N-000258
-    td1_socket.wire(10, addr_sel);         // Output: ADDR_SEL
-    td1_socket.wire(12, td1_out12);        // Output: N-000253
-    td1_socket.wire(14, vcc);              // VCC
-    auto* td1_ic = td1_socket.emplace<IC_TD1>();
-    td1_ic->connect_clk(clk);             // Re-evaluate each CLK edge
+    nand81_ic->connect_addr_sel(addr_sel);
 
     // U48: 74S138 RAM Address Range Select
     // A=GND, B=GND, C=A18, ~G2A=GND, ~G2B=A19, G1=VCC (no DMA).
@@ -1073,7 +1089,6 @@ int main() {
     scheduler.register_callback(mux_lo_ic);
     scheduler.register_callback(mux_hi_ic);
     scheduler.register_callback(nand81_ic);
-    scheduler.register_callback(td1_ic);
     scheduler.register_callback(ram_range_ic);
     scheduler.register_callback(ras_dec);
     scheduler.register_callback(ras_gate_ic);
@@ -1132,7 +1147,6 @@ int main() {
         mux_lo_ic->power_on();
         mux_hi_ic->power_on();
         nand81_ic->power_on();
-        td1_ic->power_on();
         ram_range_ic->power_on();
         ras_dec->power_on();
         ras_gate_ic->power_on();
@@ -1168,7 +1182,6 @@ int main() {
         mux_lo_ic->power_off();
         mux_hi_ic->power_off();
         nand81_ic->power_off();
-        td1_ic->power_off();
         ram_range_ic->power_off();
         ras_dec->power_off();
         ras_gate_ic->power_off();

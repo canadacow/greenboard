@@ -654,9 +654,22 @@ private:
 
         if (sorted != n) {
             spdlog::critical("[Scheduler] solve_perm {}: cycle in DAG (sorted {} of {})", perm, sorted, n);
-            for (int i = 0; i < n; ++i)
-                if (in_deg[i] > 0)
-                    spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", evals_[i]->name(), in_deg[i]);
+            for (int i = 0; i < n; ++i) {
+                if (in_deg[i] <= 0) continue;
+                spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", evals_[i]->name(), in_deg[i]);
+                for (int j = 0; j < n; ++j) {
+                    if (!depends[i][j]) continue;
+                    // Find which signal creates this edge.
+                    for (int s = 1; s < SignalPool::count; ++s) {
+                        int w = s / 64;
+                        uint64_t bit = uint64_t(1) << (s % 64);
+                        if ((eff_out[j][w] & bit) && (eff_in[i][w] & bit)) {
+                            const char* nm = SignalPool::names[s];
+                            spdlog::critical("[Scheduler]     <- {} via {}", evals_[j]->name(), nm ? nm : "?");
+                        }
+                    }
+                }
+            }
             std::_Exit(1);
         }
 

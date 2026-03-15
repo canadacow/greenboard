@@ -8,15 +8,22 @@ namespace bench {
 //
 // Special case: RAS appears on both pin 2 (gate 1 input) and pin 6
 // (gate 2 output). Gate 2 drives RAS from ~MEMR/~MEMW. Gate 1 reads
-// RAS to produce ~REFRSH_GATE. These never happen in the same cycle.
+// RAS to produce ~REFRSH_GATE.
 //
-// Tracks which direction RAS is this cycle so the scheduler can order
-// TD1 (which reads RAS) correctly.
+// Gate 3 on real hardware reads TD1 (delay line) outputs -- delayed
+// copies of RAS. TD1 is a ~100ns analog delay, sub-clock-cycle. The
+// emulator can't model sub-eval delays with a separate component, so
+// gate 3 uses an internal one-eval delay of RAS instead of reading
+// its physical pin inputs.
 class IC_74S00_U81 : public CallbackComponent {
 public:
     IC_74S00_U81();
 
     void install(Socket& socket);
+
+    // U81 internally produces delayed-RAS for gate 3 (~CAS).
+    // ADDR_SEL is the same delayed-RAS signal routed to the 74S158 muxes.
+    void connect_addr_sel(Signal& addr_sel);
 
 protected:
     void on_power_on() override;
@@ -29,8 +36,11 @@ private:
     };
     Gate gates_[4];
 
-    // RAS: gate 2 always drives, gate 1 always reads. Always Output.
     Pin ras_pin_;
+
+    // Virtual TD1: previous RAS value used for gate 3 and ADDR_SEL
+    Level td1_pending_ = Level::HiZ;
+    Pin addr_sel_pin_;
 };
 
 } // namespace bench
