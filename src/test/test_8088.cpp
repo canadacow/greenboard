@@ -30,6 +30,9 @@
 #include "ic/ic_74s20.h"
 #include "ic/ic_rom_8k.h"
 #include "ic/ic_dram_256k.h"
+#include "ic/ic_74s158.h"
+#include "ic/ic_74s00.h"
+#include "ic/ic_74s08.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <cstring>
@@ -68,12 +71,12 @@ public:
     Pin pin_s0, pin_s1, pin_s2;
     std::unique_ptr<uint8_t[]> io  = std::make_unique<uint8_t[]>(1 << 16);
 
-    // DRAM interface pins -- BusGlue replaces the address MUX (74S158)
-    // and delay line timing. Drives RAS/CAS/MA/WE per the 4164 protocol.
+    // DRAM interface pins -- BusGlue drives ADDR_SEL (to 74S158 muxes),
+    // RAS/CAS/WE. Per-bank decode is handled by U65/U49 (RAS) and U47 (CAS).
     Pin dram_md[8];              // MD0-MD7 memory data bus (DRAM side)
-    Pin dram_ma[8];              // MA0-MA7 multiplexed DRAM address
-    Pin dram_ras;                // ~RAS (active low)
-    Pin dram_cas[4];             // ~CAS0-3 (per-bank, active low)
+    Pin dram_addr_sel;           // ADDR_SEL -- 74S158 mux select (Low=row, High=col)
+    Pin dram_ras;                // RAS (active high) -- U65 G1 enable
+    Pin dram_cas;                // ~CAS (active low) -- U47 ~G2B enable
     Pin dram_we;                 // ~WE (active low)
     bool dram_connected = false;
 
@@ -98,20 +101,21 @@ public:
                             [this]() { return is_read_cycle() ? BidirDir::Output : BidirDir::Input; });
     }
 
-    void init_dram(Signal* md_sigs[], Signal* ma_sigs[],
-                   Signal& ras, Signal* cas_sigs[], Signal& we) {
+    void init_dram(Signal* md_sigs[],
+                   Signal& ras, Signal& cas, Signal& we,
+                   Signal& addr_sel) {
         for (int i = 0; i < 8; ++i) dram_md[i] = md_sigs[i]->pin();
-        for (int i = 0; i < 8; ++i) dram_ma[i] = ma_sigs[i]->pin();
         dram_ras = ras.pin();
-        for (int i = 0; i < 4; ++i) dram_cas[i] = cas_sigs[i]->pin();
+        dram_cas = cas.pin();
         dram_we = we.pin();
+        dram_addr_sel = addr_sel.pin();
         dram_connected = true;
 
         // Pin directions for dependency graph.
         for (int i = 0; i < 8; ++i) { declare_input(dram_md[i]); declare_output(dram_md[i]); }  // MD (bidirectional)
-        for (int i = 0; i < 8; ++i) declare_output(dram_ma[i]);  // drives MA
-        declare_output(dram_ras);
-        for (int i = 0; i < 4; ++i) declare_output(dram_cas[i]);
+        declare_output(dram_addr_sel);  // drives 74S158 mux select
+        declare_output(dram_ras);       // RAS (active high) → U65 G1
+        declare_output(dram_cas);       // ~CAS (active low) → U47 ~G2B
         declare_output(dram_we);
     }
 
@@ -182,21 +186,18 @@ private:
     // DRAM range: first 256KB (4 banks x 64KB).
     bool is_dram_range(uint32_t addr) { return dram_connected && addr < 0x40000; }
 
-    // Drive MA = row address, assert ~RAS for the correct bank.
+    // Assert ADDR_SEL Low (74S158 selects row = A0-A7), assert RAS High.
+    // U65 (bank select) + U49 (per-bank gate) decode RAS into ~RAS0-3.
     void drive_dram_row() {
-        uint8_t row = (cycle_addr >> 8) & 0xFF;
-        for (int i = 0; i < 8; ++i)
-            dram_ma[i].drive((row >> i) & 1 ? Level::High : Level::Low);
-        dram_ras.drive(Level::Low);
+        dram_addr_sel.drive(Level::Low);
+        dram_ras.drive(Level::High);   // RAS active high → U65 G1 enabled
     }
 
-    // Switch MA to column address, assert ~CAS for the target bank, set ~WE.
+    // Switch ADDR_SEL High (74S158 selects col = A8-A15), assert ~CAS, set ~WE.
+    // U47 decodes ~CAS + A16/A17 into per-bank ~CAS0-3.
     void drive_dram_col_and_cas() {
-        uint8_t col = cycle_addr & 0xFF;
-        int bank = (cycle_addr >> 16) & 3;
-        for (int i = 0; i < 8; ++i)
-            dram_ma[i].drive((col >> i) & 1 ? Level::High : Level::Low);
-        dram_cas[bank].drive(Level::Low);
+        dram_addr_sel.drive(Level::High);
+        dram_cas.drive(Level::Low);    // ~CAS active → U47 enabled
         dram_we.drive(is_write_cycle() ? Level::Low : Level::High);
     }
 
@@ -215,10 +216,10 @@ private:
     }
 
     void release_dram_signals() {
-        dram_ras.drive(Level::High);
-        for (int i = 0; i < 4; ++i) dram_cas[i].drive(Level::High);
+        dram_ras.drive(Level::Low);    // RAS inactive → U65 disabled
+        dram_cas.drive(Level::High);   // ~CAS inactive → U47 disabled
         dram_we.drive(Level::High);
-        for (int i = 0; i < 8; ++i) dram_ma[i].release();
+        dram_addr_sel.release();
         if (dram_driving_md) {
             for (int i = 0; i < 8; ++i) dram_md[i].release();
             dram_driving_md = false;
@@ -356,6 +357,16 @@ private:
 // =========================================================================
 // Test definition: binary file + expected memory values.
 // =========================================================================
+// 74S158 inverts both row and column address bits. Physical address and
+// DRAM internal array offset differ because preload/readback bypass the
+// pin interface. This maps physical -> internal for those paths.
+static uint32_t dram_xlat(uint32_t phys) {
+    uint8_t row = static_cast<uint8_t>(~(phys & 0xFF));
+    uint8_t col = static_cast<uint8_t>(~((phys >> 8) & 0xFF));
+    uint32_t bank = (phys >> 16) & 3;
+    return (bank << 16) | (static_cast<uint32_t>(row) << 8) | col;
+}
+
 struct Expect { uint32_t addr; uint16_t value; const char* label; };
 
 struct TestCase {
@@ -377,8 +388,13 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
         spdlog::error("  binary too large: {} bytes at 0x{:05X}", (int)size, load_addr);
         return false;
     }
-    f.read(reinterpret_cast<char*>(mem + load_addr), size);
-    spdlog::debug("  loaded {} bytes at 0x{:05X}", (int)size, load_addr);
+    // Scatter-write through 74S158 address inversion so that pin-level
+    // DRAM accesses (which see inverted row/col) find the correct data.
+    std::vector<uint8_t> buf(static_cast<size_t>(size));
+    f.read(reinterpret_cast<char*>(buf.data()), size);
+    for (size_t i = 0; i < buf.size(); ++i)
+        mem[dram_xlat(load_addr + static_cast<uint32_t>(i))] = buf[i];
+    spdlog::debug("  loaded {} bytes at 0x{:05X} (translated)", (int)size, load_addr);
     return true;
 }
 
@@ -567,19 +583,32 @@ int main() {
     Signal irq4{"IRQ4"}, irq5{"IRQ5"}, irq6{"IRQ6"}, irq7{"IRQ7"};
     Signal* irq_arr[] = {&irq0, &irq1, &irq2, &irq3, &irq4, &irq5, &irq6, &irq7};
 
-    // DRAM signals (BusGlue drives these as address MUX + timing substitute)
+    // DRAM signals
     Signal dram_ma0("MA0"), dram_ma1("MA1"), dram_ma2("MA2"), dram_ma3("MA3");
     Signal dram_ma4("MA4"), dram_ma5("MA5"), dram_ma6("MA6"), dram_ma7("MA7");
     Signal* dram_ma_arr[] = {&dram_ma0, &dram_ma1, &dram_ma2, &dram_ma3,
                              &dram_ma4, &dram_ma5, &dram_ma6, &dram_ma7};
-    Signal dram_ras("~RAS");
-    Signal dram_cas0("~CAS0"), dram_cas1("~CAS1"), dram_cas2("~CAS2"), dram_cas3("~CAS3");
-    Signal* dram_cas_arr[] = {&dram_cas0, &dram_cas1, &dram_cas2, &dram_cas3};
+    Signal ras("RAS");                 // Active high, BusGlue → U65 G1, U81 gate 1
+    Signal cas("~CAS");               // Active low, BusGlue → U47 ~G2B
     Signal dram_we("~WE_DRAM");
+    Signal addr_sel("ADDR_SEL");
     Signal md0("MD0"), md1("MD1"), md2("MD2"), md3("MD3");
     Signal md4("MD4"), md5("MD5"), md6("MD6"), md7("MD7");
     Signal mdp("MDP");
     Signal* md_arr[] = {&md0, &md1, &md2, &md3, &md4, &md5, &md6, &md7};
+
+    // DRAM decode chain signals
+    Signal ram_addr_sel("~RAM_ADDR_SEL");  // U48 output
+    Signal refrsh_gate("~REFRSH_GATE");    // U81 gate 1 output
+    // U65 bank select intermediates (BRD net names)
+    Signal bank_sel_y4("N-000256"), bank_sel_y5("N-000251");
+    Signal bank_sel_y6("N-000255"), bank_sel_y7("N-000252");
+    // Per-bank RAS (U49 outputs → DRAM)
+    Signal ras0("~RAS0"), ras1("~RAS1"), ras2("~RAS2"), ras3("~RAS3");
+    Signal* ras_arr[] = {&ras0, &ras1, &ras2, &ras3};
+    // Per-bank CAS (U47 outputs → DRAM)
+    Signal dram_cas0("~CAS0"), dram_cas1("~CAS1"), dram_cas2("~CAS2"), dram_cas3("~CAS3");
+    Signal* dram_cas_arr[] = {&dram_cas0, &dram_cas1, &dram_cas2, &dram_cas3};
 
     // 8284A signals
     Signal osc{"OSC"}, pclk{"PCLK"}, res{"RES"};
@@ -609,9 +638,16 @@ int main() {
     for (int i = 0; i < 8; ++i)  all_traces.push_back(dram_ma_arr[i]);
     for (int i = 0; i < 8; ++i)  all_traces.push_back(md_arr[i]);
     all_traces.push_back(&mdp);
-    all_traces.push_back(&dram_ras);
+    all_traces.push_back(&ras);
+    all_traces.push_back(&cas);
+    for (int i = 0; i < 4; ++i)  all_traces.push_back(ras_arr[i]);
     for (int i = 0; i < 4; ++i)  all_traces.push_back(dram_cas_arr[i]);
     all_traces.push_back(&dram_we);
+    all_traces.push_back(&addr_sel);
+    all_traces.push_back(&ram_addr_sel);
+    all_traces.push_back(&refrsh_gate);
+    all_traces.push_back(&bank_sel_y4); all_traces.push_back(&bank_sel_y5);
+    all_traces.push_back(&bank_sel_y6); all_traces.push_back(&bank_sel_y7);
 
     // U11: 8284A Clock Generator
     Socket clk_socket{"U11", "8284A", 18};
@@ -849,7 +885,7 @@ int main() {
     auto ram_bank2 = make_dram_bank(69);  // U69-U77
     auto ram_bank3 = make_dram_bank(85);  // U85-U93
 
-    // Wire each DRAM bank: shared MA/WE/RAS, per-bank CAS, per-chip data.
+    // Wire each DRAM bank: shared MA/WE, per-bank RAS + CAS, per-chip data.
     auto wire_dram_bank = [&](std::vector<Socket>& bank, int bank_idx) {
         for (int chip = 0; chip < 9; ++chip) {
             auto& s = bank[chip];
@@ -864,8 +900,8 @@ int main() {
             s.wire(9, dram_ma7);   // A7
             // Control
             s.wire(3, dram_we);    // ~WE
-            s.wire(4, dram_ras);   // ~RAS
-            s.wire(15, *dram_cas_arr[bank_idx]);  // ~CAS (per-bank)
+            s.wire(4, *ras_arr[bank_idx]);   // ~RAS (per-bank, from U49)
+            s.wire(15, *dram_cas_arr[bank_idx]);  // ~CAS (per-bank, from U47)
             s.wire(8, vcc);        // VCC
             s.wire(16, gnd);       // GND
             // Data: chip 0 = parity, chips 1-8 = MD0-MD7
@@ -886,6 +922,131 @@ int main() {
     IC_DRAM_256K dram;
     dram.install(ram_bank0, ram_bank1, ram_bank2, ram_bank3);
 
+    // U62: 74S158 DRAM Address MUX (low nibble: MA0-MA3)
+    // SELECT=ADDR_SEL, ~STROBE=GND (always enabled)
+    // Low: MA[0:3] = ~{A0,A1,A2,A3}  High: MA[0:3] = ~{A8,A9,A10,A11}
+    Socket mux_lo{"U62", "74S158", 16};
+    mux_lo.wire(1, addr_sel);          // SELECT
+    mux_lo.wire(2, xa[0]);             // I0a = A0
+    mux_lo.wire(3, xa[8]);             // I1a = A8
+    mux_lo.wire(4, dram_ma0);          // Ya = MA0
+    mux_lo.wire(5, xa[1]);             // I0b = A1
+    mux_lo.wire(6, xa[9]);             // I1b = A9
+    mux_lo.wire(7, dram_ma1);          // Yb = MA1
+    mux_lo.wire(8, gnd);               // GND
+    mux_lo.wire(9, dram_ma2);          // Yc = MA2
+    mux_lo.wire(10, xa[10]);           // I1c = A10
+    mux_lo.wire(11, xa[2]);            // I0c = A2
+    mux_lo.wire(12, dram_ma3);         // Yd = MA3
+    mux_lo.wire(13, xa[11]);           // I1d = A11
+    mux_lo.wire(14, xa[3]);            // I0d = A3
+    mux_lo.wire(15, gnd);              // ~STROBE = GND (always enabled)
+    mux_lo.wire(16, vcc);              // VCC
+    auto* mux_lo_ic = mux_lo.emplace<IC_74S158>();
+
+    // U79: 74S158 DRAM Address MUX (high nibble: MA4-MA7)
+    Socket mux_hi{"U79", "74S158", 16};
+    mux_hi.wire(1, addr_sel);          // SELECT
+    mux_hi.wire(2, xa[4]);             // I0a = A4
+    mux_hi.wire(3, xa[12]);            // I1a = A12
+    mux_hi.wire(4, dram_ma4);          // Ya = MA4
+    mux_hi.wire(5, xa[5]);             // I0b = A5
+    mux_hi.wire(6, xa[13]);            // I1b = A13
+    mux_hi.wire(7, dram_ma5);          // Yb = MA5
+    mux_hi.wire(8, gnd);               // GND
+    mux_hi.wire(9, dram_ma6);          // Yc = MA6
+    mux_hi.wire(10, xa[14]);           // I1c = A14
+    mux_hi.wire(11, xa[6]);            // I0c = A6
+    mux_hi.wire(12, dram_ma7);         // Yd = MA7
+    mux_hi.wire(13, xa[15]);           // I1d = A15
+    mux_hi.wire(14, xa[7]);            // I0d = A7
+    mux_hi.wire(15, gnd);              // ~STROBE = GND (always enabled)
+    mux_hi.wire(16, vcc);              // VCC
+    auto* mux_hi_ic = mux_hi.emplace<IC_74S158>();
+
+    // U81: 74S00 NAND -- gate 1 only: DACK0 NAND RAS -> ~REFRSH_GATE.
+    // Gates 2-4 unconnected (timing conflicts with BusGlue driving RAS/~CAS).
+    Socket nand81_socket{"U81", "74S00", 14};
+    nand81_socket.wire(1, gnd);            // A1 = DACK0 (Low = no DMA)
+    nand81_socket.wire(2, ras);            // B1 = RAS
+    nand81_socket.wire(3, refrsh_gate);    // Y1 = ~REFRSH_GATE
+    nand81_socket.wire(7, gnd);
+    nand81_socket.wire(14, vcc);
+    auto* nand81_ic = nand81_socket.emplace<IC_74S00>();
+
+    // U48: 74S138 RAM Address Range Select
+    // A=GND, B=GND, C=A18, ~G2A=GND, ~G2B=A19, G1=VCC (no DMA).
+    // ~Y0 = ~RAM_ADDR_SEL: active for addresses 0x00000-0x3FFFF.
+    Socket ram_range{"U48", "74S138", 16};
+    ram_range.wire(1, gnd);                // A = 0
+    ram_range.wire(2, gnd);                // B = 0
+    ram_range.wire(3, xa[18]);             // C = A18
+    ram_range.wire(4, gnd);                // ~G2A = GND (always enabled)
+    ram_range.wire(5, xa[19]);             // ~G2B = A19 (Low for < 512K)
+    ram_range.wire(6, vcc);                // G1 = VCC (~DACK_0_BRD, no DMA)
+    ram_range.wire(8, gnd);
+    ram_range.wire(15, ram_addr_sel);      // ~Y0 = ~RAM_ADDR_SEL
+    ram_range.wire(16, vcc);
+    auto* ram_range_ic = ram_range.emplace<IC_74S138>();
+
+    // U65: 74S138 Per-Bank RAS Decoder
+    // Decodes A16/A17 into bank selects, enabled by RAS + ~RAM_ADDR_SEL.
+    // C=VCC so select range is 4-7 (outputs ~Y4-~Y7).
+    Socket ras_decode{"U65", "74S138", 16};
+    ras_decode.wire(1, xa[16]);            // A = A16
+    ras_decode.wire(2, xa[17]);            // B = A17
+    ras_decode.wire(3, vcc);               // C = VCC (select 4-7)
+    ras_decode.wire(4, gnd);               // ~G2A = DACK0 (Low = no DMA)
+    ras_decode.wire(5, ram_addr_sel);      // ~G2B = ~RAM_ADDR_SEL
+    ras_decode.wire(6, ras);               // G1 = RAS (active high)
+    ras_decode.wire(7, bank_sel_y7);       // ~Y7 = N-000252 (bank 3)
+    ras_decode.wire(8, gnd);
+    ras_decode.wire(9, bank_sel_y6);       // ~Y6 = N-000255 (bank 2)
+    ras_decode.wire(10, bank_sel_y5);      // ~Y5 = N-000251 (bank 1)
+    ras_decode.wire(11, bank_sel_y4);      // ~Y4 = N-000256 (bank 0)
+    ras_decode.wire(16, vcc);
+    auto* ras_dec = ras_decode.emplace<IC_74S138>();
+
+    // U49: 74S08 Per-Bank RAS Gate
+    // ANDs bank selects from U65 with ~REFRSH_GATE from U81.
+    // Gate 3: N-000256 AND ~REFRSH_GATE -> ~RAS0
+    // Gate 4: N-000251 AND ~REFRSH_GATE -> ~RAS1
+    // Gate 1: N-000255 AND ~REFRSH_GATE -> ~RAS2
+    // Gate 2: N-000252 AND ~REFRSH_GATE -> ~RAS3
+    Socket ras_gate{"U49", "74S08", 14};
+    ras_gate.wire(1, bank_sel_y6);         // A1 = N-000255
+    ras_gate.wire(2, refrsh_gate);         // B1 = ~REFRSH_GATE
+    ras_gate.wire(3, ras2);                // Y1 = ~RAS2
+    ras_gate.wire(4, bank_sel_y7);         // A2 = N-000252
+    ras_gate.wire(5, refrsh_gate);         // B2 = ~REFRSH_GATE
+    ras_gate.wire(6, ras3);                // Y2 = ~RAS3
+    ras_gate.wire(7, gnd);
+    ras_gate.wire(8, ras0);                // Y3 = ~RAS0
+    ras_gate.wire(9, bank_sel_y4);         // A3 = N-000256
+    ras_gate.wire(10, refrsh_gate);        // B3 = ~REFRSH_GATE
+    ras_gate.wire(11, ras1);               // Y4 = ~RAS1
+    ras_gate.wire(12, bank_sel_y5);        // A4 = N-000251
+    ras_gate.wire(13, refrsh_gate);        // B4 = ~REFRSH_GATE
+    ras_gate.wire(14, vcc);
+    auto* ras_gate_ic = ras_gate.emplace<IC_74S08>();
+
+    // U47: 74S138 Per-Bank CAS Decoder
+    // Decodes A16/A17 into per-bank ~CAS0-3, enabled by ~CAS + ~RAM_ADDR_SEL.
+    Socket cas_decode{"U47", "74S138", 16};
+    cas_decode.wire(1, xa[16]);            // A = A16
+    cas_decode.wire(2, xa[17]);            // B = A17
+    cas_decode.wire(3, gnd);               // C = GND (select 0-3)
+    cas_decode.wire(4, ram_addr_sel);      // ~G2A = ~RAM_ADDR_SEL
+    cas_decode.wire(5, cas);               // ~G2B = ~CAS
+    cas_decode.wire(6, vcc);               // G1 = VCC (~DACK_0_BRD, no DMA)
+    cas_decode.wire(8, gnd);
+    cas_decode.wire(12, dram_cas3);        // ~Y3 = ~CAS3
+    cas_decode.wire(13, dram_cas2);        // ~Y2 = ~CAS2
+    cas_decode.wire(14, dram_cas1);        // ~Y1 = ~CAS1
+    cas_decode.wire(15, dram_cas0);        // ~Y0 = ~CAS0
+    cas_decode.wire(16, vcc);
+    auto* cas_dec = cas_decode.emplace<IC_74S138>();
+
     // BusGlue: reactive address decode + memory
     Signal* xa_ptrs[20];
     Signal* d_ptrs[8];
@@ -894,7 +1055,7 @@ int main() {
 
     BusGlue bus;
     bus.init(xa_ptrs, d_ptrs, s0, s1, s2, clk);
-    bus.init_dram(md_arr, dram_ma_arr, dram_ras, dram_cas_arr, dram_we);
+    bus.init_dram(md_arr, ras, cas, dram_we, addr_sel);
     for (int i = 0; i < 8; ++i) {
         bus.pic_ir[i] = irq_arr[i];
         bus.declare_output(irq_arr[i]->pin());
@@ -913,6 +1074,13 @@ int main() {
     scheduler.register_callback(nand_ic);
     scheduler.register_callback(rom_dec);
     scheduler.register_callback(rom_ic);
+    scheduler.register_callback(mux_lo_ic);
+    scheduler.register_callback(mux_hi_ic);
+    scheduler.register_callback(nand81_ic);
+    scheduler.register_callback(ram_range_ic);
+    scheduler.register_callback(ras_dec);
+    scheduler.register_callback(ras_gate_ic);
+    scheduler.register_callback(cas_dec);
     scheduler.register_callback(&dram);
     scheduler.register_callback(bc);
     scheduler.register_callback(pic);
@@ -964,6 +1132,13 @@ int main() {
         rom_dec->power_on();
         rom_ic->power_on();
         dram.power_on();
+        mux_lo_ic->power_on();
+        mux_hi_ic->power_on();
+        nand81_ic->power_on();
+        ram_range_ic->power_on();
+        ras_dec->power_on();
+        ras_gate_ic->power_on();
+        cas_dec->power_on();
         latch_lo_ic->power_on();
         latch_mid_ic->power_on();
         latch_hi_ic->power_on();
@@ -992,6 +1167,13 @@ int main() {
         pic->power_off();
         bus.power_off();
         dram.power_off();
+        mux_lo_ic->power_off();
+        mux_hi_ic->power_off();
+        nand81_ic->power_off();
+        ram_range_ic->power_off();
+        ras_dec->power_off();
+        ras_gate_ic->power_off();
+        cas_dec->power_off();
         rom_ic->power_off();
         xcvr->power_off();
         io_dec->power_off();
@@ -1005,11 +1187,11 @@ int main() {
         for (auto* sig : all_traces)
             sig->reset();
 
-        // Check results -- read directly from DRAM (results are in DRAM range).
+        // Check results -- read from DRAM through 74S158 address translation.
         bool pass = true;
         const uint8_t* ram = dram.data();
         for (auto& e : tc.expects) {
-            uint16_t actual = ram[e.addr] | (ram[e.addr + 1] << 8);
+            uint16_t actual = ram[dram_xlat(e.addr)] | (ram[dram_xlat(e.addr + 1)] << 8);
             if (actual != e.value) {
                 spdlog::error("  FAIL {}: [0x{:04X}] = 0x{:04X} (expected 0x{:04X})",
                     e.label, e.addr, actual, e.value);
@@ -1024,7 +1206,7 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-//#define RUN_BENCHMARK
+#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---
@@ -1052,6 +1234,13 @@ int main() {
             rom_dec->power_on();
             rom_ic->power_on();
             dram.power_on();
+            mux_lo_ic->power_on();
+            mux_hi_ic->power_on();
+            nand81_ic->power_on();
+            ram_range_ic->power_on();
+            ras_dec->power_on();
+            ras_gate_ic->power_on();
+            cas_dec->power_on();
             latch_lo_ic->power_on();
             latch_mid_ic->power_on();
             latch_hi_ic->power_on();
@@ -1087,6 +1276,13 @@ int main() {
             pic->power_off();
             bus.power_off();
             dram.power_off();
+            mux_lo_ic->power_off();
+            mux_hi_ic->power_off();
+            nand81_ic->power_off();
+            ram_range_ic->power_off();
+            ras_dec->power_off();
+            ras_gate_ic->power_off();
+            cas_dec->power_off();
             rom_ic->power_off();
             xcvr->power_off();
             io_dec->power_off();
@@ -1096,10 +1292,10 @@ int main() {
             latch_mid_ic->power_off();
             latch_hi_ic->power_off();
 
-            // Read 64-bit counter directly from DRAM.
+            // Read 64-bit counter from DRAM (through 74S158 translation).
             uint64_t count = 0;
             for (int i = 0; i < 8; ++i)
-                count |= (uint64_t)dram.data()[0x0500 + i] << (i * 8);
+                count |= (uint64_t)dram.data()[dram_xlat(0x0500 + i)] << (i * 8);
 
             double rate = (elapsed > 0) ? (double)count / elapsed : 0;
             uint64_t cycles = clk_gen->clk_cycles();
