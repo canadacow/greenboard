@@ -20,6 +20,7 @@
 #include "ic/ic_74s158.h"
 #include "ic/ic_74s00.h"
 #include "ic/ic_74s00_u81.h"
+#include "ic/ic_74s04.h"
 #include "ic/ic_74s08.h"
 #include <string>
 #include <vector>
@@ -62,6 +63,7 @@ struct TestBoard {
     Signal ras{"RAS"};
     Signal cas{"~CAS"};
     Signal dram_we{"~WE_DRAM"};
+    Signal u83_mid{"U83_1_2"};  // intermediate: U83 pin2 -> pin3
     Signal addr_sel{"ADDR_SEL"};
     Signal md0{"MD0"}, md1{"MD1"}, md2{"MD2"}, md3{"MD3"};
     Signal md4{"MD4"}, md5{"MD5"}, md6{"MD6"}, md7{"MD7"};
@@ -118,6 +120,7 @@ struct TestBoard {
     Socket cas_decode{"U47", "74S138", 16};
     Socket mux_lo{"U62", "74S158", 16};
     Socket mux_hi{"U79", "74S158", 16};
+    Socket inv_socket{"U83", "74S04", 14};
     std::vector<Socket> ram_bank0, ram_bank1, ram_bank2, ram_bank3;
 
     // --- IC pointers (set by wire()) ---
@@ -141,6 +144,7 @@ struct TestBoard {
     IC_74S138* cas_dec = nullptr;
     IC_74S158* mux_lo_ic = nullptr;
     IC_74S158* mux_hi_ic = nullptr;
+    IC_74S04* inv_ic = nullptr;
     IC_DRAM_256K dram;
 
     void wire(const std::string& bios_path) {
@@ -165,6 +169,7 @@ struct TestBoard {
         for (int i = 0; i < 4; ++i)  all_traces.push_back(ras_arr[i]);
         for (int i = 0; i < 4; ++i)  all_traces.push_back(dram_cas_arr[i]);
         all_traces.push_back(&dram_we);
+        all_traces.push_back(&u83_mid);
         all_traces.push_back(&addr_sel);
         all_traces.push_back(&ram_addr_sel);
         all_traces.push_back(&refrsh_gate);
@@ -577,6 +582,17 @@ struct TestBoard {
         cas_decode.wire(15, dram_cas0);        // ~Y0 = ~CAS0
         cas_decode.wire(16, vcc);
         cas_dec = cas_decode.emplace<IC_74S138>();
+
+        // U83: 74S04 Hex Inverter (~WE buffer)
+        // Gates 1+2 double-invert ~MEMW to buffer it for DRAM ~WE fan-out.
+        // ~XMEMW -> pin1 -> pin2 (inverted) -> pin3 -> pin4 (restored) -> ~WE
+        inv_socket.wire(1, memw);          // A1 = ~MEMW
+        inv_socket.wire(2, u83_mid);       // Y1 = inverted ~MEMW
+        inv_socket.wire(3, u83_mid);       // A2 = inverted ~MEMW
+        inv_socket.wire(4, dram_we);       // Y2 = ~WE (double-inverted = buffered ~MEMW)
+        inv_socket.wire(7, gnd);
+        inv_socket.wire(14, vcc);
+        inv_ic = inv_socket.emplace<IC_74S04>();
     }
 
     void register_all(Scheduler& scheduler) {
@@ -596,6 +612,7 @@ struct TestBoard {
         scheduler.register_callback(ras_dec);
         scheduler.register_callback(ras_gate_ic);
         scheduler.register_callback(cas_dec);
+        scheduler.register_callback(inv_ic);
         scheduler.register_callback(&dram);
         scheduler.register_callback(bc);
         scheduler.register_callback(pic);

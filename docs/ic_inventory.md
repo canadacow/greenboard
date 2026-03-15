@@ -2,7 +2,7 @@
 
 Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets)
 
-## Implemented (19 IC types, 62 sockets)
+## Implemented (20 IC types, 63 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -22,6 +22,7 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U62,U79 | 74S158 | DRAM address multiplexers (row/col select) |
 | U81 | 74S00 | Quad NAND (RAS/CAS timing, virtual TD1 inside) |
 | U49 | 74S08 | Quad AND (RAS decode gating) |
+| U83 | 74S04 | Hex inverter (~WE buffer for DRAM) |
 | U37-U45,U53-U61,U69-U77,U85-U93 | 4164 (IC_DRAM_256K) | DRAM banks 0-3 (36 chips, 256KB + parity) |
 | U28-U33 | 8K_X_8ROS | ROM (6 sockets) |
 
@@ -44,7 +45,7 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U100 | 20DIP300 | 20 | Empty socket (unpopulated) |
 | XU4 | 8087 socket | 40 | Math coprocessor (optional) |
 
-## Not Implemented -- Glue Logic (10 sockets)
+## Not Implemented -- Glue Logic (9 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -52,7 +53,7 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U27 | 74LS02 | Quad NOR |
 | U97 | 74S08 | Quad AND |
 | U50 | 74S02 | Quad NOR |
-| U51,U83,U99 | 74S04 | Hex inverter |
+| U51,U99 | 74S04 | Hex inverter |
 | U52 | 74S00 | Quad NAND |
 | U63 | 74S38 | Quad OC NAND |
 | U80 | 74S125 | Quad tri-state buffer |

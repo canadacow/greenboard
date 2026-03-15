@@ -8,6 +8,7 @@ IC_8288::IC_8288() : CallbackComponent("8288") { set_description("Bus Controller
 void IC_8288::on_power_on() {
     state_ = State::Idle;
     cycle_ = BusCycle::Passive;
+    release_command();
 }
 
 void IC_8288::install(Socket& socket) {

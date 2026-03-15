@@ -38,6 +38,7 @@ add_executable(bench
     src/ic/ic_74s138.cpp
     src/ic/ic_74s20.cpp
     src/ic/ic_74s00.cpp
+    src/ic/ic_74s04.cpp
     src/ic/ic_74s08.cpp
     src/ic/ic_74s158.cpp
     src/ic/ic_td1.cpp
@@ -86,6 +87,7 @@ add_executable(test_8088
     src/ic/ic_74s138.cpp
     src/ic/ic_74s20.cpp
     src/ic/ic_74s00.cpp
+    src/ic/ic_74s04.cpp
     src/ic/ic_74s08.cpp
     src/ic/ic_74s158.cpp
     src/ic/ic_td1.cpp
@@ -126,5 +128,6 @@ add_dependencies(test_8088 asm_tests)
 # Pass bin directory to test_8088 so it can find the assembled tests.
 target_compile_definitions(test_8088 PRIVATE
     ASM_TEST_DIR="${ASM_BIN_DIR}"
+    ASM_SRC_DIR="${ASM_TEST_DIR}"
     ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets"
 )
