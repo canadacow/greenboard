@@ -46,12 +46,6 @@ void IC_74S00_U81::install(Socket& socket) {
         declare_input(g.b);
         declare_output(g.y);
     }
-
-    ras_pin_ = gates_[0].b;
-
-    declare_bidir_block({ras_pin_},
-        BidirDir::Output,
-        []() { return BidirDir::Output; });
 }
 
 void IC_74S00_U81::connect_addr_sel(Signal& addr_sel) {
