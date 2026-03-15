@@ -92,6 +92,7 @@ add_executable(test_8088
     src/ic/ic_74s04.cpp
     src/ic/ic_74s08.cpp
     src/ic/ic_74s244.cpp
+    src/ic/ic_8237a.cpp
     src/ic/ic_74s158.cpp
     src/ic/ic_td1.cpp
     src/ic/ic_74s74.cpp

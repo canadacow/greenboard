@@ -23,6 +23,7 @@
 #include "ic/ic_74s04.h"
 #include "ic/ic_74s08.h"
 #include "ic/ic_74s244.h"
+#include "ic/ic_8237a.h"
 #include "board/isa_slot.h"
 #include <string>
 #include <vector>
@@ -82,6 +83,17 @@ struct TestBoard {
     Signal dram_cas0{"~CAS0"}, dram_cas1{"~CAS1"}, dram_cas2{"~CAS2"}, dram_cas3{"~CAS3"};
     Signal* dram_cas_arr[4] = {&dram_cas0, &dram_cas1, &dram_cas2, &dram_cas3};
 
+    // DMA controller signals
+    Signal holda{"HOLDA"};              // Hold acknowledge (undriven = DMA never gets bus)
+    Signal hrq{"HRQ"};                  // Hold request (from 8237A)
+    Signal adstb{"ADSTB"};              // Address strobe (for DMA page latch)
+    Signal dma_aen_out{"DMA_AEN"};      // AEN output from 8237A
+    Signal drq0{"DRQ0"};               // DMA request 0 (DRAM refresh, undriven)
+    Signal drq1{"DRQ1"}, drq2{"DRQ2"}, drq3{"DRQ3"};  // ISA DMA requests
+    Signal dack0_brd{"~DACK_0_BRD"};   // ~DACK0 from 8237A
+    Signal dack1{"~DACK1"}, dack2{"~DACK2"}, dack3{"~DACK3"};
+    Signal eop{"~EOP"};                 // End of process / terminal count
+
     // 8284A signals
     Signal osc{"OSC"}, pclk{"PCLK"}, res{"RES"};
 
@@ -131,6 +143,7 @@ struct TestBoard {
     Socket mux_lo{"U62", "74S158", 16};
     Socket mux_hi{"U79", "74S158", 16};
     Socket inv_socket{"U83", "74S04", 14};
+    Socket dma_socket{"U35", "8237A", 40};
     std::vector<Socket> ram_bank0, ram_bank1, ram_bank2, ram_bank3;
 
     // --- IC pointers (set by wire()) ---
@@ -155,6 +168,7 @@ struct TestBoard {
     IC_74S158* mux_lo_ic = nullptr;
     IC_74S158* mux_hi_ic = nullptr;
     IC_74S04* inv_ic = nullptr;
+    IC_8237A* dma_ic = nullptr;
     IC_DRAM_256K dram;
 
     void wire(const std::string& bios_path) {
@@ -165,6 +179,9 @@ struct TestBoard {
             &ale, &den, &dtr, &memr, &memw, &ior_sig, &iow_sig, &inta_sig,
             &dma_cs, &intr_cs, &pit_cs, &ppi_cs, &aen_bar,
             &osc, &pclk, &res,
+            &holda, &hrq, &adstb, &dma_aen_out,
+            &drq0, &drq1, &drq2, &drq3,
+            &dack0_brd, &dack1, &dack2, &dack3, &eop,
         };
         for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
         for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
@@ -279,7 +296,10 @@ struct TestBoard {
         mem_xcvr = mem_xcvr_socket.emplace<IC_74S245>();
 
         // U10: 74S373 Address Latch (low byte: AD0-AD7 -> XA0-XA7)
-        latch_lo.wire(1, gnd);       // ~OE = always enabled
+        // BRD: pin 1 (~OE) = AEN_BRD.  Without DMA, AEN_BRD = ALE.
+        // ~OE=High during ALE pulse (T1) tri-states outputs, preventing
+        // glitch during address transition. Outputs re-enable when ALE drops.
+        latch_lo.wire(1, ale);       // ~OE = ALE (= AEN_BRD w/o DMA)
         latch_lo.wire(11, ale);      // LE = ALE
         latch_lo.wire(10, gnd);
         latch_lo.wire(20, vcc);
@@ -295,7 +315,7 @@ struct TestBoard {
         latch_lo_ic = latch_lo.emplace<IC_74S373>();
 
         // U9: 74S373 Address Latch (mid byte: A0-A7 -> XA8-XA15)
-        latch_mid.wire(1, gnd);      // ~OE = always enabled
+        latch_mid.wire(1, ale);      // ~OE = ALE (= AEN_BRD w/o DMA)
         latch_mid.wire(11, ale);     // LE = ALE
         latch_mid.wire(10, gnd);
         latch_mid.wire(20, vcc);
@@ -310,7 +330,7 @@ struct TestBoard {
         latch_mid_ic = latch_mid.emplace<IC_74S373>();
 
         // U7: 74S373 Address Latch (high nibble: A8-A11 -> XA16-XA19)
-        latch_hi.wire(1, gnd);       // ~OE = always enabled
+        latch_hi.wire(1, ale);       // ~OE = ALE (= AEN_BRD w/o DMA)
         latch_hi.wire(11, ale);      // LE = ALE
         latch_hi.wire(10, gnd);
         latch_hi.wire(20, vcc);
@@ -604,6 +624,52 @@ struct TestBoard {
         inv_socket.wire(14, vcc);
         inv_ic = inv_socket.emplace<IC_74S04>();
 
+        // U35: 8237A DMA Controller
+        // Wired per BRD. Series termination resistors aliased.
+        // HOLDA=GND prevents DMA transfers (no bus handshake logic yet).
+        // The 8237A responds to I/O ports 0x00-0x0F via ~DMA_CS from U66.
+        dma_socket.wire(1, ior_sig);       // ~XIOR (aliased to ~IOR)
+        dma_socket.wire(2, iow_sig);       // ~XIOW (aliased to ~IOW)
+        dma_socket.wire(3, memr);          // ~XMEMR (DMA drives during transfer)
+        dma_socket.wire(4, memw);          // ~XMEMW (DMA drives during transfer)
+        dma_socket.wire(5, vcc);           // VCC
+        dma_socket.wire(6, vcc);           // RDY_TO_DMA = always ready
+        dma_socket.wire(7, gnd);           // HOLDA = never grant bus
+        dma_socket.wire(8, adstb);         // ADSTB (N-000280 aliased)
+        dma_socket.wire(9, dma_aen_out);   // AEN output (unconnected on real 5150)
+        dma_socket.wire(10, hrq);          // HRQ (N-000286 aliased)
+        dma_socket.wire(11, dma_cs);       // ~DMA_CS (from U66)
+        dma_socket.wire(12, clk);          // DCLK (aliased to CLK)
+        dma_socket.wire(13, reset);        // RESET
+        dma_socket.wire(14, dack2);        // ~DACK2
+        dma_socket.wire(15, dack3);        // ~DACK3
+        dma_socket.wire(16, drq3);         // DRQ3
+        dma_socket.wire(17, drq2);         // DRQ2
+        dma_socket.wire(18, drq1);         // DRQ1
+        dma_socket.wire(19, drq0);         // DRQ0
+        dma_socket.wire(20, gnd);          // GND
+        dma_socket.wire(21, d7);           // XD7 (aliased to D7)
+        dma_socket.wire(22, d6);
+        dma_socket.wire(23, d5);
+        dma_socket.wire(24, dack1);        // ~DACK1
+        dma_socket.wire(25, dack0_brd);    // ~DACK_0_BRD
+        dma_socket.wire(26, d4);
+        dma_socket.wire(27, d3);
+        dma_socket.wire(28, d2);
+        dma_socket.wire(29, d1);
+        dma_socket.wire(30, d0);           // XD0 (aliased to D0)
+        dma_socket.wire(31, vcc);          // VCC
+        dma_socket.wire(32, xa[0]);        // XA0
+        dma_socket.wire(33, xa[1]);        // XA1
+        dma_socket.wire(34, xa[2]);        // XA2
+        dma_socket.wire(35, xa[3]);        // XA3
+        dma_socket.wire(36, eop);          // ~EOP (N-000281 aliased)
+        dma_socket.wire(37, xa[4]);        // A4 (N-000285 aliased to XA4)
+        dma_socket.wire(38, xa[5]);        // A5 (N-000282 aliased to XA5)
+        dma_socket.wire(39, xa[6]);        // A6 (N-000284 aliased to XA6)
+        dma_socket.wire(40, xa[7]);        // A7 (N-000283 aliased to XA7)
+        dma_ic = dma_socket.emplace<IC_8237A>();
+
         // --- ISA Slots (J1-J5) ---
         // Wired directly to motherboard signals. Buffer ICs (U14-U17) omitted
         // because series termination resistors are aliased and no DMA is present.
@@ -644,11 +710,15 @@ struct TestBoard {
             slot.wire_pin(55, &irq4);      // IRQ4 (B24)
             slot.wire_pin(56, &irq3);      // IRQ3 (B25)
 
-            // DMA (inactive: ~DACKx deasserted = High, DRQx/TC unconnected)
-            slot.wire_pin(46, &vcc);       // ~DACK3 (B15)
-            slot.wire_pin(48, &vcc);       // ~DACK1 (B17)
-            slot.wire_pin(50, &vcc);       // ~DACK0 (B19)
-            slot.wire_pin(57, &vcc);       // ~DACK2 (B26)
+            // DMA (active-low DACKs from 8237A, DRQs are inputs from cards)
+            slot.wire_pin(46, &dack3);     // ~DACK3 (B15)
+            slot.wire_pin(47, &drq3);      // DRQ3 (B16)
+            slot.wire_pin(48, &dack1);     // ~DACK1 (B17)
+            slot.wire_pin(49, &drq1);      // DRQ1 (B18)
+            slot.wire_pin(50, &dack0_brd); // ~DACK0 (B19)
+            slot.wire_pin(57, &dack2);     // ~DACK2 (B26)
+            slot.wire_pin(37, &drq2);      // DRQ2 (B6)
+            slot.wire_pin(58, &eop);       // T/C (B27)
 
             // Power rails
             slot.wire_pin(32, &gnd);       // GND (B1)
@@ -680,6 +750,7 @@ struct TestBoard {
         scheduler.register_callback(ras_gate_ic);
         scheduler.register_callback(cas_dec);
         scheduler.register_callback(inv_ic);
+        scheduler.register_callback(dma_ic);
         scheduler.register_callback(&dram);
         scheduler.register_callback(bc);
         scheduler.register_callback(pic);

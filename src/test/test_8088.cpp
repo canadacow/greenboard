@@ -139,8 +139,9 @@ private:
     bool is_write_cycle() { return cycle_type == 2 || cycle_type == 6; }
     bool is_io_cycle()    { return cycle_type == 1 || cycle_type == 2; }
     bool is_inta_cycle()  { return cycle_type == 0; }
-    // PIC ports 0x20-0x21 are handled by U66 (74S138) -> PIC ~CS. BusGlue skips them.
-    bool is_hw_decoded(uint32_t addr) { return (addr & 0xFFFF) >= 0x20 && (addr & 0xFFFF) <= 0x3F; }
+    // DMA (0x00-0x1F) and PIC (0x20-0x3F) are decoded by U66 (74S138).
+    // Real ICs handle these ports; BusGlue must not drive the data bus.
+    bool is_hw_decoded(uint32_t addr) { return (addr & 0xFFFF) <= 0x3F; }
 
 
     uint8_t io_read(uint16_t port) { return io[port]; }
@@ -311,7 +312,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -319,8 +320,7 @@ int main() {
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
         "mov", "alu", "call_ret", "jumps", "int", "string",
-        "mul", "bcd", "farcall", "io", "div", "dos",
-        "io", "irq", "rom",
+        "mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
     };
 
     std::vector<TestCase> tests;

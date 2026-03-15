@@ -47,16 +47,37 @@ void IC_8237A::install(Socket& socket) {
     pin_adstb_ = pin(8);
     pin_aen_   = pin(9);
 
-    // Pin directions for wiring visualization.
-    for (int i = 0; i < 8; ++i) { declare_input(pin_db_[i]); declare_output(pin_db_[i]); }
-    for (int i = 0; i < 8; ++i) { declare_input(pin_a_[i]); declare_output(pin_a_[i]); }
+    // Pin directions for wiring visualization / DAG construction.
     declare_input(pin_ior_); declare_input(pin_iow_); declare_input(pin_cs_);
     declare_input(pin_clk_); declare_input(pin_reset_); declare_input(pin_hlda_);
     for (int i = 0; i < 4; ++i) declare_input(pin_dreq_[i]);
     declare_output(pin_hrq_); declare_output(pin_eop_);
     for (int i = 0; i < 4; ++i) declare_output(pin_dack_[i]);
-    declare_output(pin_memr_); declare_output(pin_memw_);
     declare_output(pin_adstb_); declare_output(pin_aen_);
+
+    // Address pins: input during CPU I/O (register select), output only during
+    // DMA transfer.  Declaring as bidir avoids a DAG cycle (8237A -> XA -> U66
+    // -> ~DMA_CS -> 8237A).  Direction starts as Input since DMA transfer
+    // requires HLDA which is not asserted in the test bench.
+    for (int i = 0; i < 8; ++i) declare_input(pin_a_[i]);
+    declare_bidir_block({pin_a_[0], pin_a_[1], pin_a_[2], pin_a_[3],
+                         pin_a_[4], pin_a_[5], pin_a_[6], pin_a_[7]},
+        BidirDir::Input | BidirDir::Output,
+        [this]() { return state_ == State::Transfer ? BidirDir::Output : BidirDir::Input; });
+
+    // Data bus: output during CPU reads of DMA registers (~CS+~IOR active),
+    // input otherwise.  Bidir avoids cycle through 8237A -> D -> U8/U12 -> D -> 8237A.
+    declare_bidir_block({pin_db_[0], pin_db_[1], pin_db_[2], pin_db_[3],
+                         pin_db_[4], pin_db_[5], pin_db_[6], pin_db_[7]},
+        BidirDir::Input | BidirDir::Output,
+        [this]() {
+            return (pin_cs_.level() == Level::Low && pin_ior_.level() == Level::Low)
+                ? BidirDir::Output : BidirDir::Input;
+        });
+
+    // ~MEMR/~MEMW: only driven during DMA transfer (not during normal CPU ops).
+    // Not declared as output to avoid cycle: 8237A -> memr -> U12 -> D -> 8237A.
+    // When DMA transfer is enabled, these will need proper bidir handling.
 }
 
 void IC_8237A::on_signal_change(Fiber /*caller*/) {
