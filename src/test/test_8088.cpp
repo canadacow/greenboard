@@ -203,16 +203,6 @@ private:
         for (int i = 0; i < 8; ++i)
             if (dram_md[i].level() == Level::High)
                 val |= (1u << i);
-        spdlog::trace("[BusGlue] read_dram_dout: MD7..0 = {}{}{}{}{}{}{}{} val=0x{:02X}",
-            dram_md[7].level() == Level::High ? "H" : dram_md[7].level() == Level::Low ? "L" : "Z",
-            dram_md[6].level() == Level::High ? "H" : dram_md[6].level() == Level::Low ? "L" : "Z",
-            dram_md[5].level() == Level::High ? "H" : dram_md[5].level() == Level::Low ? "L" : "Z",
-            dram_md[4].level() == Level::High ? "H" : dram_md[4].level() == Level::Low ? "L" : "Z",
-            dram_md[3].level() == Level::High ? "H" : dram_md[3].level() == Level::Low ? "L" : "Z",
-            dram_md[2].level() == Level::High ? "H" : dram_md[2].level() == Level::Low ? "L" : "Z",
-            dram_md[1].level() == Level::High ? "H" : dram_md[1].level() == Level::Low ? "L" : "Z",
-            dram_md[0].level() == Level::High ? "H" : dram_md[0].level() == Level::Low ? "L" : "Z",
-            val);
         return val;
     }
 
@@ -249,20 +239,8 @@ private:
         }
     }
 
-    const char* tstate_name() {
-        switch (t_state) {
-        case TState::IDLE: return "IDLE";
-        case TState::T1: return "T1";
-        case TState::T2: return "T2";
-        case TState::T3: return "T3";
-        case TState::T4: return "T4";
-        }
-        return "?";
-    }
-
     void on_clk_rising() {
         uint8_t status = decode_status();
-        spdlog::trace("[BusGlue] CLK rise: tstate={} status={} dram_cycle={}", tstate_name(), status, dram_cycle);
 
         switch (t_state) {
         case TState::IDLE:
@@ -270,7 +248,6 @@ private:
                 t_state = TState::T1;
                 cycle_type = status;
                 cycle_addr = read_address();
-                spdlog::trace("[BusGlue] IDLE->T1 status={} addr=0x{:05X} dram={}", cycle_type, cycle_addr & 0xFFFFF, is_dram_range(cycle_addr & 0xFFFFF));
                 if (!is_io_cycle() && !is_inta_cycle()
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
@@ -281,39 +258,29 @@ private:
 
         case TState::T1:
             t_state = TState::T2;
-            spdlog::trace("[BusGlue] T1->T2");
             break;
 
         case TState::T2:
             t_state = TState::T3;
-            spdlog::trace("[BusGlue] T2->T3 dram_cycle={} read={}", dram_cycle, is_read_cycle());
             if (is_read_cycle()) {
                 if (dram_cycle) {
-                    uint8_t val = read_dram_dout();
-                    spdlog::trace("[BusGlue] T3 DRAM read addr=0x{:05X} val=0x{:02X}", cycle_addr & 0xFFFFF, val);
-                    drive_d(val);
+                    drive_d(read_dram_dout());
                 } else if (is_inta_cycle()) {
                 } else if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
                 } else if (is_io_cycle()) {
-                    uint8_t val = io_read(cycle_addr & 0xFFFF);
-                    spdlog::trace("[BusGlue] T3 IO read port=0x{:04X} val=0x{:02X}", cycle_addr & 0xFFFF, val);
-                    drive_d(val);
-                } else {
-                    spdlog::trace("[BusGlue] T3 non-DRAM read addr=0x{:05X} (ROM/hw path)", cycle_addr & 0xFFFFF);
+                    drive_d(io_read(cycle_addr & 0xFFFF));
                 }
             } else if (is_write_cycle()) {
                 if (is_io_cycle() && is_hw_decoded(cycle_addr)) {
                     // PIC (and other U66-decoded ports) -- handled by real hardware.
                 } else if (is_io_cycle()) {
-                    uint8_t val = read_d();
-                    io_write(cycle_addr & 0xFFFF, val);
+                    io_write(cycle_addr & 0xFFFF, read_d());
                 }
             }
             break;
 
         case TState::T3:
             t_state = TState::T4;
-            spdlog::trace("[BusGlue] T3->T4 releasing DRAM signals (dram_cycle stays {})", dram_cycle);
             if (dram_cycle)
                 release_dram_signals();
             break;
@@ -324,7 +291,6 @@ private:
                 cycle_type = status;
                 bus_cycle_count++;
                 cycle_addr = read_address();
-                spdlog::trace("[BusGlue] T4->T1 status={} addr=0x{:05X} dram={}", cycle_type, cycle_addr & 0xFFFFF, is_dram_range(cycle_addr & 0xFFFFF));
                 if (!is_io_cycle() && !is_inta_cycle()
                     && is_dram_range(cycle_addr & 0xFFFFF)) {
                     dram_cycle = true;
@@ -1218,7 +1184,7 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-//#define RUN_BENCHMARK
+#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

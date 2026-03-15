@@ -1,5 +1,4 @@
 #include "ic/ic_74s00_u81.h"
-#include <spdlog/spdlog.h>
 
 namespace bench {
 
@@ -81,26 +80,14 @@ void IC_74S00_U81::on_signal_change(Fiber /*caller*/) {
     {
         auto& g = gates_[1];
         bool both = g.a.level() == Level::High && g.b.level() == Level::High;
-        Level out = both ? Level::Low : Level::High;
-        spdlog::trace("[U81] gate2: a={} b={} -> y={}",
-            g.a.level() == Level::High ? "H" : g.a.level() == Level::Low ? "L" : "Z",
-            g.b.level() == Level::High ? "H" : g.b.level() == Level::Low ? "L" : "Z",
-            out == Level::Low ? "L" : "H");
-        g.y.drive(out);
+        g.y.drive(both ? Level::Low : Level::High);
     }
 
     // Gate 3: virtual TD1 -- use delayed RAS, not pin inputs
     {
         Level ras_now = gates_[1].y.level();
-        // Drive ADDR_SEL with delayed RAS (before updating)
         if (addr_sel_pin_.idx != 0) addr_sel_pin_.drive(td1_pending_);
-        // NAND of two copies of delayed RAS
-        bool both = td1_pending_ == Level::High && td1_pending_ == Level::High;
-        Level out = both ? Level::Low : Level::High;
-        spdlog::trace("[U81] gate3(vTD1): ras_now={} delayed={} -> y={}",
-            ras_now == Level::High ? "H" : ras_now == Level::Low ? "L" : "Z",
-            td1_pending_ == Level::High ? "H" : td1_pending_ == Level::Low ? "L" : "Z",
-            out == Level::Low ? "L" : "H");
+        Level out = (td1_pending_ == Level::High) ? Level::Low : Level::High;
         gates_[2].y.drive(out);
         td1_pending_ = ras_now;
     }

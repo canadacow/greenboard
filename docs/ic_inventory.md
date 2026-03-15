@@ -2,7 +2,7 @@
 
 Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets)
 
-## Implemented (14 IC types, 57 sockets)
+## Implemented (18 IC types, 61 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -18,10 +18,13 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U26 | 74S175 | PCLK divider / kbd sync |
 | U46,U47,U48,U65,U66 | 74S138 | Address decode (ROM/RAM/IO/ISA chip selects) |
 | U64 | 74S20 | Dual 4-input NAND (ROM address decode) |
+| U62,U79 | 74S158 | DRAM address multiplexers (row/col select) |
+| U81 | 74S00 | Quad NAND (RAS/CAS timing, virtual TD1 inside) |
+| U49 | 74S08 | Quad AND (RAS decode gating) |
 | U37-U45,U53-U61,U69-U77,U85-U93 | 4164 (IC_DRAM_256K) | DRAM banks 0-3 (36 chips, 256KB + parity) |
 | U28-U33 | 8K_X_8ROS | ROM (6 sockets) |
 
-## Not Implemented -- Meaningful ICs (16 sockets)
+## Not Implemented -- Meaningful ICs (12 sockets)
 
 | Ref | IC | Pins | Role |
 |---|---|---|---|
@@ -32,26 +35,24 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U19 | L670 (74LS670) | 16 | DMA page register (4x4 register file) |
 | U24 | 74S322 | 20 | Keyboard shift register (serial->parallel) |
 | U98 | 74S175 | 16 | Quad D FF (second instance, kbd/timing) |
-| U62,U79 | 74S158 | 16 | DRAM address multiplexers (row/col select) |
 | U94 | 74S280 | 14 | Parity generator/checker |
 | U67,U82,U96 | 74S74 | 14 | D flip-flops (DMA req, wait state, NMI gate) |
 | U1 | MC1741 | 8 | Speaker op-amp |
 | U95 | 75477 | 8 | Speaker driver |
-| TD1 | TIME_DELAY_2 | 8 | DRAM CAS timing delay |
 | TD2 | TIME_DELAY_1 | 3 | DRAM timing delay |
 | U100 | 20DIP300 | 20 | Empty socket (unpopulated) |
 | XU4 | 8087 socket | 40 | Math coprocessor (optional) |
 
-## Not Implemented -- Glue Logic (13 sockets)
+## Not Implemented -- Glue Logic (10 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
 | U5 | 74LS30 | 8-input NAND (composite READY) |
 | U27 | 74LS02 | Quad NOR |
-| U49,U97 | 74S08 | Quad AND |
+| U97 | 74S08 | Quad AND |
 | U50 | 74S02 | Quad NOR |
 | U51,U83,U99 | 74S04 | Hex inverter |
-| U52,U81 | 74S00 | Quad NAND (RAS/CAS timing) |
+| U52 | 74S00 | Quad NAND |
 | U63 | 74S38 | Quad OC NAND |
 | U80 | 74S125 | Quad tri-state buffer |
 | U84 | 74S10 | Triple 3-input NAND |
