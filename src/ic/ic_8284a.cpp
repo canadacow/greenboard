@@ -61,12 +61,18 @@ void IC_8284A::run(std::stop_token stop) {
 
     spdlog::debug("[8284A] VCC is High, oscillator spinning");
 
-    // Assert RESET on power-up (RES starts low from RC delay).
-    pin_reset_.drive(Level::High);
+    // RESET: the mock PSU drives RES straight to High (no RC ramp),
+    // so RESET (inverted RES) is Low for the entire run. Drive once.
+    pin_reset_.drive(Level::Low);
+
+    // READY is unconditionally High until we implement slow ISA devices
+    // that pull I/O_CH_RDY Low to insert wait states. Until then, every
+    // bus cycle completes at minimum length (T1-T4, no Tw).
+    pin_ready_.drive(Level::High);
 
     // Clock state.
-    bool pclk_state = false;
-    uint64_t clk_ticks = 0;
+    Level pclk_level = Level::Low;
+    bool nmi_state = false;
 
     // --- Spin loop: one iteration = one full CLK cycle (rise + fall) ---
     // The real 8284A divides a 14.318 MHz crystal by 3 to produce CLK,
@@ -76,43 +82,27 @@ void IC_8284A::run(std::stop_token stop) {
     // So we skip the divide-by-3 and just strobe CLK high/low.
     while (!stop.stop_requested()) {
         // PSU commands (checked each cycle, relaxed is fine).
-        auto cmd = psu_cmd_.load(std::memory_order_relaxed);
-        if (cmd == PsuCmd::PowerOff) {
-            psu_cmd_.store(PsuCmd::None, std::memory_order_relaxed);
+        if (psu_cmd_.load(std::memory_order_relaxed) == PsuCmd::PowerOff) {
             psu_res_.drive(Level::Low);
             psu_vcc_.drive(Level::HiZ);
-            spdlog::debug("[8284A] PSU power-off, oscillator stopped after {} CLK cycles", clk_ticks);
-            break;
-        }
-        psu_nmi_pin_.drive(psu_nmi_.load(std::memory_order_relaxed) ? Level::High : Level::Low);
-
-        // Check VCC each cycle.
-        if (pin_vcc_.level() != Level::High) {
-            spdlog::debug("[8284A] VCC dropped, oscillator stopped after {} CLK cycles", clk_ticks);
+            spdlog::debug("[8284A] PSU power-off, oscillator stopped after {} CLK cycles", clk_cycles_);
             break;
         }
 
-        // --- Single tick = one full CLK cycle ---
+        // NMI: only drive on change.
+        bool nmi = psu_nmi_.load(std::memory_order_relaxed);
+        if (nmi != nmi_state) {
+            nmi_state = nmi;
+            psu_nmi_pin_.drive(nmi ? Level::High : Level::Low);
+        }
+
         ++clk_cycles_;
 
         // PCLK toggles each CLK cycle (CLK / 2).
-        pclk_state = !pclk_state;
-        pin_pclk_.drive(pclk_state ? Level::High : Level::Low);
-
-        // READY and RESET synchronized each cycle.
-        bool ready = true;
-        bool aen1 = pin_aen1_.level() == Level::Low;
-        if (aen1)
-            ready = pin_rdy1_.level() == Level::High;
-        pin_ready_.drive(ready ? Level::High : Level::Low);
-
-        // RESET: inverted and synchronized RES input.
-        bool res = pin_res_.level() == Level::High;
-        pin_reset_.drive(res ? Level::Low : Level::High);
+        pclk_level = Level(int8_t(-int8_t(pclk_level)));
+        pin_pclk_.drive(pclk_level);
 
         scheduler_->evaluate(self);
-
-        ++clk_ticks;
     }
 
     // Power down: release all outputs, then power off all components.
@@ -124,7 +114,7 @@ void IC_8284A::run(std::stop_token stop) {
     scheduler_->evaluate();
     scheduler_->power_off_all();
 
-    spdlog::debug("[8284A] oscillator stopped after {} CLK cycles", clk_ticks);
+    spdlog::debug("[8284A] oscillator stopped after {} CLK cycles", clk_cycles_);
 
     // Revert back to a plain thread before returning.
     fiber_revert_thread(self);

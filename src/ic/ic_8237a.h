@@ -130,6 +130,7 @@ private:
     bool db_driving_ = false;   // true when we're actively driving data bus
     bool a_driving_ = false;    // true when we're driving address pins A0-A7
     bool eop_pending_ = false;  // EOP asserted this cycle, deassert next cycle
+    bool mem2mem_write_ = false; // true during write phase of mem-to-mem transfer
     uint8_t prev_upper_addr_ = 0; // last A8-A15 latched, for S1 skip optimization
 
     // Edge tracking
