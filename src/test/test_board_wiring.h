@@ -231,7 +231,7 @@ struct TestBoard {
     IC_74S00_U81* nand81_ic = nullptr;
     IC_74S138<0x01>* ram_range_ic = nullptr; // U48: Y0
     IC_74S138<0xF0>* ras_dec = nullptr;     // U65: Y4-Y7
-    IC_74S08<0x0F>* ras_gate_ic = nullptr;
+    IC_74S08<0xFF, true>* ras_gate_ic = nullptr;  // U49: all AND, shared B
     IC_74S138<0x0F>* cas_dec = nullptr;     // U47: Y0-Y3
     IC_74S158* mux_lo_ic = nullptr;
     IC_74S158* mux_hi_ic = nullptr;
@@ -246,7 +246,7 @@ struct TestBoard {
     IC_74S373* dma_page_latch_ic = nullptr;  // U18
     IC_74LS670* dma_page_reg_ic = nullptr;   // U19
     IC_74S10* nand84_ic = nullptr;             // U84
-    IC_74S08<0x0D>* and97_ic = nullptr;        // U97: gates 1,3,4
+    IC_74S08<0xC8>* and97_ic = nullptr;         // U97: g0=dead, g1=dead, g2=passB, g3=AND
     IC_74LS02* nor27_ic = nullptr;             // U27
     IC_74LS32* or101_ic = nullptr;             // U101
     IC_74S175* ff26_ic = nullptr;               // U26
@@ -686,7 +686,7 @@ struct TestBoard {
         ras_gate.wire(12, bank_sel_y5);        // A4 = N-000251
         ras_gate.wire(13, refrsh_gate);        // B4 = ~REFRSH_GATE
         ras_gate.wire(14, vcc);
-        ras_gate_ic = ras_gate.emplace<IC_74S08<0x0F>>();
+        ras_gate_ic = ras_gate.emplace<IC_74S08<0xFF, true>>();
 
         // U47: 74S138 Per-Bank CAS Decoder
         // Decodes A16/A17 into per-bank ~CAS0-3, enabled by ~CAS + ~RAM_ADDR_SEL.
@@ -1041,7 +1041,7 @@ struct TestBoard {
         and97_socket.wire(13, aen_brd);        // B4 = AEN_BRD
         and97_socket.wire(11, n_000246);       // Y4 = N-000246
         and97_socket.wire(14, vcc);
-        and97_ic = and97_socket.emplace<IC_74S08<0x0D>>();
+        and97_ic = and97_socket.emplace<IC_74S08<0xC8>>();
 
         // U27: 74LS02 Quad NOR (ROM/RAM/IO select decode)
         // BRD: Gate 2 (5,6->4): NOR(~ROM_ADDR_SEL, ~XMEMR) -> N-000288
