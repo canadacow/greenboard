@@ -214,16 +214,16 @@ struct TestBoard {
     IC_74S373* latch_lo_ic = nullptr;
     IC_74S373* latch_mid_ic = nullptr;
     IC_74S373* latch_hi_ic = nullptr;
-    IC_74S138* io_dec = nullptr;
+    IC_74S138<0x1F>* io_dec = nullptr;      // U66: Y0-Y4
     IC_8259A* pic = nullptr;
     IC_74S20* nand_ic = nullptr;
-    IC_74S138* rom_dec = nullptr;
+    IC_74S138<0x80>* rom_dec = nullptr;     // U46: Y7
     IC_ROM_8K* rom_ic = nullptr;
     IC_74S00_U81* nand81_ic = nullptr;
-    IC_74S138* ram_range_ic = nullptr;
-    IC_74S138* ras_dec = nullptr;
+    IC_74S138<0x01>* ram_range_ic = nullptr; // U48: Y0
+    IC_74S138<0xF0>* ras_dec = nullptr;     // U65: Y4-Y7
     IC_74S08* ras_gate_ic = nullptr;
-    IC_74S138* cas_dec = nullptr;
+    IC_74S138<0x0F>* cas_dec = nullptr;     // U47: Y0-Y3
     IC_74S158* mux_lo_ic = nullptr;
     IC_74S158* mux_hi_ic = nullptr;
     IC_74S04* inv_ic = nullptr;
@@ -438,7 +438,7 @@ struct TestBoard {
         io_decode.wire(12, ppi_cs);     // ~Y3 = ~PPI_CS (0x60-0x7F)
         io_decode.wire(11, pg_reg_cs);  // ~Y4 = page reg CS (0x80-0x9F)
         io_decode.wire(16, vcc);
-        io_dec = io_decode.emplace<IC_74S138>();
+        io_dec = io_decode.emplace<IC_74S138<0x1F>>();
 
         // U2: 8259A PIC
         pic_socket.wire(1, intr_cs);
@@ -486,7 +486,7 @@ struct TestBoard {
         // ~Y0-~Y6 unconnected (no other ROM chips installed in test bench)
         rom_decode.wire(8, gnd);
         rom_decode.wire(16, vcc);
-        rom_dec = rom_decode.emplace<IC_74S138>();
+        rom_dec = rom_decode.emplace<IC_74S138<0x80>>();
 
         // U33: 8K x 8 BIOS ROM (FE000-FFFFF)
         // Address pins wired to XA0-XA12, data pins to system data bus (D0-D7).
@@ -638,7 +638,7 @@ struct TestBoard {
         ram_range.wire(8, gnd);
         ram_range.wire(15, ram_addr_sel);      // ~Y0 = ~RAM_ADDR_SEL
         ram_range.wire(16, vcc);
-        ram_range_ic = ram_range.emplace<IC_74S138>();
+        ram_range_ic = ram_range.emplace<IC_74S138<0x01>>();
 
         // U65: 74S138 Per-Bank RAS Decoder
         // Decodes A16/A17 into bank selects, enabled by RAS + ~RAM_ADDR_SEL.
@@ -655,7 +655,7 @@ struct TestBoard {
         ras_decode.wire(10, bank_sel_y5);      // ~Y5 = N-000251 (bank 1)
         ras_decode.wire(11, bank_sel_y4);      // ~Y4 = N-000256 (bank 0)
         ras_decode.wire(16, vcc);
-        ras_dec = ras_decode.emplace<IC_74S138>();
+        ras_dec = ras_decode.emplace<IC_74S138<0xF0>>();
 
         // U49: 74S08 Per-Bank RAS Gate
         // ANDs bank selects from U65 with ~REFRSH_GATE from U81.
@@ -693,7 +693,7 @@ struct TestBoard {
         cas_decode.wire(14, dram_cas1);        // ~Y1 = ~CAS1
         cas_decode.wire(15, dram_cas0);        // ~Y0 = ~CAS0
         cas_decode.wire(16, vcc);
-        cas_dec = cas_decode.emplace<IC_74S138>();
+        cas_dec = cas_decode.emplace<IC_74S138<0x0F>>();
 
         // U83: 74S04 Hex Inverter (~WE buffer)
         // Gates 1+2 double-invert ~MEMW to buffer it for DRAM ~WE fan-out.
