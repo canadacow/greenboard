@@ -169,22 +169,28 @@ private:
     void on_clk_rising() {
         uint8_t status = decode_status();
 
+        static const char* cycle_names[] = {"INTA","IOR","IOW","HALT","FETCH","MEMR","MEMW","PASSIVE"};
+
         switch (t_state) {
         case TState::IDLE:
             if (status != 7) {
                 t_state = TState::T1;
                 cycle_type = status;
                 cycle_addr = read_address();
+                spdlog::trace("[BusGlue] T1 start: {} addr=0x{:05X}", cycle_names[cycle_type], cycle_addr);
             }
             break;
 
         case TState::T1:
             t_state = TState::T2;
+            spdlog::trace("[BusGlue] T2: {} addr=0x{:05X}", cycle_names[cycle_type], cycle_addr);
             break;
 
         case TState::T2:
             t_state = TState::T3;
             if (is_read_cycle()) {
+                spdlog::trace("[BusGlue] T3 read: {} addr=0x{:05X}",
+                    cycle_names[cycle_type], cycle_addr);
                 // DRAM reads: U12 (74S245) bridges MD->D automatically.
                 // INTA: PIC drives D via ~CS from U66.
                 // HW-decoded IO: handled by real ICs.
@@ -193,6 +199,8 @@ private:
                     drive_d(io_read(cycle_addr & 0xFFFF));
                 }
             } else if (is_write_cycle()) {
+                spdlog::trace("[BusGlue] T3 write: {} addr=0x{:05X} D=0x{:02X}",
+                    cycle_names[cycle_type], cycle_addr, read_d());
                 // DRAM writes: U12 (74S245) bridges D->MD automatically.
                 if (is_io_cycle() && !is_hw_decoded(cycle_addr)) {
                     io_write(cycle_addr & 0xFFFF, read_d());
@@ -210,6 +218,7 @@ private:
                 cycle_type = status;
                 bus_cycle_count++;
                 cycle_addr = read_address();
+                spdlog::trace("[BusGlue] T4->T1: {} addr=0x{:05X} (back-to-back)", cycle_names[cycle_type], cycle_addr);
             } else {
                 if (is_read_cycle()) {
                     release_d();
@@ -312,17 +321,15 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::trace);
+    spdlog::set_level(spdlog::level::info);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov"
-    // 
-    //    "mov", "alu", "call_ret", "jumps", "int", "string",
-    //    "mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
+        "mov", "alu", "call_ret", "jumps", "int", "string",
+        "mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
     };
 
 
@@ -382,10 +389,13 @@ int main() {
         std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;
         if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) { ++failed; continue; }
 
-        // Verify load
-        spdlog::trace("  dram[01100..01107] = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
-            dram.data()[0x1100], dram.data()[0x1101], dram.data()[0x1102], dram.data()[0x1103],
-            dram.data()[0x1104], dram.data()[0x1105], dram.data()[0x1106], dram.data()[0x1107]);
+        // Verify load (each physical addr translates independently)
+        {
+            auto d = dram.data();
+            spdlog::trace("  dram phys 01100..01107 = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+                d[dram_xlat(0x1100)], d[dram_xlat(0x1101)], d[dram_xlat(0x1102)], d[dram_xlat(0x1103)],
+                d[dram_xlat(0x1104)], d[dram_xlat(0x1105)], d[dram_xlat(0x1106)], d[dram_xlat(0x1107)]);
+        }
 
         // Power on: 8284A thread starts, PSU powers all components, drives VCC.
         cpu->clear_halt();

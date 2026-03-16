@@ -55,6 +55,8 @@ void IC_74S245::install(Socket& socket) {
 
 void IC_74S245::on_signal_change(Fiber /*caller*/) {
     if (g_.level() != Level::Low) {
+        if (driving_ != Driving::None)
+            spdlog::trace("[{}] ~G=High, releasing", name());
         release_outputs();
         return;
     }
@@ -63,28 +65,30 @@ void IC_74S245::on_signal_change(Fiber /*caller*/) {
     if (dir_high) {
         for (int i = 0; i < 8; ++i)
             if (a_[i].level() == Level::High) val |= (1 << i);
+        spdlog::trace("[{}] ~G=Low DIR=High A->B val=0x{:02X}", name(), val);
     } else {
         for (int i = 0; i < 8; ++i)
             if (b_[i].level() == Level::High) val |= (1 << i);
+        spdlog::trace("[{}] ~G=Low DIR=Low B->A val=0x{:02X}", name(), val);
     }
     update_outputs();
 }
 
 void IC_74S245::update_outputs() {
     if (dir_.level() == Level::High) {
-        // A -> B: release A if we were driving it
+        // A -> B: drive B from A
         if (driving_ == Driving::A) {
-            for (int i = 0; i < 8; ++i)
-                a_[i].release();
+            // Was driving A -- need to release A, but bidir already
+            // marks A as input. Just stop; A will be overwritten by
+            // whoever owns it now.
         }
         for (int i = 0; i < 8; ++i)
             b_[i].drive(a_[i].level());
         driving_ = Driving::B;
     } else {
-        // B -> A: release B if we were driving it
+        // B -> A: drive A from B
         if (driving_ == Driving::B) {
-            for (int i = 0; i < 8; ++i)
-                b_[i].release();
+            // Was driving B -- same: stop, don't release.
         }
         for (int i = 0; i < 8; ++i)
             a_[i].drive(b_[i].level());
