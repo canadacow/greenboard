@@ -135,6 +135,7 @@ struct TestBoard {
     Signal n_000245{"N-000245"};      // U98 3Q -> U97 gate 4 input
     Signal n_000246{"N-000246", u97_block_ + 3};          // U97 gate 4 output
     Signal n_000235{"N-000235"};      // U84 gate 3 output -> U97 gate 1 input
+    Signal n_000225{"N-000225"};      // Parity check stub -> U97 gate 1 B input (PSU NMI)
     Signal n_000215{"N-000215"};      // U84 gate 1 output (inverted DT/~R)
     Signal n_000239{"N-000239"};      // U84 gate 2 output
     Signal u101_y4{"N-000291"};       // U101 gate 4 output -> U5 pin 3
@@ -246,7 +247,7 @@ struct TestBoard {
     IC_74S373* dma_page_latch_ic = nullptr;  // U18
     IC_74LS670* dma_page_reg_ic = nullptr;   // U19
     IC_74S10* nand84_ic = nullptr;             // U84
-    IC_74S08<0xC8>* and97_ic = nullptr;         // U97: g0=dead, g1=dead, g2=passB, g3=AND
+    IC_74S08<0xE3>* and97_ic = nullptr;         // U97: g0=passA(NMI), g1=dead, g2=passB(RDY), g3=AND
     IC_74LS02* nor27_ic = nullptr;             // U27
     IC_74LS32* or101_ic = nullptr;             // U101
     IC_74S175* ff26_ic = nullptr;               // U26
@@ -304,7 +305,7 @@ struct TestBoard {
         clk_socket.wire(12, osc);    // OSC output
         clk_socket.wire(18, vcc);    // VCC
         clk_gen = clk_socket.emplace<IC_8284A>();
-        clk_gen->psu_wire(vcc.pin(), gnd.pin(), res.pin(), nmi.pin(),
+        clk_gen->psu_wire(vcc.pin(), gnd.pin(), res.pin(), n_000225.pin(),
                           s0.pin(), s1.pin(), s2.pin(), aen_bar.pin());
 
         // U3: 8088 CPU
@@ -1030,7 +1031,7 @@ struct TestBoard {
         // N-000225 = parity check (stub GND -> NMI stays Low = inactive)
         // N-000237 = VCC (pulled up on real board, keeps RDY_TO_DMA driven by U98 ~3Q)
         and97_socket.wire(1, n_000235);        // A1 = N-000235 (from U84 gate 3)
-        and97_socket.wire(2, gnd);             // B1 = N-000225 (parity, stub GND -> NMI Low)
+        and97_socket.wire(2, n_000225);        // B1 = N-000225 (parity stub, PSU drives for NMI)
         and97_socket.wire(3, nmi);             // Y1 = NMI
         and97_socket.wire(6, u97_y2_nc);        // Y2 = dummy (gate 2 unused)
         and97_socket.wire(7, gnd);
@@ -1041,7 +1042,7 @@ struct TestBoard {
         and97_socket.wire(13, aen_brd);        // B4 = AEN_BRD
         and97_socket.wire(11, n_000246);       // Y4 = N-000246
         and97_socket.wire(14, vcc);
-        and97_ic = and97_socket.emplace<IC_74S08<0xC8>>();
+        and97_ic = and97_socket.emplace<IC_74S08<0xE3>>();
 
         // U27: 74LS02 Quad NOR (ROM/RAM/IO select decode)
         // BRD: Gate 2 (5,6->4): NOR(~ROM_ADDR_SEL, ~XMEMR) -> N-000288

@@ -36,8 +36,7 @@ public:
     void set_scheduler(Scheduler* s) { scheduler_ = s; }
     uint64_t clk_cycles() const { return clk_cycles_; }
 
-    // --- Mock PSU (driven from main thread via atomics, acted on by clock thread) ---
-    // Call from main thread. The 8284A thread picks these up each cycle.
+    // --- Mock PSU (driven from main thread, acted on by clock thread) ---
     void psu_power_on()  { psu_cmd_ = PsuCmd::PowerOn; }
     void psu_power_off() { psu_cmd_ = PsuCmd::PowerOff; }
     void psu_nmi_raise() { psu_nmi_ = true; }
