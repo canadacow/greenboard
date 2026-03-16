@@ -44,13 +44,31 @@ void IC_8253::install(Socket& socket) {
     pin_wr_  = connect_pin(23);      // ~WR
     pin_vcc_ = connect_pin(24);      // VCC
 
-    // Pin directions for wiring visualization.
-    for (int i = 0; i < 8; ++i) { declare_input(pin_data_[i]); declare_output(pin_data_[i]); }
+    // Pin directions for DAG.
     for (int i = 0; i < 3; ++i) { declare_input(pin_clk_[i]); declare_input(pin_gate_[i]); }
     for (int i = 0; i < 3; ++i) declare_output(pin_out_[i]);
     declare_input(pin_a0_); declare_input(pin_a1_); declare_input(pin_cs_);
     declare_input(pin_rd_); declare_input(pin_wr_);
+
+    // Data bus is bidirectional: input during CPU writes, output during CPU reads.
+    // The direction lambda is sampled BEFORE evaluate() runs -- it reflects
+    // the bus state established by the PREVIOUS cycle (8288 asserts ~IOR/~IOW
+    // one cycle before the data is sampled).
+    declare_bidir_block(
+        {pin_data_[0], pin_data_[1], pin_data_[2], pin_data_[3],
+         pin_data_[4], pin_data_[5], pin_data_[6], pin_data_[7]},
+        BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
+        [this]() -> BidirDir {
+            if (pin_cs_.level() != Level::Low) return BidirDir::HiZ;
+            if (pin_rd_.level() == Level::Low) return BidirDir::Output;
+            if (pin_wr_.level() == Level::Low) return BidirDir::Input;
+            return BidirDir::HiZ;
+        });
 }
+
+// =========================================================================
+// Main signal change handler -- called by scheduler in wave order
+// =========================================================================
 
 void IC_8253::on_signal_change(Fiber /*caller*/) {
     // CLK falling edge: decrement each channel on its own CLK transition.
@@ -77,13 +95,33 @@ void IC_8253::on_signal_change(Fiber /*caller*/) {
         wr_prev_ = cur;
     }
 
-    // ~RD falling/rising edge: CPU reads from PIT.
+    // ~RD: drive data bus while active, release when inactive.
+    // Level-sensitive (not just edge): re-drive every cycle that ~CS+~RD
+    // are both low, so the data bus stays valid across the full read window.
     {
         Level cur = pin_rd_.level();
-        if (cur == Level::Low && rd_prev_ != Level::Low)
-            on_read_falling();
-        else if (cur != Level::Low && rd_prev_ == Level::Low)
+        bool cs_low = pin_cs_.level() == Level::Low;
+
+        if (cur == Level::Low && cs_low) {
+            // Active read -- drive (or re-drive) data bus.
+            if (!data_bus_driven_) {
+                // First cycle: detect address and latch the read value.
+                bool a0 = pin_a0_.level() == Level::High;
+                bool a1 = pin_a1_.level() == Level::High;
+                int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
+                if (addr < 3) {
+                    read_byte_ = read_counter(addr);
+                    drive_data_bus(read_byte_);
+                }
+            } else {
+                // Subsequent cycles: re-drive same value (bus hold).
+                drive_data_bus(read_byte_);
+            }
+        } else if (data_bus_driven_) {
+            // ~RD or ~CS went inactive: release bus.
             release_data_bus();
+        }
+
         rd_prev_ = cur;
     }
 }
@@ -93,17 +131,14 @@ void IC_8253::on_signal_change(Fiber /*caller*/) {
 // =========================================================================
 
 void IC_8253::on_write_falling() {
-    // Only respond if chip-selected.
     if (pin_cs_.level() != Level::Low) return;
 
-    // Read data bus.
     uint8_t data = 0;
     for (int i = 0; i < 8; ++i) {
         if (pin_data_[i].level() == Level::High)
             data |= (1 << i);
     }
 
-    // Decode address.
     bool a0 = pin_a0_.level() == Level::High;
     bool a1 = pin_a1_.level() == Level::High;
     int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
@@ -115,21 +150,9 @@ void IC_8253::on_write_falling() {
     }
 }
 
-void IC_8253::on_read_falling() {
-    if (pin_cs_.level() != Level::Low) return;
-
-    bool a0 = pin_a0_.level() == Level::High;
-    bool a1 = pin_a1_.level() == Level::High;
-    int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
-
-    if (addr >= 3) return;  // Control word is write-only.
-
-    uint8_t data = read_counter(addr);
-
-    // Drive data bus.
-    for (int i = 0; i < 8; ++i) {
-        pin_data_[i].drive((data & (1 << i)) ? Level::High : Level::Low);
-    }
+void IC_8253::drive_data_bus(uint8_t value) {
+    for (int i = 0; i < 8; ++i)
+        pin_data_[i].drive((value & (1 << i)) ? Level::High : Level::Low);
     data_bus_driven_ = true;
 }
 
@@ -155,6 +178,7 @@ void IC_8253::write_control(uint8_t value) {
     int rw = (value >> 4) & 3;
     if (rw == 0) {
         // Counter latch command: snapshot current count for reading.
+        // Per datasheet: if already latched, the command is ignored.
         if (!channels_[ch].latched) {
             channels_[ch].latch = channels_[ch].count;
             channels_[ch].latched = true;
@@ -176,24 +200,14 @@ void IC_8253::write_control(uint8_t value) {
     c.read_msb_next = false;
     c.latched = false;
 
-    // Mode-specific OUT initialization.
+    // Mode-specific OUT initialization per datasheet.
     switch (c.mode) {
-        case 0:
-            c.out = false;  // OUT goes low after control word
-            break;
-        case 1:
-            c.out = true;   // OUT is high until triggered
-            break;
-        case 2:
-        case 3:
-            c.out = true;   // OUT starts high
-            break;
-        case 4:
-            c.out = true;   // OUT is high, goes low at TC
-            break;
-        case 5:
-            c.out = true;   // OUT is high until triggered
-            break;
+        case 0: c.out = false; break;  // OUT goes low immediately
+        case 1: c.out = true;  break;  // OUT high until gate trigger
+        case 2: c.out = true;  break;  // OUT starts high
+        case 3: c.out = true;  break;  // OUT starts high
+        case 4: c.out = true;  break;  // OUT high, low at TC
+        case 5: c.out = true;  break;  // OUT high until gate trigger
     }
     update_out(ch);
 
@@ -275,7 +289,6 @@ uint16_t IC_8253::decrement(uint16_t val, bool bcd) {
     }
     // BCD: 0000 -> 9999
     if (val == 0) return 0x9999;
-    // Subtract 1 in BCD
     uint16_t result = 0;
     int borrow = 1;
     for (int i = 0; i < 4; ++i) {
@@ -303,10 +316,9 @@ void IC_8253::on_gate_change(int ch, bool new_gate) {
 
     switch (c.mode) {
         case 0:
-            // GATE low suspends counting. High resumes.
+            // GATE low suspends counting, high resumes.
             break;
         case 1:
-            // Rising edge of GATE triggers one-shot.
             if (rising) {
                 c.count = c.reload;
                 c.null_count = false;
@@ -316,26 +328,22 @@ void IC_8253::on_gate_change(int ch, bool new_gate) {
             }
             break;
         case 2:
-            // Rising edge reloads counter.
             if (rising) {
                 c.count = c.reload;
                 c.null_count = false;
                 c.counting = true;
             }
-            // GATE low forces OUT high.
             if (!new_gate) {
                 c.out = true;
                 update_out(ch);
             }
             break;
         case 3:
-            // Rising edge reloads counter.
             if (rising) {
                 c.count = c.reload;
                 c.null_count = false;
                 c.counting = true;
             }
-            // GATE low forces OUT high.
             if (!new_gate) {
                 c.out = true;
                 update_out(ch);
@@ -345,7 +353,6 @@ void IC_8253::on_gate_change(int ch, bool new_gate) {
             // GATE low suspends counting.
             break;
         case 5:
-            // Rising edge triggers strobe.
             if (rising) {
                 c.count = c.reload;
                 c.null_count = false;
@@ -377,8 +384,6 @@ void IC_8253::on_clk_falling(int ch) {
 
     switch (c.mode) {
         case 0: {
-            // Mode 0: Interrupt on terminal count.
-            // Count down. OUT goes high when count reaches 0.
             c.count = decrement(c.count, c.bcd);
             if (c.count == 0) {
                 c.out = true;
@@ -388,8 +393,6 @@ void IC_8253::on_clk_falling(int ch) {
         }
 
         case 1: {
-            // Mode 1: Hardware retriggerable one-shot.
-            // Count down after GATE trigger. OUT goes high at TC.
             c.count = decrement(c.count, c.bcd);
             if (c.count == 0) {
                 c.out = true;
@@ -400,24 +403,19 @@ void IC_8253::on_clk_falling(int ch) {
         }
 
         case 2: {
-            // Mode 2: Rate generator.
-            // OUT is high for N-1 ticks, low for 1 tick, repeat.
             c.count = decrement(c.count, c.bcd);
             if (c.count == 1) {
                 c.out = false;
                 update_out(ch);
             } else if (c.count == 0) {
                 c.out = true;
-                c.count = c.reload;  // Auto-reload
+                c.count = c.reload;
                 update_out(ch);
             }
             break;
         }
 
         case 3: {
-            // Mode 3: Square wave generator.
-            // OUT toggles at half the count period.
-            // Decrements by 2 each CLK. When reaching 0, toggle OUT and reload.
             if (c.count <= 2) {
                 c.out = !c.out;
                 c.count = c.reload;
@@ -429,8 +427,6 @@ void IC_8253::on_clk_falling(int ch) {
         }
 
         case 4: {
-            // Mode 4: Software triggered strobe.
-            // OUT goes low for 1 CLK at terminal count, then high.
             c.count = decrement(c.count, c.bcd);
             if (c.count == 0) {
                 c.out = false;
@@ -444,8 +440,6 @@ void IC_8253::on_clk_falling(int ch) {
         }
 
         case 5: {
-            // Mode 5: Hardware triggered strobe.
-            // Same as mode 4 but triggered by GATE.
             c.count = decrement(c.count, c.bcd);
             if (c.count == 0) {
                 c.out = false;

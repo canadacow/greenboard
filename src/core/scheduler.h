@@ -623,6 +623,7 @@ public:
         auto it = wave_plans_.find(perm);
         if (it == wave_plans_.end())
             it = wave_plans_.emplace(perm, solve_perm(perm)).first;
+
         for (auto& wave : it->second.waves) {
             for (auto* c : wave) {
 #ifdef BENCH_PIN_VALIDATION

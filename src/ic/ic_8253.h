@@ -101,12 +101,12 @@ private:
     void write_counter(int ch, uint8_t value);
     uint8_t read_counter(int ch);
     void update_out(int ch);
+    void drive_data_bus(uint8_t value);
     void release_data_bus();
     uint16_t decrement(uint16_t val, bool bcd);
 
     // Bus interface
     void on_write_falling();
-    void on_read_falling();
 
     Channel channels_[3];
 
@@ -130,6 +130,7 @@ private:
     Level wr_prev_ = Level::HiZ;
     Level rd_prev_ = Level::HiZ;
     bool data_bus_driven_ = false;
+    uint8_t read_byte_ = 0;       // Cached read value for re-drive
 };
 
 } // namespace bench
