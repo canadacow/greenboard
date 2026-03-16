@@ -44,13 +44,17 @@ struct TestBoard {
     // --- Signals (copper traces) ---
     // Pre-allocate contiguous blocks for IC outputs.
     int u97_block_ = SignalPool::allocate_block(4);  // U97 74S08: Y1=NMI, Y2=nc, Y3=RDY_TO_DMA, Y4=N-000246
+    int ad_block_  = SignalPool::allocate_block(8);  // AD0-AD7: U10 74S373 D inputs
+    int a_block_   = SignalPool::allocate_block(16); // A0-A11 + 4 dummy: U9/U7 74S373 D inputs
+    int xa_block_  = SignalPool::allocate_block(24); // XA0-XA19 + 4 dummy: 74S373 Q outputs
+    int d_block_   = SignalPool::allocate_block(8);  // D0-D7: system data bus (U18 74S373 D inputs)
 
     Signal vcc{"+5V"}, gnd{"GND"}, clk{"CLK"}, reset{"RESET"};
     Signal ready{"READY"}, nmi{"NMI", u97_block_}, intr{"INTR"}, test_pin{"~TEST"};
     Signal cpu_lock{"~LOCK"}, rqgt0{"~RQ/GT0"};
     Signal qs0{"QS0"}, qs1{"QS1"}, s0{"~S0"}, s1{"~S1"}, s2{"~S2"};
-    Bus ad{"AD", 8};
-    Bus a_upper{"A", 12};
+    Bus ad{"AD", 8, ad_block_};
+    Bus a_upper{"A", 12, a_block_};
 
     // 8288 bus controller output signals
     Signal ale{"ALE"}, den{"~DEN"}, dtr{"DT/~R"};
@@ -62,8 +66,10 @@ struct TestBoard {
     Signal aen_bar{"~AEN"};  // No DMA in test bench, always High
 
     // System data bus (B side of 74S245 transceiver)
-    Signal d0{"D0"}, d1{"D1"}, d2{"D2"}, d3{"D3"};
-    Signal d4{"D4"}, d5{"D5"}, d6{"D6"}, d7{"D7"};
+    Signal d0{"D0", d_block_},     d1{"D1", d_block_ + 1};
+    Signal d2{"D2", d_block_ + 2}, d3{"D3", d_block_ + 3};
+    Signal d4{"D4", d_block_ + 4}, d5{"D5", d_block_ + 5};
+    Signal d6{"D6", d_block_ + 6}, d7{"D7", d_block_ + 7};
     Signal* d_arr[8] = {&d0, &d1, &d2, &d3, &d4, &d5, &d6, &d7};
 
     // IRQ lines (BusGlue drives these via test trigger port 0xF0)
@@ -154,11 +160,26 @@ struct TestBoard {
 
     // Latched address bus (outputs from 74S373 latches, active after ALE)
     Signal xa[20] = {
-        Signal("XA0"),  Signal("XA1"),  Signal("XA2"),  Signal("XA3"),
-        Signal("XA4"),  Signal("XA5"),  Signal("XA6"),  Signal("XA7"),
-        Signal("XA8"),  Signal("XA9"),  Signal("XA10"), Signal("XA11"),
-        Signal("XA12"), Signal("XA13"), Signal("XA14"), Signal("XA15"),
-        Signal("XA16"), Signal("XA17"), Signal("XA18"), Signal("XA19"),
+        Signal("XA0",  xa_block_),      Signal("XA1",  xa_block_ + 1),
+        Signal("XA2",  xa_block_ + 2),  Signal("XA3",  xa_block_ + 3),
+        Signal("XA4",  xa_block_ + 4),  Signal("XA5",  xa_block_ + 5),
+        Signal("XA6",  xa_block_ + 6),  Signal("XA7",  xa_block_ + 7),
+        Signal("XA8",  xa_block_ + 8),  Signal("XA9",  xa_block_ + 9),
+        Signal("XA10", xa_block_ + 10), Signal("XA11", xa_block_ + 11),
+        Signal("XA12", xa_block_ + 12), Signal("XA13", xa_block_ + 13),
+        Signal("XA14", xa_block_ + 14), Signal("XA15", xa_block_ + 15),
+        Signal("XA16", xa_block_ + 16), Signal("XA17", xa_block_ + 17),
+        Signal("XA18", xa_block_ + 18), Signal("XA19", xa_block_ + 19),
+    };
+
+    // U7 only uses 4 of 8 D/Q pairs. Pad with dummies to keep PinBlock<8> contiguous.
+    Signal u7_d_pad[4] = {
+        Signal("U7_D4", a_block_ + 12), Signal("U7_D5", a_block_ + 13),
+        Signal("U7_D6", a_block_ + 14), Signal("U7_D7", a_block_ + 15),
+    };
+    Signal u7_q_pad[4] = {
+        Signal("U7_Q4", xa_block_ + 20), Signal("U7_Q5", xa_block_ + 21),
+        Signal("U7_Q6", xa_block_ + 22), Signal("U7_Q7", xa_block_ + 23),
     };
 
     // ROM-specific signals
@@ -429,7 +450,11 @@ struct TestBoard {
         latch_hi.wire(4, a_upper[9]);  latch_hi.wire(5, xa[17]);
         latch_hi.wire(7, a_upper[10]); latch_hi.wire(6, xa[18]);
         latch_hi.wire(8, a_upper[11]); latch_hi.wire(9, xa[19]);
-        // D4-D7 unused on U7 -- only 4 address bits (A16-A19)
+        // D4-D7 / Q4-Q7 unused on U7 -- pad with dummies for PinBlock<8> contiguity.
+        latch_hi.wire(13, u7_d_pad[0]); latch_hi.wire(12, u7_q_pad[0]);
+        latch_hi.wire(14, u7_d_pad[1]); latch_hi.wire(15, u7_q_pad[1]);
+        latch_hi.wire(17, u7_d_pad[2]); latch_hi.wire(16, u7_q_pad[2]);
+        latch_hi.wire(18, u7_d_pad[3]); latch_hi.wire(19, u7_q_pad[3]);
         latch_hi_ic = latch_hi.emplace<IC_74S373>();
 
         // U66: 74S138 I/O Address Decoder

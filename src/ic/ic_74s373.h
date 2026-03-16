@@ -47,8 +47,8 @@ protected:
 private:
     void update_outputs();
 
-    Pin d_[8] = {};   // D inputs (read)
-    Pin q_[8] = {};   // Q outputs (write)
+    PinBlock<8> d_;   // D inputs (contiguous)
+    PinBlock<8> q_;   // Q outputs (contiguous)
     Pin le_;          // LE (read)
     Pin oe_;          // ~OE (read)
 

@@ -190,6 +190,13 @@ Bus::Bus(const std::string& prefix, int width) {
     }
 }
 
+Bus::Bus(const std::string& prefix, int width, int base_slot) {
+    lines_.reserve(width);
+    for (int i = 0; i < width; ++i) {
+        lines_.push_back(std::make_unique<Signal>(prefix + std::to_string(i), base_slot + i));
+    }
+}
+
 void Bus::drive(uint32_t value) {
     for (int i = 0; i < width(); ++i) {
         lines_[i]->drive((value >> i) & 1 ? Level::High : Level::Low);

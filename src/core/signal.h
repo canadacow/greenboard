@@ -190,6 +190,7 @@ private:
 class Bus {
 public:
     Bus(const std::string& prefix, int width);
+    Bus(const std::string& prefix, int width, int base_slot);
 
     int width() const { return static_cast<int>(lines_.size()); }
     Signal& operator[](int i) { return *lines_[i]; }
