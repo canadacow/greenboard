@@ -218,7 +218,7 @@ struct TestBoard {
     IC_74S373* latch_hi_ic = nullptr;
     IC_74S138<0x1F>* io_dec = nullptr;      // U66: Y0-Y4
     IC_8259A* pic = nullptr;
-    IC_74S20* nand_ic = nullptr;
+    IC_74S20<0x01>* nand_ic = nullptr;
     IC_74S138<0x80>* rom_dec = nullptr;     // U46: Y7
     IC_ROM_8K* rom_ic = nullptr;
     IC_74S00_U81* nand81_ic = nullptr;
@@ -472,7 +472,7 @@ struct TestBoard {
         nand_socket.wire(6, rom_addr_sel);      // Y1 = ~ROM_ADDR_SEL
         nand_socket.wire(7, gnd);
         nand_socket.wire(14, vcc);
-        nand_ic = nand_socket.emplace<IC_74S20>();
+        nand_ic = nand_socket.emplace<IC_74S20<0x01>>();
 
         // U46: 74S138 ROM Chip Select Decoder
         // Decodes A15:A13 into ~CS2-~CS7 when ~ROM_ADDR_SEL=Low and ~MEMR=Low.
