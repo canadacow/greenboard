@@ -10,6 +10,9 @@ enum class Level : int8_t {
     HiZ  = 0,   // High-impedance / floating
 };
 
+inline constexpr int8_t operator+(Level a, Level b) { return int8_t(a) + int8_t(b); }
+inline constexpr int8_t operator+(int8_t a, Level b) { return a + int8_t(b); }
+
 // Physical pin direction from the IC's perspective
 enum class PinDir {
     In,

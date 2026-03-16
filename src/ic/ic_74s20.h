@@ -85,21 +85,14 @@ protected:
 
 private:
     void update_outputs() {
+        // NAND: output Low only when all inputs High(1). Sum == 4 iff all High.
         if constexpr (MASK & 0x01) {
-            bool all1 =
-                a1_.level() == Level::High &&
-                b1_.level() == Level::High &&
-                c1_.level() == Level::High &&
-                d1_.level() == Level::High;
-            y1_.drive(all1 ? Level::Low : Level::High);
+            int8_t sum = a1_.level() + b1_.level() + c1_.level() + d1_.level();
+            y1_.drive(sum == 4 ? Level::Low : Level::High);
         }
         if constexpr (MASK & 0x02) {
-            bool all2 =
-                a2_.level() == Level::High &&
-                b2_.level() == Level::High &&
-                c2_.level() == Level::High &&
-                d2_.level() == Level::High;
-            y2_.drive(all2 ? Level::Low : Level::High);
+            int8_t sum = a2_.level() + b2_.level() + c2_.level() + d2_.level();
+            y2_.drive(sum == 4 ? Level::Low : Level::High);
         }
     }
 
