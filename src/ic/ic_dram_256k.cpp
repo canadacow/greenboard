@@ -92,70 +92,87 @@ void IC_DRAM_256K::on_power_off() {
         bank.ras_prev = Level::HiZ;
         bank.cas_prev = Level::HiZ;
     }
+    active_bank_ = -1;
     spdlog::debug("[DRAM] power off");
 }
 
 void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
 
-    for (int b = 0; b < 4; ++b) {
-        auto& bank = banks_[b];
-        Level ras_cur = bank.ras.level();
-        Level cas_cur = bank.cas.level();
+    // Find the active bank: the one with ~RAS Low (only one at a time).
+    // On ~RAS rising edge, the previously active bank needs processing too,
+    // so also check the bank we were tracking.
+    int b = active_bank_;
 
-        // ~RAS falling edge: latch row address
-        if (ras_cur == Level::Low && bank.ras_prev != Level::Low) {
-            bank.row_addr = read_address();
-            bank.row_latched = true;
-        }
-
-        // ~RAS rising edge: end of cycle, release outputs
-        if (ras_cur == Level::High && bank.ras_prev != Level::High) {
-            bank.row_latched = false;
-            if (bank.driving) {
-                for (int i = 0; i < 9; ++i)
-                    bank.dout[i].release();
-                bank.driving = false;
+    if (b < 0) {
+        // No active bank -- scan for a ~RAS falling edge
+        for (int i = 0; i < 4; ++i) {
+            if (banks_[i].ras.level() == Level::Low && banks_[i].ras_prev != Level::Low) {
+                b = i;
+                break;
             }
         }
-
-        // ~CAS falling edge: latch column address, perform read or write
-        if (cas_cur == Level::Low && bank.cas_prev != Level::Low && bank.row_latched) {
-            uint8_t col_addr = read_address();
-            uint32_t addr = (static_cast<uint32_t>(b) << 16)
-                          | (static_cast<uint32_t>(bank.row_addr) << 8)
-                          | col_addr;
-            if (pin_we_.level() == Level::Low) {
-                // Write: sample DIN pins, store to RAM
-                uint8_t data = 0;
-                for (int i = 0; i < 8; ++i) {
-                    if (bank.din[i].level() == Level::High)
-                        data |= (1 << i);
-                }
-                ram_[addr] = data;
-                parity_[addr] = bank.din[8].level() == Level::High ? 1 : 0;
-            } else {
-                // Read: drive DOUT pins from RAM
-                uint8_t data = ram_[addr];
-                for (int i = 0; i < 8; ++i) {
-                    bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
-                }
-                bank.dout[8].drive(parity_[addr] ? Level::High : Level::Low);
-                bank.driving = true;
-            }
-        }
-
-        // ~CAS rising edge: release data outputs
-        if (cas_cur == Level::High && bank.cas_prev != Level::High) {
-            if (bank.driving) {
-                for (int i = 0; i < 9; ++i)
-                    bank.dout[i].release();
-                bank.driving = false;
-            }
-        }
-
-        bank.ras_prev = ras_cur;
-        bank.cas_prev = cas_cur;
+        if (b < 0) return;
     }
+
+    auto& bank = banks_[b];
+    Level ras_cur = bank.ras.level();
+    Level cas_cur = bank.cas.level();
+
+    // ~RAS falling edge: latch row address
+    if (ras_cur == Level::Low && bank.ras_prev != Level::Low) {
+        bank.row_addr = read_address();
+        bank.row_latched = true;
+        active_bank_ = b;
+    }
+
+    // ~RAS rising edge: end of cycle, release outputs
+    if (ras_cur == Level::High && bank.ras_prev != Level::High) {
+        bank.row_latched = false;
+        if (bank.driving) {
+            for (int i = 0; i < 9; ++i)
+                bank.dout[i].release();
+            bank.driving = false;
+        }
+        active_bank_ = -1;
+    }
+
+    // ~CAS falling edge: latch column address, perform read or write
+    if (cas_cur == Level::Low && bank.cas_prev != Level::Low && bank.row_latched) {
+        uint8_t col_addr = read_address();
+        uint32_t addr = (static_cast<uint32_t>(b) << 16)
+                      | (static_cast<uint32_t>(bank.row_addr) << 8)
+                      | col_addr;
+        if (pin_we_.level() == Level::Low) {
+            // Write: sample DIN pins, store to RAM
+            uint8_t data = 0;
+            for (int i = 0; i < 8; ++i) {
+                if (bank.din[i].level() == Level::High)
+                    data |= (1 << i);
+            }
+            ram_[addr] = data;
+            parity_[addr] = bank.din[8].level() == Level::High ? 1 : 0;
+        } else {
+            // Read: drive DOUT pins from RAM
+            uint8_t data = ram_[addr];
+            for (int i = 0; i < 8; ++i) {
+                bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
+            }
+            bank.dout[8].drive(parity_[addr] ? Level::High : Level::Low);
+            bank.driving = true;
+        }
+    }
+
+    // ~CAS rising edge: release data outputs
+    if (cas_cur == Level::High && bank.cas_prev != Level::High) {
+        if (bank.driving) {
+            for (int i = 0; i < 9; ++i)
+                bank.dout[i].release();
+            bank.driving = false;
+        }
+    }
+
+    bank.ras_prev = ras_cur;
+    bank.cas_prev = cas_cur;
 }
 
 uint8_t IC_DRAM_256K::read_address() const {

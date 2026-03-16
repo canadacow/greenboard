@@ -67,6 +67,7 @@ private:
         Level cas_prev = Level::HiZ;
     };
     Bank banks_[4];
+    int active_bank_ = -1;  // which bank has ~RAS Low (-1 = none)
 };
 
 } // namespace bench
