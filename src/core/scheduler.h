@@ -14,6 +14,8 @@
 #include <vector>
 #include <spdlog/spdlog.h>
 
+// #define WAVE_DEBUGS
+
 namespace bench {
 
 // Central synchronous evaluator -- the beating heart of the simulation.
@@ -149,11 +151,13 @@ public:
         for (int i = 0; i < n; ++i)
             waves_[level[i]].push_back(callbacks_[i]);
 
+        #if defined(WAVE_DEBUGS)
         for (int w = 0; w < num_waves; ++w) {
             spdlog::info("[Scheduler] wave {}: {} callbacks", w, waves_[w].size());
             for (auto* c : waves_[w])
                 spdlog::info("[Scheduler]   - {}", c->name());
         }
+        #endif
 
         dump_unified_waves();
         resolved_ = true;
@@ -211,11 +215,13 @@ public:
         for (int p = 0; p < num_slots; ++p)
             if (perm_valid(p)) ++num_valid;
 
+        #if defined(WAKE_DEBUGS)
         spdlog::info("[Scheduler] {} bidir blocks -> {} valid permutations (of {} slots)",
                      num_bidir, num_valid, num_slots);
         for (int i = 0; i < num_bidir; ++i)
             spdlog::info("[Scheduler]   block {}: {} (possible=0x{:x})", i,
                          bidir_refs_[i].comp->name(), uint8_t(bidir_refs_[i].block->possible));
+        #endif
 
         // Which component index owns each bidir block?
         bidir_comp_idx_.resize(num_bidir);
@@ -792,6 +798,7 @@ private:
                 plan.waves.push_back(std::move(wave));
         }
 
+        #if defined(WAVE_DEBUGS)
         spdlog::info("[Scheduler] solved perm {} ({} waves):", perm, plan.waves.size());
         for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
             std::string names;
@@ -801,6 +808,7 @@ private:
             }
             spdlog::info("[Scheduler]   wave {}: {}", w, names);
         }
+        #endif
 
         return plan;
     }

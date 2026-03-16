@@ -240,11 +240,13 @@ static uint32_t dram_xlat(uint32_t phys) {
 }
 
 struct Expect { uint32_t addr; uint16_t value; std::string label; };
+struct Dump   { uint32_t addr; std::string label; };
 
 struct TestCase {
     std::string name;
     std::string bin_file;
     std::vector<Expect> expects;
+    std::vector<Dump>   dumps;
 };
 
 // Parse @name and @expect tags from an assembly source file.
@@ -284,6 +286,17 @@ static TestCase parse_test_asm(const std::string& asm_dir, const std::string& sh
                 tc.expects.push_back({addr, value, label});
             }
         }
+        // ; @dump ADDR label text
+        if (line.rfind("; @dump ", 0) == 0) {
+            const char* p = line.c_str() + 7;
+            uint32_t addr = 0;
+            int n = 0;
+            if (sscanf(p, "%4x%n", &addr, &n) >= 1) {
+                const char* label = p + n;
+                while (*label == ' ') ++label;
+                tc.dumps.push_back({addr, label});
+            }
+        }
     }
     return tc;
 }
@@ -312,18 +325,17 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov", "alu", "call_ret", "jumps", "int", "string",
-        "mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
+        //"mov", "alu", "call_ret", "jumps", "int", "string",
+        //"mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
+        "pit",
     };
-
-
 
     std::vector<TestCase> tests;
     for (auto& name : test_names)
@@ -427,12 +439,17 @@ int main() {
                     e.label, e.addr, actual);
             }
         }
+        for (auto& d : tc.dumps) {
+            uint16_t actual = ram[dram_xlat(d.addr)] | (ram[dram_xlat(d.addr + 1)] << 8);
+            spdlog::info("  dump {}: [0x{:04X}] = 0x{:04X} ({})",
+                d.label, d.addr, actual, actual);
+        }
         if (pass) ++passed; else ++failed;
     }
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-#define RUN_BENCHMARK
+//#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

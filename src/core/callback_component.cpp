@@ -10,13 +10,11 @@ CallbackComponent::CallbackComponent(std::string name)
 void CallbackComponent::power_on() {
     powered_ = true;
     on_power_on();
-    spdlog::debug("[{}] powered on (callback)", name());
 }
 
 void CallbackComponent::power_off() {
     on_power_off();
     powered_ = false;
-    spdlog::debug("[{}] powered off (callback)", name());
 }
 
 void CallbackComponent::subscribe_to(Signal& sig) {
