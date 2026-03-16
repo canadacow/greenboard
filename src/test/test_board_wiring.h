@@ -31,6 +31,7 @@
 #include "ic/ic_74s10.h"
 #include "ic/ic_74ls02.h"
 #include "ic/ic_74ls32.h"
+#include "ic/ic_8253.h"
 #include "board/isa_slot.h"
 #include <string>
 #include <vector>
@@ -137,6 +138,10 @@ struct TestBoard {
     // 8284A signals
     Signal osc{"OSC"}, pclk{"PCLK"}, res{"RES"};
 
+    // U26 PCLK divider signals
+    Signal pit_clk{"PIT_CLK"};          // U26 FF2 Q = 1.193 MHz (PCLK / 2)
+    Signal pclk_div2_fb{"PCLK_DIV2_FB"}; // U26 FF2 ~Q -> D feedback
+
     // Latched address bus (outputs from 74S373 latches, active after ALE)
     Signal xa[20] = {
         Signal("XA0"),  Signal("XA1"),  Signal("XA2"),  Signal("XA3"),
@@ -196,6 +201,8 @@ struct TestBoard {
     Socket and97_socket{"U97", "74S08", 14};     // Quad AND (NMI, RDY_TO_DMA)
     Socket nor27_socket{"U27", "74LS02", 14};    // Quad NOR (ROM/RAM/IO select)
     Socket or101_socket{"U101", "74LS32", 14};   // Quad OR (~DMA_CS generation)
+    Socket ff26_socket{"U26", "74S175", 16};       // Quad D FF (PCLK divider)
+    Socket pit_socket{"U34", "8253", 24};           // PIT (timer)
     std::vector<Socket> ram_bank0, ram_bank1, ram_bank2, ram_bank3;
 
     // --- IC pointers (set by wire()) ---
@@ -233,6 +240,8 @@ struct TestBoard {
     IC_74S08* and97_ic = nullptr;              // U97
     IC_74LS02* nor27_ic = nullptr;             // U27
     IC_74LS32* or101_ic = nullptr;             // U101
+    IC_74S175* ff26_ic = nullptr;               // U26
+    IC_8253* pit_ic = nullptr;                  // U34
     IC_DRAM_256K dram;
 
     void wire(const std::string& bios_path) {
@@ -252,6 +261,7 @@ struct TestBoard {
             &rdy_to_dma, &n_000244, &n_000245, &n_000246,
             &n_000235, &n_000215, &n_000239, &u101_y4,
             &n_000288, &n_000317, &n_000303, &pg_reg_cs, &wrt_dma_pg,
+            &pit_clk, &pclk_div2_fb,
         };
         for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
         for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
@@ -1041,6 +1051,49 @@ struct TestBoard {
         nor27_socket.wire(13, ior_sig);        // B4 = ~XIOR (aliased to ~IOR)
         nor27_socket.wire(14, vcc);
         nor27_ic = nor27_socket.emplace<IC_74LS02>();
+
+        // U26: 74S175 Quad D Flip-Flop (PCLK divider)
+        // FF2: ~Q->D feedback creates toggle FF. CLK=PCLK -> Q=PCLK/2=1.193 MHz.
+        // FF0+FF1: keyboard sync (not used in test bench).
+        // FF3: unused.
+        ff26_socket.wire(1, reset_drv_bar);    // ~MR = ~RESET_DRV
+        ff26_socket.wire(8, gnd);              // GND
+        ff26_socket.wire(9, pclk);             // CLK = PCLK (2.386 MHz)
+        ff26_socket.wire(10, pit_clk);         // 3Q = PIT_CLK (1.193 MHz)
+        ff26_socket.wire(11, pclk_div2_fb);    // ~3Q = feedback
+        ff26_socket.wire(12, pclk_div2_fb);    // 3D = ~3Q (toggle feedback)
+        ff26_socket.wire(16, vcc);             // VCC
+        ff26_ic = ff26_socket.emplace<IC_74S175>();
+
+        // U34: 8253-5 PIT (Programmable Interval Timer)
+        // Three 16-bit counters, all clocked at 1.193 MHz from U26.
+        // D0-D7: pin 8=D0, pin 7=D1, ..., pin 1=D7 (reversed order).
+        // OUT0->IRQ0 (timer tick), OUT1->DRQ0 latch CLK, OUT2->speaker (stub).
+        pit_socket.wire(1, d7);                // D7
+        pit_socket.wire(2, d6);                // D6
+        pit_socket.wire(3, d5);                // D5
+        pit_socket.wire(4, d4);                // D4
+        pit_socket.wire(5, d3);                // D3
+        pit_socket.wire(6, d2);                // D2
+        pit_socket.wire(7, d1);                // D1
+        pit_socket.wire(8, d0);                // D0
+        pit_socket.wire(9, pit_clk);           // CLK0 = 1.193 MHz
+        pit_socket.wire(10, irq0);             // OUT0 -> IRQ0
+        pit_socket.wire(11, vcc);              // GATE0 = +5V (always enabled)
+        pit_socket.wire(12, gnd);              // GND
+        pit_socket.wire(13, n_000328);         // OUT1 -> U67 FF2 CLK (DRQ0 latch)
+        pit_socket.wire(14, vcc);              // GATE1 = +5V (always enabled)
+        pit_socket.wire(15, pit_clk);          // CLK1 = 1.193 MHz
+        pit_socket.wire(16, vcc);              // GATE2 = +5V (stub, real: PPI PB0)
+        // Pin 17 (OUT2) left unwired -- speaker output, not used in test bench.
+        pit_socket.wire(18, pit_clk);          // CLK2 = 1.193 MHz
+        pit_socket.wire(19, xa[0]);            // A0 = XA0
+        pit_socket.wire(20, xa[1]);            // A1 = XA1
+        pit_socket.wire(21, pit_cs);           // ~CS = ~PIT_CS (from U66 ~Y2)
+        pit_socket.wire(22, ior_sig);          // ~RD = ~XIOR
+        pit_socket.wire(23, iow_sig);          // ~WR = ~XIOW
+        pit_socket.wire(24, vcc);              // VCC
+        pit_ic = pit_socket.emplace<IC_8253>();
     }
 
     void register_all(Scheduler& scheduler) {
@@ -1074,6 +1127,8 @@ struct TestBoard {
         scheduler.register_callback(and97_ic);
         scheduler.register_callback(nor27_ic);
         scheduler.register_callback(or101_ic);
+        scheduler.register_callback(ff26_ic);
+        scheduler.register_callback(pit_ic);
         scheduler.register_callback(&dram);
         scheduler.register_callback(bc);
         scheduler.register_callback(pic);

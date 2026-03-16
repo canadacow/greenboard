@@ -101,6 +101,7 @@ private:
     void write_counter(int ch, uint8_t value);
     uint8_t read_counter(int ch);
     void update_out(int ch);
+    void release_data_bus();
     uint16_t decrement(uint16_t val, bool bcd);
 
     // Bus interface
@@ -124,9 +125,11 @@ private:
     Pin pin_vcc_;        // Pin 24: VCC
 
     // Edge tracking
+    Level clk_prev_[3] = {Level::HiZ, Level::HiZ, Level::HiZ};
     Level gate_prev_[3] = {Level::HiZ, Level::HiZ, Level::HiZ};
     Level wr_prev_ = Level::HiZ;
     Level rd_prev_ = Level::HiZ;
+    bool data_bus_driven_ = false;
 };
 
 } // namespace bench

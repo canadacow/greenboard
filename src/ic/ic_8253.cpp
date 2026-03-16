@@ -53,9 +53,12 @@ void IC_8253::install(Socket& socket) {
 }
 
 void IC_8253::on_signal_change(Fiber /*caller*/) {
-    // Single-tick model: decrement each tick.
+    // CLK falling edge: decrement each channel on its own CLK transition.
     for (int i = 0; i < 3; ++i) {
-        on_clk_falling(i);
+        Level cur = pin_clk_[i].level();
+        if (cur == Level::Low && clk_prev_[i] == Level::High)
+            on_clk_falling(i);
+        clk_prev_[i] = cur;
     }
 
     // GATE level changes.
@@ -74,11 +77,13 @@ void IC_8253::on_signal_change(Fiber /*caller*/) {
         wr_prev_ = cur;
     }
 
-    // ~RD falling edge: CPU reads from PIT.
+    // ~RD falling/rising edge: CPU reads from PIT.
     {
         Level cur = pin_rd_.level();
         if (cur == Level::Low && rd_prev_ != Level::Low)
             on_read_falling();
+        else if (cur != Level::Low && rd_prev_ == Level::Low)
+            release_data_bus();
         rd_prev_ = cur;
     }
 }
@@ -124,6 +129,15 @@ void IC_8253::on_read_falling() {
     // Drive data bus.
     for (int i = 0; i < 8; ++i) {
         pin_data_[i].drive((data & (1 << i)) ? Level::High : Level::Low);
+    }
+    data_bus_driven_ = true;
+}
+
+void IC_8253::release_data_bus() {
+    if (data_bus_driven_) {
+        for (int i = 0; i < 8; ++i)
+            pin_data_[i].release();
+        data_bus_driven_ = false;
     }
 }
 

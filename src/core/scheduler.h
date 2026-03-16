@@ -27,37 +27,34 @@ namespace bench {
 class Scheduler {
 public:
     void register_callback(CallbackComponent* cc) {
-        assert(callback_count_ < MAX_CALLBACKS && "Scheduler: too many callbacks");
-        callbacks_[callback_count_++] = cc;
+        callbacks_.push_back(cc);
     }
 
     void register_fiber(FiberComponent* fc) {
-        assert(fiber_count_ < MAX_FIBERS && "Scheduler: too many fiber components");
-        fibers_[fiber_count_++] = fc;
+        fibers_.push_back(fc);
     }
 
     // Register a component for visualization only (e.g. threaded 8284A).
     void register_visual(Component* c) {
-        assert(visual_count_ < MAX_VISUALS && "Scheduler: too many visual components");
-        visuals_[visual_count_++] = c;
+        visuals_.push_back(c);
     }
 
     // Power on/off all registered components (called by PSU on clock thread).
     // Order: callbacks first, then fibers (mirrors the old manual sequence).
     void power_on_all() {
-        for (int i = 0; i < callback_count_; ++i) callbacks_[i]->power_on();
-        for (int i = 0; i < fiber_count_;    ++i) fibers_[i]->power_on();
+        for (auto* cc : callbacks_) cc->power_on();
+        for (auto* fc : fibers_)    fc->power_on();
     }
     void power_off_all() {
         // Fibers first (CPU), then callbacks (reverse of power-on).
-        for (int i = 0; i < fiber_count_;    ++i) fibers_[i]->power_off();
-        for (int i = 0; i < callback_count_; ++i) callbacks_[i]->power_off();
+        for (auto* fc : fibers_)    fc->power_off();
+        for (auto* cc : callbacks_) cc->power_off();
     }
 
     // Build the callback dependency graph and topologically sort into waves.
     // Call once after all callbacks are registered, before the first evaluate().
     void resolve() {
-        const int n = callback_count_;
+        const int n = static_cast<int>(callbacks_.size());
         if (n == 0) { resolved_ = true; return; }
 
         constexpr int W = Component::SLOT_WORDS;
@@ -65,7 +62,7 @@ public:
         // Build adjacency: depends[b][a] = true means b depends on a.
         // Uses effective outputs (output & ~input) to exclude bidirectional pins,
         // and effective inputs (input & ~async) to exclude cross-cycle signals.
-        bool depends[MAX_CALLBACKS][MAX_CALLBACKS] = {};
+        std::vector<std::vector<bool>> depends(n, std::vector<bool>(n, false));
         for (int a = 0; a < n; ++a) {
             for (int b = 0; b < n; ++b) {
                 if (a == b) continue;
@@ -81,25 +78,25 @@ public:
         }
 
         // Kahn's algorithm -- topological sort with level assignment.
-        int in_deg[MAX_CALLBACKS] = {};
-        int level[MAX_CALLBACKS] = {};
+        std::vector<int> in_deg(n, 0);
+        std::vector<int> level(n, 0);
         for (int b = 0; b < n; ++b)
             for (int a = 0; a < n; ++a)
                 if (depends[b][a]) ++in_deg[b];
 
-        int queue[MAX_CALLBACKS];
-        int front = 0, back = 0;
+        std::vector<int> queue;
+        queue.reserve(n);
         for (int i = 0; i < n; ++i)
-            if (in_deg[i] == 0) queue[back++] = i;
+            if (in_deg[i] == 0) queue.push_back(i);
 
         int sorted = 0;
-        while (front < back) {
-            int u = queue[front++];
+        for (int front = 0; front < static_cast<int>(queue.size()); ++front) {
+            int u = queue[front];
             ++sorted;
             for (int v = 0; v < n; ++v) {
                 if (!depends[v][u]) continue;
                 level[v] = std::max(level[v], level[u] + 1);
-                if (--in_deg[v] == 0) queue[back++] = v;
+                if (--in_deg[v] == 0) queue.push_back(v);
             }
         }
         if (sorted != n) {
@@ -109,7 +106,6 @@ public:
                 spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", callbacks_[i]->name(), in_deg[i]);
                 for (int j = 0; j < n; ++j) {
                     if (!depends[i][j] || in_deg[j] <= 0) continue;
-                    // Find which signal creates this edge.
                     for (int s = 1; s < SignalPool::count; ++s) {
                         int w2 = s / 64;
                         uint64_t bit = uint64_t(1) << (s % 64);
@@ -124,22 +120,20 @@ public:
         }
 
         // Populate waves.
-        num_waves_ = 0;
+        int num_waves = 0;
         for (int i = 0; i < n; ++i)
-            if (level[i] + 1 > num_waves_) num_waves_ = level[i] + 1;
+            num_waves = std::max(num_waves, level[i] + 1);
 
-        for (int w = 0; w < num_waves_; ++w)
-            wave_counts_[w] = 0;
+        waves_.resize(num_waves);
+        for (auto& w : waves_) w.clear();
 
-        for (int i = 0; i < n; ++i) {
-            int w = level[i];
-            waves_[w][wave_counts_[w]++] = callbacks_[i];
-        }
+        for (int i = 0; i < n; ++i)
+            waves_[level[i]].push_back(callbacks_[i]);
 
-        for (int w = 0; w < num_waves_; ++w) {
-            spdlog::info("[Scheduler] wave {}: {} callbacks", w, wave_counts_[w]);
-            for (int i = 0; i < wave_counts_[w]; ++i)
-                spdlog::info("[Scheduler]   - {}", waves_[w][i]->name());
+        for (int w = 0; w < num_waves; ++w) {
+            spdlog::info("[Scheduler] wave {}: {} callbacks", w, waves_[w].size());
+            for (auto* c : waves_[w])
+                spdlog::info("[Scheduler]   - {}", c->name());
         }
 
         dump_unified_waves();
@@ -152,8 +146,8 @@ public:
     void dump_unified_waves() {
         // Collect ALL evaluable components (fibers included for DAG, excluded from exec).
         std::vector<Component*> evals;
-        for (int i = 0; i < fiber_count_;     ++i) evals.push_back(fibers_[i]);
-        for (int i = 0; i < callback_count_;  ++i) evals.push_back(callbacks_[i]);
+        for (auto* fc : fibers_)    evals.push_back(fc);
+        for (auto* cc : callbacks_) evals.push_back(cc);
         const int n = static_cast<int>(evals.size());
         if (n == 0) return;
 
@@ -228,10 +222,10 @@ public:
 
         // Gather visuals + evals into one flat list for node indexing.
         std::vector<Component*> all;
-        for (int i = 0; i < visual_count_; ++i) all.push_back(visuals_[i]);
+        for (auto* v : visuals_) all.push_back(v);
         for (auto* c : evals) all.push_back(c);
         int total = static_cast<int>(all.size());
-        int eval_start = visual_count_;
+        int eval_start = static_cast<int>(visuals_.size());
 
         // Wave colors.
         const char* wave_colors[] = {
@@ -572,17 +566,10 @@ private:
     bool resolved_ = false;
     bool unified_resolved_ = false;
 
-    static constexpr int MAX_CALLBACKS = 64;
-    static constexpr int MAX_FIBERS = 256;
-    static constexpr int MAX_WAVES = 16;
+    std::vector<CallbackComponent*> callbacks_;
 
-    CallbackComponent* callbacks_[MAX_CALLBACKS] = {};
-    int callback_count_ = 0;
-
-    // Resolved callback waves (populated by resolve(), legacy fallback).
-    CallbackComponent* waves_[MAX_WAVES][MAX_CALLBACKS] = {};
-    int wave_counts_[MAX_WAVES] = {};
-    int num_waves_ = 0;
+    // Resolved callback waves (populated by resolve(), used for diagnostics).
+    std::vector<std::vector<CallbackComponent*>> waves_;
 
     // Per-permutation wave plans (populated by dump_unified_waves()).
     struct WavePlan {
@@ -722,12 +709,8 @@ private:
         return plan;
     }
 
-    FiberComponent* fibers_[MAX_FIBERS] = {};
-    int fiber_count_ = 0;
-
-    static constexpr int MAX_VISUALS = 8;
-    Component* visuals_[MAX_VISUALS] = {};
-    int visual_count_ = 0;
+    std::vector<FiberComponent*> fibers_;
+    std::vector<Component*> visuals_;
 };
 
 } // namespace bench
