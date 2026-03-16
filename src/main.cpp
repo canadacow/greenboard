@@ -11,7 +11,12 @@
 #include "ic/ic_8088.h"
 #include "ic/ic_rom_8k.h"
 #include "ic/ic_74s373.h"
+#include "ic/ic_74s244.h"
 #include "ic/ic_74s245.h"
+#include "ic/ic_74s08.h"
+#include "ic/ic_74s10.h"
+#include "ic/ic_74ls02.h"
+#include "ic/ic_74ls32.h"
 #include <thread>
 #include <chrono>
 
@@ -56,6 +61,16 @@ int main() {
     mb.u9.emplace<bench::IC_74S373>();
     mb.u10.emplace<bench::IC_74S373>();
     mb.u8.emplace<bench::IC_74S245>();
+    mb.u12.emplace<bench::IC_74S245>();
+    mb.u13.emplace<bench::IC_74S245>();
+    mb.u14.emplace<bench::IC_74S245>();
+    mb.u15.emplace<bench::IC_74S244>();
+    mb.u16.emplace<bench::IC_74S244>();
+    mb.u17.emplace<bench::IC_74S244>();
+    mb.u27.emplace<bench::IC_74LS02>();
+    mb.u84.emplace<bench::IC_74S10>();
+    mb.u97.emplace<bench::IC_74S08>();
+    mb.u101.emplace<bench::IC_74LS32>();
 
     // ROMs
     mb.u29.emplace<bench::IC_ROM_8K>("BASIC_C1", "assets/IBM 5150 - Cassette BASIC version C1.10 - U29 - 5000019.bin");

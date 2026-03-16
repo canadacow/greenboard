@@ -45,8 +45,11 @@ add_executable(bench
     src/ic/ic_td1.cpp
     src/ic/ic_74s74.cpp
     src/ic/ic_74s00_u81.cpp
+    src/ic/ic_74ls02.cpp
     src/ic/ic_74ls30.cpp
+    src/ic/ic_74ls32.cpp
     src/ic/ic_74ls670.cpp
+    src/ic/ic_74s10.cpp
     src/ic/ic_dram_256k.cpp
     ${BENCH_HEADERS}
 )
@@ -104,6 +107,9 @@ add_executable(test_8088
     src/ic/ic_74ls670.cpp
     src/ic/ic_rom_8k.cpp
     src/ic/ic_dram_256k.cpp
+    src/ic/ic_74s10.cpp
+    src/ic/ic_74ls02.cpp
+    src/ic/ic_74ls32.cpp
     ${BENCH_HEADERS}
 )
 target_include_directories(test_8088 PRIVATE ${CMAKE_SOURCE_DIR}/src)

@@ -28,6 +28,9 @@
 #include "ic/ic_74ls30.h"
 #include "ic/ic_74ls670.h"
 #include "ic/ic_8237a.h"
+#include "ic/ic_74s10.h"
+#include "ic/ic_74ls02.h"
+#include "ic/ic_74ls32.h"
 #include "board/isa_slot.h"
 #include <string>
 #include <vector>
@@ -113,6 +116,19 @@ struct TestBoard {
     Signal n_000328{"N-000328"};        // PIT OUT1 -> U67 FF2 CLK (stub)
     Signal dma_aen_bar{"~DMA_AEN"};     // U18/U19 output enable (stub=VCC)
 
+    // Glue logic intermediate signals (U84, U97, U27, U101)
+    Signal rdy_to_dma{"RDY_TO_DMA"};  // U97 gate 3 output -> DMA pin 6
+    Signal n_000244{"N-000244"};      // U98 ~3Q -> U97 gate 3 input
+    Signal n_000245{"N-000245"};      // U98 3Q -> U97 gate 4 input
+    Signal n_000246{"N-000246"};      // U97 gate 4 output
+    Signal n_000235{"N-000235"};      // U84 gate 3 output -> U97 gate 1 input
+    Signal n_000215{"N-000215"};      // U84 gate 1 output (inverted DT/~R)
+    Signal n_000239{"N-000239"};      // U84 gate 2 output
+    Signal u101_y4{"N-000291"};       // U101 gate 4 output -> U5 pin 3
+    Signal n_000288{"N-000288"};      // U27 gate 2 output
+    Signal n_000317{"N-000317"};      // U27 gate 3 output
+    Signal n_000303{"N-000303"};      // U27 gate 4 output
+
     // 8284A signals
     Signal osc{"OSC"}, pclk{"PCLK"}, res{"RES"};
 
@@ -171,6 +187,10 @@ struct TestBoard {
     Socket inv51_socket{"U51", "74S04", 14};   // Hex inverter (~RESET_DRV)
     Socket dma_page_latch{"U18", "74S373", 20};  // DMA address latch (A8-A15)
     Socket dma_page_reg{"U19", "74LS670", 16};   // DMA page register (A16-A19)
+    Socket nand84_socket{"U84", "74S10", 14};    // Triple 3-input NAND (DACK/AEN gating)
+    Socket and97_socket{"U97", "74S08", 14};     // Quad AND (NMI, RDY_TO_DMA)
+    Socket nor27_socket{"U27", "74LS02", 14};    // Quad NOR (ROM/RAM/IO select)
+    Socket or101_socket{"U101", "74LS32", 14};   // Quad OR (~DMA_CS generation)
     std::vector<Socket> ram_bank0, ram_bank1, ram_bank2, ram_bank3;
 
     // --- IC pointers (set by wire()) ---
@@ -204,6 +224,10 @@ struct TestBoard {
     IC_74S04* inv51_ic = nullptr;     // U51
     IC_74S373* dma_page_latch_ic = nullptr;  // U18
     IC_74LS670* dma_page_reg_ic = nullptr;   // U19
+    IC_74S10* nand84_ic = nullptr;             // U84
+    IC_74S08* and97_ic = nullptr;              // U97
+    IC_74LS02* nor27_ic = nullptr;             // U27
+    IC_74LS32* or101_ic = nullptr;             // U101
     IC_DRAM_256K dram;
 
     void wire(const std::string& bios_path) {
@@ -220,6 +244,9 @@ struct TestBoard {
             &aen_brd, &nclk88, &hrq_dma_bar, &n_000242,
             &n_000243, &n_000238, &n_000231, &n_000230,
             &dclk, &tc, &reset_drv_bar, &n_000328, &dma_aen_bar,
+            &rdy_to_dma, &n_000244, &n_000245, &n_000246,
+            &n_000235, &n_000215, &n_000239, &u101_y4,
+            &n_000288, &n_000317, &n_000303,
         };
         for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
         for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
@@ -674,7 +701,7 @@ struct TestBoard {
         dma_socket.wire(3, memr);          // ~XMEMR (DMA drives during transfer)
         dma_socket.wire(4, memw);          // ~XMEMW (DMA drives during transfer)
         dma_socket.wire(5, vcc);           // VCC
-        dma_socket.wire(6, vcc);           // RDY_TO_DMA = always ready
+        dma_socket.wire(6, rdy_to_dma);    // RDY_TO_DMA from U97 gate 3
         dma_socket.wire(7, holda);         // HOLDA from U67 FF1
         dma_socket.wire(8, adstb);         // ADSTB (N-000280 aliased)
         dma_socket.wire(9, dma_aen_out);   // AEN output (unconnected on real 5150)
@@ -759,7 +786,7 @@ struct TestBoard {
         // U5.3 comes from U101 (74LS32, not implemented) -- tie to VCC.
         nand5_socket.wire(1, vcc);             // A = +5V
         nand5_socket.wire(2, vcc);             // B = +5V
-        nand5_socket.wire(3, vcc);             // C = U5.3 (from U101, stub VCC)
+        nand5_socket.wire(3, u101_y4);         // C = U101 gate 4 output
         nand5_socket.wire(4, n_000242);        // D = N-000242 (HRQ active flag)
         nand5_socket.wire(5, cpu_lock);        // E = ~LOCK
         nand5_socket.wire(6, s1);              // F = ~S1
@@ -784,6 +811,8 @@ struct TestBoard {
         ff98_socket.wire(8, gnd);              // GND
         ff98_socket.wire(9, clk);              // CLK
         ff98_socket.wire(10, gnd);             // 3D = tied low (unused)
+        ff98_socket.wire(11, n_000244);        // ~3Q = N-000244 -> U97 gate 3
+        ff98_socket.wire(12, n_000245);        // 3Q = N-000245 -> U97 gate 4
         ff98_socket.wire(13, n_000238);        // 4D = N-000238 (bus idle grant)
         ff98_socket.wire(15, n_000231);        // 4Q = N-000231 -> U67 FF1 D
         ff98_socket.wire(16, vcc);             // VCC
@@ -932,6 +961,76 @@ struct TestBoard {
             slot.wire_pin(38, &gnd);       // -12V (B7) stub
             slot.wire_pin(40, &gnd);       // +12V (B9) stub
         }
+
+        // U101: 74LS32 Quad OR (~DMA_CS generation)
+        // BRD: Gate 4: OR(~DMA_CS, ~XIOW) -> U5 pin 3
+        // Gates 1-3: PIT/PPI write gating (not wired in test bench)
+        or101_socket.wire(7, gnd);
+        or101_socket.wire(12, dma_cs);         // A4 = ~DMA_CS
+        or101_socket.wire(13, iow_sig);        // B4 = ~XIOW (aliased to ~IOW)
+        or101_socket.wire(11, u101_y4);        // Y4 = -> U5 pin 3
+        or101_socket.wire(14, vcc);
+        or101_ic = or101_socket.emplace<IC_74LS32>();
+
+        // U84: 74S10 Triple 3-Input NAND (DACK/AEN gating)
+        // BRD: Gate 1 (1,2,13->12): NAND(VCC, VCC, DT/~R) = ~(DT/~R) -> N-000215
+        //       Gate 2 (3,4,5->6): NAND(~DACK_0_BRD, AEN_BRD, N-000241) -> N-000239
+        //       Gate 3 (9,10,11->8): NAND(N-000236, ~PCK, N-000234) -> N-000235
+        // N-000241, N-000236, N-000234 come from unimplemented ICs; stub to GND
+        // so NAND outputs stay High (safe for NMI inactive).
+        nand84_socket.wire(1, vcc);            // A1 = VCC
+        nand84_socket.wire(2, vcc);            // B1 = VCC
+        nand84_socket.wire(13, dtr);           // C1 = DT/~R
+        nand84_socket.wire(12, n_000215);      // Y1 = N-000215
+        nand84_socket.wire(3, dack0_brd);      // A2 = ~DACK_0_BRD
+        nand84_socket.wire(4, aen_brd);        // B2 = AEN_BRD
+        nand84_socket.wire(5, gnd);            // C2 = N-000241 (stub GND)
+        nand84_socket.wire(6, n_000239);       // Y2 = N-000239
+        nand84_socket.wire(9, gnd);            // A3 = N-000236 (stub GND)
+        nand84_socket.wire(10, gnd);           // B3 = ~PCK (stub GND)
+        nand84_socket.wire(11, gnd);           // C3 = N-000234 (stub GND)
+        nand84_socket.wire(8, n_000235);       // Y3 = N-000235 -> U97 gate 1
+        nand84_socket.wire(7, gnd);
+        nand84_socket.wire(14, vcc);
+        nand84_ic = nand84_socket.emplace<IC_74S10>();
+
+        // U97: 74S08 Quad AND (NMI gate, RDY_TO_DMA)
+        // BRD: Gate 1 (1,2->3): AND(N-000235, N-000225) -> NMI
+        //       Gate 3 (9,10->8): AND(N-000237, N-000244) -> RDY_TO_DMA
+        //       Gate 4 (12,13->11): AND(N-000245, AEN_BRD) -> N-000246
+        // N-000225 = parity check (stub GND -> NMI stays Low = inactive)
+        // N-000237 = VCC (pulled up on real board, keeps RDY_TO_DMA driven by U98 ~3Q)
+        and97_socket.wire(1, n_000235);        // A1 = N-000235 (from U84 gate 3)
+        and97_socket.wire(2, gnd);             // B1 = N-000225 (parity, stub GND -> NMI Low)
+        and97_socket.wire(3, nmi);             // Y1 = NMI
+        and97_socket.wire(7, gnd);
+        and97_socket.wire(9, vcc);             // A3 = N-000237 (pulled up)
+        and97_socket.wire(10, n_000244);       // B3 = N-000244 (U98 ~3Q)
+        and97_socket.wire(8, rdy_to_dma);      // Y3 = RDY_TO_DMA -> DMA pin 6
+        and97_socket.wire(12, n_000245);       // A4 = N-000245 (U98 3Q)
+        and97_socket.wire(13, aen_brd);        // B4 = AEN_BRD
+        and97_socket.wire(11, n_000246);       // Y4 = N-000246
+        and97_socket.wire(14, vcc);
+        and97_ic = and97_socket.emplace<IC_74S08>();
+
+        // U27: 74LS02 Quad NOR (ROM/RAM/IO select decode)
+        // BRD: Gate 2 (5,6->4): NOR(~ROM_ADDR_SEL, ~XMEMR) -> N-000288
+        //       Gate 3 (8,9->10): NOR(~RAM_ADDR_SEL, ~XMEMW) -> N-000317
+        //       Gate 4 (11,12->13): NOR(XA9, ~XIOR) -> N-000303
+        // Gate 1: inputs from unimplemented ICs, leave unconnected.
+        // N-000304 is ~XMEMW (aliased to ~MEMW in test bench).
+        nor27_socket.wire(5, rom_addr_sel);    // A2 = ~ROM_ADDR_SEL
+        nor27_socket.wire(6, memr);            // B2 = ~XMEMR (aliased to ~MEMR)
+        nor27_socket.wire(4, n_000288);        // Y2 = N-000288
+        nor27_socket.wire(7, gnd);
+        nor27_socket.wire(8, n_000317);        // Y3 = N-000317
+        nor27_socket.wire(9, ram_addr_sel);    // A3 = ~RAM_ADDR_SEL
+        nor27_socket.wire(10, memw);           // B3 = ~XMEMW (aliased to ~MEMW)
+        nor27_socket.wire(11, n_000303);       // Y4 = N-000303
+        nor27_socket.wire(12, xa[9]);          // A4 = XA9
+        nor27_socket.wire(13, ior_sig);        // B4 = ~XIOR (aliased to ~IOR)
+        nor27_socket.wire(14, vcc);
+        nor27_ic = nor27_socket.emplace<IC_74LS02>();
     }
 
     void register_all(Scheduler& scheduler) {
@@ -961,6 +1060,10 @@ struct TestBoard {
         scheduler.register_callback(inv51_ic);
         scheduler.register_callback(dma_page_latch_ic);
         scheduler.register_callback(dma_page_reg_ic);
+        scheduler.register_callback(nand84_ic);
+        scheduler.register_callback(and97_ic);
+        scheduler.register_callback(nor27_ic);
+        scheduler.register_callback(or101_ic);
         scheduler.register_callback(&dram);
         scheduler.register_callback(bc);
         scheduler.register_callback(pic);

@@ -2,7 +2,7 @@
 
 Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets)
 
-## Implemented (25 IC types, 73 sockets)
+## Implemented (29 IC types, 84 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -12,21 +12,24 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U2 | 8259A | PIC |
 | U34 | 8253-5 | PIT |
 | U36 | 8255A | PPI |
-| U35 | 8237A | DMA |
+| U35 | 8237A | DMA (multi-cycle S1-S4 state machine per datasheet) |
 | U7,U9,U10,U18 | 74S373 | Address latches + DMA page latch |
-| U8,U12 | 74S245 | Data bus transceivers (AD<->D, D<->MD) |
+| U8,U12,U13,U14 | 74S245 | Bus transceivers (AD<->D, D<->MD, D<->XD, cmd strobes) |
+| U15,U16,U17 | 74S244 | Address bus buffers (A0-A19 onto system bus) |
 | U26,U98 | 74S175 | Quad D FFs (PCLK divider, AEN_BRD/DMA wait) |
 | U46,U47,U48,U65,U66 | 74S138 | Address decode (ROM/RAM/IO/ISA chip selects) |
 | U64 | 74S20 | Dual 4-input NAND (ROM address decode) |
 | U62,U79 | 74S158 | DRAM address multiplexers (row/col select) |
 | U81 | 74S00 | Quad NAND (RAS/CAS timing, virtual TD1 inside) |
 | U52 | 74S00 | Quad NAND (HRQ gate, DCLK) |
-| U49 | 74S08 | Quad AND (RAS decode gating) |
+| U49,U97 | 74S08 | Quad AND (RAS decode gating, RDY_TO_DMA) |
 | U51,U83,U99 | 74S04 | Hex inverters (~RESET, ~WE, ~HRQ/~CLK88/~EOP) |
-| -- | 74S244 | Octal tri-state buffer (IC type implemented, not yet instantiated) |
 | U5 | 74LS30 | 8-input NAND (bus idle detect) |
 | U67 | 74S74 | Dual D FF (HOLDA, DRQ0 latch) |
 | U19 | 74LS670 | DMA page register (4x4 register file) |
+| U84 | 74S10 | Triple 3-input NAND (DACK/AEN gating) |
+| U27 | 74LS02 | Quad NOR (ROM/RAM select decode) |
+| U101 | 74LS32 | Quad OR (~DMA_CS generation) |
 | U37-U45,U53-U61,U69-U77,U85-U93 | 4164 (IC_DRAM_256K) | DRAM banks 0-3 (36 chips, 256KB + parity) |
 | U28-U33 | 8K_X_8ROS | ROM (6 sockets) |
 
@@ -34,8 +37,6 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 
 | Ref | IC | Pins | Role |
 |---|---|---|---|
-| U13,U14 | 74S245 | 20 | System bus transceivers (D<->XD, cmd strobes) |
-| U15,U16,U17 | 74S244 | 20 | Address bus buffers (A0-A19 onto system bus) |
 | U23 | 74S244 | 20 | Data bus buffer (ISA slots) |
 | U24 | 74S322 | 20 | Keyboard shift register (serial->parallel) |
 | U94 | 74S280 | 14 | Parity generator/checker |
@@ -46,17 +47,13 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U100 | 20DIP300 | 20 | Empty socket (unpopulated) |
 | XU4 | 8087 socket | 40 | Math coprocessor (optional) |
 
-## Not Implemented -- Glue Logic (6 sockets)
+## Not Implemented -- Glue Logic (3 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
-| U27 | 74LS02 | Quad NOR |
-| U97 | 74S08 | Quad AND |
 | U50 | 74S02 | Quad NOR |
 | U63 | 74S38 | Quad OC NAND |
 | U80 | 74S125 | Quad tri-state buffer |
-| U84 | 74S10 | Triple 3-input NAND |
-| U101 | 74LS32 | Quad OR |
 
 ## Non-IC Components
 
