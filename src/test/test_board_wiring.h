@@ -114,7 +114,10 @@ struct TestBoard {
     Signal tc{"T/C"};                   // U99 inv2: inverted ~EOP
     Signal reset_drv_bar{"~RESET_DRV"}; // U51 inv1: ~RESET
     Signal n_000328{"N-000328"};        // PIT OUT1 -> U67 FF2 CLK (stub)
-    Signal dma_aen_bar{"~DMA_AEN"};     // U18/U19 output enable (stub=VCC)
+    // ~DMA_AEN: on real board comes from U50 gate 1 (delayed AEN_BRD).
+    // In test bench, alias to aen_bar (U98 ~1Q = ~AEN_BRD) -- same
+    // steady-state behavior, just no 1-CLK delay.
+    Signal& dma_aen_bar = aen_bar;
 
     // Glue logic intermediate signals (U84, U97, U27, U101)
     Signal rdy_to_dma{"RDY_TO_DMA"};  // U97 gate 3 output -> DMA pin 6
@@ -125,6 +128,8 @@ struct TestBoard {
     Signal n_000215{"N-000215"};      // U84 gate 1 output (inverted DT/~R)
     Signal n_000239{"N-000239"};      // U84 gate 2 output
     Signal u101_y4{"N-000291"};       // U101 gate 4 output -> U5 pin 3
+    Signal pg_reg_cs{"N-000259"};      // U66 ~Y4: I/O decode 0x80-0x9F
+    Signal wrt_dma_pg{"~WRT_DMA_PG_REG"}; // U51 inv6 output -> U19 ~WE
     Signal n_000288{"N-000288"};      // U27 gate 2 output
     Signal n_000317{"N-000317"};      // U27 gate 3 output
     Signal n_000303{"N-000303"};      // U27 gate 4 output
@@ -243,10 +248,10 @@ struct TestBoard {
             &dack0_brd, &dack1, &dack2, &dack3, &eop,
             &aen_brd, &nclk88, &hrq_dma_bar, &n_000242,
             &n_000243, &n_000238, &n_000231, &n_000230,
-            &dclk, &tc, &reset_drv_bar, &n_000328, &dma_aen_bar,
+            &dclk, &tc, &reset_drv_bar, &n_000328,
             &rdy_to_dma, &n_000244, &n_000245, &n_000246,
             &n_000235, &n_000215, &n_000239, &u101_y4,
-            &n_000288, &n_000317, &n_000303,
+            &n_000288, &n_000317, &n_000303, &pg_reg_cs, &wrt_dma_pg,
         };
         for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
         for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
@@ -421,6 +426,7 @@ struct TestBoard {
         io_decode.wire(14, intr_cs);    // ~Y1 = ~INTR_CS (0x20-0x3F)
         io_decode.wire(13, pit_cs);     // ~Y2 = ~PIT_CS (0x40-0x5F)
         io_decode.wire(12, ppi_cs);     // ~Y3 = ~PPI_CS (0x60-0x7F)
+        io_decode.wire(11, pg_reg_cs);  // ~Y4 = page reg CS (0x80-0x9F)
         io_decode.wire(16, vcc);
         io_dec = io_decode.emplace<IC_74S138>();
 
@@ -887,7 +893,7 @@ struct TestBoard {
         dma_page_reg.wire(9, xa[17]);           // Q1 = A17
         dma_page_reg.wire(10, xa[16]);          // Q0 = A16
         dma_page_reg.wire(11, dma_aen_bar);     // ~RE = ~DMA_AEN (stub VCC = disabled)
-        dma_page_reg.wire(12, vcc);             // ~WE = VCC (stub, no write port decode)
+        dma_page_reg.wire(12, wrt_dma_pg);      // ~WE = ~WRT_DMA_PG_REG (from U101 gate 1)
         dma_page_reg.wire(13, xa[1]);           // WB = XA1
         dma_page_reg.wire(14, xa[0]);           // WA = XA0
         dma_page_reg.wire(15, d0);              // D0 = XD0
@@ -962,9 +968,13 @@ struct TestBoard {
             slot.wire_pin(40, &gnd);       // +12V (B9) stub
         }
 
-        // U101: 74LS32 Quad OR (~DMA_CS generation)
-        // BRD: Gate 4: OR(~DMA_CS, ~XIOW) -> U5 pin 3
-        // Gates 1-3: PIT/PPI write gating (not wired in test bench)
+        // U101: 74LS32 Quad OR
+        // Gate 4: OR(~DMA_CS, ~XIOW) -> U5 pin 3
+        // Gate 1: OR(~Y4, ~XIOW) -> ~WRT_DMA_PG_REG (Low when writing to 0x80-0x9F)
+        //   On real board this goes through U50/U51, but OR gives same result.
+        or101_socket.wire(1, pg_reg_cs);       // A1 = ~Y4 (page reg CS, 0x80-0x9F)
+        or101_socket.wire(2, iow_sig);         // B1 = ~XIOW
+        or101_socket.wire(3, wrt_dma_pg);      // Y1 = ~WRT_DMA_PG_REG
         or101_socket.wire(7, gnd);
         or101_socket.wire(12, dma_cs);         // A4 = ~DMA_CS
         or101_socket.wire(13, iow_sig);        // B4 = ~XIOW (aliased to ~IOW)
