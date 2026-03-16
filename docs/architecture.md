@@ -71,9 +71,22 @@ Writes are immediately visible to all subsequent reads within the same evaluate 
 
 Compile-time `#define BENCH_PIN_VALIDATION` enables runtime checks on every `Pin::drive()` and `Pin::level()` call, verifying the active component has declared the correct direction for that pin. Catches missing or incorrect `declare_input`/`declare_output` calls. Disabled by default for performance.
 
+### Thread Tuning (`src/host_platform/thread_util.h`)
+
+Platform-agnostic API for OS thread priority and CPU affinity. Windows implementation in `thread_util_win32.cpp`.
+
+```
+thread_set_time_critical();   // THREAD_PRIORITY_TIME_CRITICAL on Windows
+thread_pin_to_pcores();       // SetThreadAffinityMask to P-cores on Intel hybrid CPUs
+```
+
+P-core detection uses `GetSystemCpuSetInformation()` to find logical processors with the highest `EfficiencyClass` value. On non-hybrid systems, `thread_pin_to_pcores()` is a no-op.
+
+Called at the top of `IC_8284A::run()` before fiber conversion.
+
 ### PSU Device (inside 8284A)
 
-The 8284A contains a mock PSU driven via atomics from the main thread (`psu_power_on()`, `psu_power_off()`, `psu_nmi_raise()`, `psu_nmi_lower()`). On the clock thread, the PSU drives GND, VCC, RES, S0-S2, AEN, and NMI. This avoids any main-thread signal writes or scheduler calls.
+The 8284A contains a mock PSU driven from the main thread (`psu_power_on()`, `psu_power_off()`, `psu_nmi_raise()`, `psu_nmi_lower()`). On the clock thread, the PSU drives GND, VCC, RES, S0-S2, AEN, and NMI. This avoids any main-thread signal writes or scheduler calls. Cross-thread visibility of PSU commands relies on the main thread writing before `start()` or during a timed sleep; no atomics are used.
 
 ### Shutdown Order
 
@@ -141,7 +154,7 @@ A virtual test instrument for verifying board wiring:
 - **RESET** (pin 10): Inverted RES input.
 - **READY** (pin 5): RDY1 gated by ~AEN1.
 
-Contains a mock PSU device (driven via atomics from the main thread). On its thread, drives GND, VCC, RES, S0-S2, AEN, NMI. Converts to a fiber (`fiber_convert_thread()`) so it can switch to component fibers during `evaluate()`. Reverts back to a plain thread before returning.
+Contains a mock PSU device (driven from the main thread). On its thread, drives GND, VCC, RES, S0-S2, AEN, NMI. Sets thread priority to TIME_CRITICAL and pins to P-cores (Intel hybrid) before converting to a fiber (`fiber_convert_thread()`) for cooperative scheduling during `evaluate()`. Reverts back to a plain thread before returning.
 
 ## Performance
 
@@ -155,12 +168,22 @@ Key optimizations and their measured impact (64-bit increment benchmark, 5-secon
 | CallbackComponent (eliminate fiber context switches for 8288/PIC) | 11,643 | 2.5x |
 | Convert all non-yielding ICs to callback | 18,377 | 3.9x |
 | Remove double buffering (single array, no commit) + DAG wave ordering | 50,499 | 10.7x |
+| MSVC /GL /LTCG /Ob3 /GS- /Gw /Gy (whole-program optimization, aggressive inlining) | 45,577 | 9.7x |
+
+Note: the last row is measured on a different benchmark configuration (with DMA and more ICs in the DAG) so is not directly comparable to the rows above.
 
 Design principles:
 - **No per-signal overhead**: `drive()` is a single store. No dirty flags, no subscriber notification, no atomic ops.
 - **No double buffering**: DAG-based wave ordering guarantees producers run before consumers, eliminating the need for pending/current arrays and commit passes.
 - **Minimize context switches**: Only the 8088 needs fibers. Everything else is a direct function call.
 - **On-demand DAG solving**: Bidirectional pin permutations are solved on first encounter and cached, avoiding upfront enumeration of all 3^N combinations.
+- **`class final` + LTCG**: All IC classes are marked `final`, enabling MSVC's whole-program optimizer to devirtualize `on_signal_change()` calls at link time.
+
+## DMA Subsystem
+
+The 8237A DMA controller and its supporting glue logic (U67, U98, U19, U52, U62, U79, U49, U81, TD1) can be disabled to reduce the number of ICs evaluated per CLK cycle. On the real 5150, DMA channel 0 performed DRAM refresh (~15 us intervals). Since the emulator's DRAM is behavioral (no charge leakage), refresh cycles are unnecessary. Disabling DMA is equivalent to replacing the 4164 DRAM with SRAM.
+
+DMA can be re-enabled for testing DMA transfers or when ISA devices require it.
 
 ## Future
 

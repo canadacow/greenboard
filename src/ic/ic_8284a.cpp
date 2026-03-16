@@ -1,6 +1,7 @@
 #include "ic/ic_8284a.h"
 #include "core/scheduler.h"
 #include "host_platform/fiber.h"
+#include "host_platform/thread_util.h"
 #include <spdlog/spdlog.h>
 #include <thread>
 
@@ -31,6 +32,10 @@ void IC_8284A::install(Socket& socket) {
 }
 
 void IC_8284A::run(std::stop_token stop) {
+    // Hot thread -- maximize scheduling priority and pin to P-cores.
+    thread_set_time_critical();
+    thread_pin_to_pcores();
+
     // Convert this thread to a fiber so we can switch to component fibers.
     Fiber self = fiber_convert_thread();
 

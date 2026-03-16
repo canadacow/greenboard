@@ -12,7 +12,7 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U2 | 8259A | PIC |
 | U34 | 8253-5 | PIT |
 | U36 | 8255A | PPI |
-| U35 | 8237A | DMA (multi-cycle S1-S4 state machine per datasheet) |
+| U35 | 8237A | DMA controller (S1-S4 state machine). Disableable -- see DMA note below |
 | U7,U9,U10,U18 | 74S373 | Address latches + DMA page latch |
 | U8,U12,U13,U14 | 74S245 | Bus transceivers (AD<->D, D<->MD, D<->XD, cmd strobes) |
 | U15,U16,U17 | 74S244 | Address bus buffers (A0-A19 onto system bus) |
@@ -54,6 +54,12 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U50 | 74S02 | Quad NOR |
 | U63 | 74S38 | Quad OC NAND |
 | U80 | 74S125 | Quad tri-state buffer |
+
+## DMA Subsystem
+
+The 8237A (U35) and its supporting ICs (U67, U98, U19, U52, U62, U79, U49, U81, TD1) can be disabled en masse for performance. On the real 5150, DMA channel 0 performed DRAM refresh. Since the emulator uses behavioral DRAM (no charge leakage), refresh is unnecessary. Disabling DMA removes these ICs from the scheduler's evaluate loop, reducing per-cycle overhead.
+
+DMA can be re-enabled for testing DMA transfers (e.g. floppy, ISA DMA devices).
 
 ## Non-IC Components
 
