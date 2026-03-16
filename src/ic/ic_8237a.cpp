@@ -60,13 +60,12 @@ void IC_8237A::install(Socket& socket) {
 
     // Address pins: input during CPU I/O (register select), output only during
     // DMA transfer.  Declaring as bidir avoids a DAG cycle (8237A -> XA -> U66
-    // -> ~DMA_CS -> 8237A).  Direction starts as Input since DMA transfer
-    // requires HLDA which is not asserted in the test bench.
+    // -> ~DMA_CS -> 8237A).  Direction starts as Input since DMA is idle.
     for (int i = 0; i < 8; ++i) declare_input(pin_a_[i]);
     declare_bidir_block({pin_a_[0], pin_a_[1], pin_a_[2], pin_a_[3],
                          pin_a_[4], pin_a_[5], pin_a_[6], pin_a_[7]},
         BidirDir::Input | BidirDir::Output,
-        [this]() { return state_ == State::Transfer ? BidirDir::Output : BidirDir::Input; });
+        [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::Input; });
 
     // Data bus: output during CPU reads of DMA registers (~CS+~IOR active),
     // input otherwise.  Bidir avoids cycle through 8237A -> D -> U8/U12 -> D -> 8237A.
@@ -74,6 +73,8 @@ void IC_8237A::install(Socket& socket) {
                          pin_db_[4], pin_db_[5], pin_db_[6], pin_db_[7]},
         BidirDir::Input | BidirDir::Output,
         [this]() {
+            // Output when: CPU reading DMA regs, or S1 (upper addr on DB)
+            if (state_ == State::S1) return BidirDir::Output;
             return (pin_cs_.level() == Level::Low && pin_ior_.level() == Level::Low)
                 ? BidirDir::Output : BidirDir::Input;
         });
@@ -82,7 +83,7 @@ void IC_8237A::install(Socket& socket) {
     declare_input(pin_memr_); declare_input(pin_memw_);
     declare_bidir_block({pin_memr_, pin_memw_},
         BidirDir::Input | BidirDir::Output,
-        [this]() { return state_ == State::Transfer ? BidirDir::Output : BidirDir::Input; });
+        [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::Input; });
 }
 
 void IC_8237A::on_signal_change(Fiber /*caller*/) {
@@ -91,7 +92,6 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     Level cs_cur = pin_cs_.level();
     Level ior_cur = pin_ior_.level();
     Level clk_cur = pin_clk_.level();
-    Level hlda_cur = pin_hlda_.level();
 
     // RESET rising edge
     if (reset_cur == Level::High && reset_prev_ != Level::High)
@@ -121,18 +121,12 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     if (clk_cur == Level::Low && clk_prev_ == Level::High)
         on_clk_falling();
 
-    // HLDA rising -- CPU has released the bus
-    if (hlda_cur == Level::High && hlda_prev_ != Level::High) {
-        if (state_ == State::RequestPending)
-            state_ = State::Transfer;
-    }
-
     reset_prev_ = reset_cur;
     iow_prev_ = iow_cur;
     cs_prev_ = cs_cur;
     ior_prev_ = ior_cur;
     clk_prev_ = clk_cur;
-    hlda_prev_ = hlda_cur;
+    hlda_prev_ = pin_hlda_.level();
 }
 
 void IC_8237A::on_reset() {
@@ -141,8 +135,10 @@ void IC_8237A::on_reset() {
     temp_ = 0;
     flip_flop_ = false;
     disabled_ = false;
-    state_ = State::Idle;
+    state_ = State::SI;
     active_ch_ = -1;
+    prev_upper_addr_ = 0;
+    eop_pending_ = false;
 
     for (int i = 0; i < 4; ++i) {
         ch_[i].masked = true;
@@ -152,11 +148,13 @@ void IC_8237A::on_reset() {
 
     // Deassert outputs
     pin_hrq_.drive(Level::Low);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; ++i)
         pin_dack_[i].drive(Level::High);  // active low
-    }
     pin_aen_.drive(Level::Low);
     pin_adstb_.drive(Level::Low);
+
+    release_data();
+    release_address();
 
     spdlog::debug("[8237A] reset");
 }
@@ -298,7 +296,7 @@ void IC_8237A::on_bus_read() {
 }
 
 void IC_8237A::evaluate_dreq() {
-    if (disabled_ || state_ != State::Idle) return;
+    if (disabled_ || state_ != State::SI) return;
 
     // Fixed priority: CH0 highest
     for (int i = 0; i < 4; ++i) {
@@ -307,100 +305,217 @@ void IC_8237A::evaluate_dreq() {
         if (dreq) {
             // Assert HRQ, wait for HLDA
             active_ch_ = i;
-            state_ = State::RequestPending;
+            state_ = State::BusRequested;
             pin_hrq_.drive(Level::High);
+            spdlog::debug("[8237A] HRQ asserted for ch{}", i);
             return;
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// DMA transfer state machine (datasheet Figure 11)
+//
+// Each state is one CLK cycle.  Transitions happen on CLK falling edge.
+//
+//   SI  -- idle, poll DREQ -> BusRequested (HRQ high)
+//   BusRequested -- wait for HLDA -> S1
+//   S1  -- AEN high, drive A0-A7 + DB (upper addr), ADSTB high, ~DACK low
+//   S2  -- ADSTB falls (latches upper addr), release DB, assert ~MEMR/~MEMW
+//   S3  -- wait (extends read; skipped if compressed timing bit set)
+//   S4  -- deassert strobes, update addr/count, TC check, release or loop
+// ---------------------------------------------------------------------------
+
 void IC_8237A::on_clk_falling() {
-    if (state_ != State::Transfer || active_ch_ < 0) return;
-
-    auto& ch = ch_[active_ch_];
-
-    // Assert ~DACK for active channel
-    pin_dack_[active_ch_].drive(Level::Low);  // active low
-
-    // Enable address bus and strobe
-    pin_aen_.drive(Level::High);
-
-    // Drive address on A0-A7 (lower 8 bits of current address)
-    for (int i = 0; i < 8; ++i) {
-        pin_a_[i].drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
-    }
-
-    // Strobe upper address onto data bus (for 74LS373 latch)
-    pin_adstb_.drive(Level::High);
-    for (int i = 0; i < 8; ++i) {
-        pin_db_[i].drive((ch.current_address >> (i + 8)) & 1 ? Level::High : Level::Low);
-    }
-    pin_adstb_.drive(Level::Low);
-
-    // Drive appropriate memory strobe based on transfer type
-    uint8_t transfer_type = (ch.mode >> 2) & 0x03;
-    // 00=verify, 01=write (IO->mem), 10=read (mem->IO)
-    if (transfer_type == 0x01) {
-        pin_memw_.drive(Level::Low);
-    } else if (transfer_type == 0x02) {
-        pin_memr_.drive(Level::Low);
-    }
-
-    // Update address and count
-    bool decrement = (ch.mode & 0x20) != 0;
-    if (decrement)
-        ch.current_address--;
-    else
-        ch.current_address++;
-
-    // Terminal count check
-    if (ch.current_count == 0) {
-        ch.tc_reached = true;
-
-        // Pulse ~EOP
-        pin_eop_.drive(Level::Low);
+    // Deassert EOP from previous cycle
+    if (eop_pending_) {
         pin_eop_.drive(Level::High);
-
-        // Auto-initialize: reload base values
-        bool auto_init = (ch.mode & 0x10) != 0;
-        if (auto_init) {
-            ch.current_address = ch.base_address;
-            ch.current_count = ch.base_count;
-        } else {
-            ch.masked = true;  // mask channel after TC
-        }
-    } else {
-        ch.current_count--;
+        eop_pending_ = false;
     }
 
-    // Deassert memory strobes
-    pin_memr_.drive(Level::High);
-    pin_memw_.drive(Level::High);
+    switch (state_) {
 
-    // Deassert DACK
-    pin_dack_[active_ch_].drive(Level::High);
+    case State::SI:
+        // Nothing -- evaluate_dreq() handles transition to BusRequested
+        break;
 
-    // For single transfer mode, release bus after each byte
-    uint8_t mode_type = (ch.mode >> 6) & 0x03;
-    // 00=demand, 01=single, 10=block, 11=cascade
-    if (mode_type == 0x01 || ch.tc_reached) {
-        // Release bus
-        pin_hrq_.drive(Level::Low);
-        pin_aen_.drive(Level::Low);
-
-        // Release address pins
-        for (int i = 0; i < 8; ++i) {
-            pin_a_[i].release();
+    case State::BusRequested:
+        // HLDA is sampled at CLK falling edge
+        if (pin_hlda_.level() == Level::High) {
+            spdlog::debug("[8237A] HLDA received, entering S1 for ch{}", active_ch_);
+            state_ = State::S1;
+        } else {
+            break;
         }
+        // Fall through to execute S1 in this same CLK cycle
+        [[fallthrough]];
+
+    case State::S1: {
+        auto& ch = ch_[active_ch_];
+
+        // AEN high -- signals external logic that DMA owns the bus
+        pin_aen_.drive(Level::High);
+
+        // Assert ~DACK for active channel
+        pin_dack_[active_ch_].drive(Level::Low);
+
+        // Drive A0-A7 with lower 8 bits of current address
+        for (int i = 0; i < 8; ++i)
+            pin_a_[i].drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
+        a_driving_ = true;
+
+        // Drive DB0-DB7 with upper address byte (A8-A15) for 74S373 latch
+        uint8_t upper = static_cast<uint8_t>(ch.current_address >> 8);
+        drive_data(upper);
+        prev_upper_addr_ = upper;
+
+        // ADSTB high -- will fall at S2 entry, latching upper address
+        pin_adstb_.drive(Level::High);
+
+        state_ = State::S2;
+        break;
+    }
+
+    case State::S2: {
+        // ADSTB falling edge latches upper address into external 74S373 (U18)
+        pin_adstb_.drive(Level::Low);
+
+        // Release data bus (was holding upper address)
         release_data();
 
-        state_ = State::Idle;
-        active_ch_ = -1;
-        ch_[active_ch_ >= 0 ? active_ch_ : 0].request = false;
+        // Assert memory strobes based on transfer type
+        auto& ch = ch_[active_ch_];
+        uint8_t transfer_type = (ch.mode >> 2) & 0x03;
+        // 00=verify, 01=write (IO->mem), 10=read (mem->IO), 11=illegal
+        if (transfer_type == 0x01) {
+            pin_memw_.drive(Level::Low);   // IO -> memory write
+        } else if (transfer_type == 0x02) {
+            pin_memr_.drive(Level::Low);   // memory read -> IO
+        }
+        // verify (00): no strobes, address still generated
 
-        // Check for more pending requests
-        evaluate_dreq();
+        // Compressed timing: skip S3 (command register bit 0)
+        bool compressed = (command_ & 0x01) != 0;
+        state_ = compressed ? State::S4 : State::S3;
+        break;
     }
+
+    case State::S3:
+        // Wait state -- extends read access time.
+        // TODO: check READY for wait-state insertion
+        state_ = State::S4;
+        break;
+
+    case State::S4: {
+        auto& ch = ch_[active_ch_];
+
+        // Deassert memory strobes
+        pin_memr_.drive(Level::High);
+        pin_memw_.drive(Level::High);
+
+        // Update address
+        bool decrement = (ch.mode & 0x20) != 0;
+        if (decrement)
+            ch.current_address--;
+        else
+            ch.current_address++;
+
+        // Terminal count check
+        bool tc = false;
+        if (ch.current_count == 0) {
+            tc = true;
+            ch.tc_reached = true;
+
+            // Assert ~EOP (active low) -- will be deasserted next CLK falling
+            pin_eop_.drive(Level::Low);
+            eop_pending_ = true;
+
+            // Auto-initialize: reload base values
+            if (ch.mode & 0x10) {
+                ch.current_address = ch.base_address;
+                ch.current_count = ch.base_count;
+            } else {
+                ch.masked = true;  // mask channel after TC
+            }
+        } else {
+            ch.current_count--;
+        }
+
+        // Determine whether to release the bus or continue
+        uint8_t mode_type = (ch.mode >> 6) & 0x03;
+        // 00=demand, 01=single, 10=block, 11=cascade
+        bool release_bus = false;
+
+        if (mode_type == 0x01) {
+            // Single transfer: always release after each byte
+            release_bus = true;
+        } else if (mode_type == 0x00) {
+            // Demand: release if DREQ inactive or TC
+            release_bus = tc || (pin_dreq_[active_ch_].level() != Level::High);
+        } else if (mode_type == 0x02) {
+            // Block: release only on TC/EOP
+            release_bus = tc;
+        } else {
+            // Cascade: release on TC
+            release_bus = tc;
+        }
+
+        if (release_bus) {
+            end_dma_service();
+        } else {
+            // Continue with next transfer.
+            // Optimization: skip S1 if upper address byte hasn't changed
+            // (datasheet: "S1 states only when updating of A8-A15 is necessary")
+            uint8_t new_upper = static_cast<uint8_t>(ch.current_address >> 8);
+            if (new_upper != prev_upper_addr_) {
+                state_ = State::S1;  // need to re-latch upper address
+            } else {
+                // Drive updated A0-A7 directly, skip S1
+                for (int i = 0; i < 8; ++i)
+                    pin_a_[i].drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
+                // Re-assert strobes for next transfer
+                uint8_t tt = (ch.mode >> 2) & 0x03;
+                if (tt == 0x01)
+                    pin_memw_.drive(Level::Low);
+                else if (tt == 0x02)
+                    pin_memr_.drive(Level::Low);
+                // Go to S3 or S4 (compressed skips S3)
+                bool compressed = (command_ & 0x01) != 0;
+                state_ = compressed ? State::S4 : State::S3;
+            }
+        }
+        break;
+    }
+
+    } // switch
+}
+
+void IC_8237A::end_dma_service() {
+    int ch_idx = active_ch_;
+
+    // Deassert ~DACK
+    if (ch_idx >= 0)
+        pin_dack_[ch_idx].drive(Level::High);
+
+    // Release bus
+    pin_hrq_.drive(Level::Low);
+    pin_aen_.drive(Level::Low);
+
+    // Release address and data pins
+    release_address();
+    release_data();
+
+    // Clear software request for the channel that just completed
+    if (ch_idx >= 0)
+        ch_[ch_idx].request = false;
+
+    state_ = State::SI;
+    active_ch_ = -1;
+
+    spdlog::debug("[8237A] DMA service complete for ch{}", ch_idx);
+
+    // Check for more pending requests
+    evaluate_dreq();
 }
 
 void IC_8237A::drive_data(uint8_t value) {
@@ -416,6 +531,13 @@ void IC_8237A::release_data() {
         pin_db_[i].release();
     }
     db_driving_ = false;
+}
+
+void IC_8237A::release_address() {
+    if (!a_driving_) return;
+    for (int i = 0; i < 8; ++i)
+        pin_a_[i].release();
+    a_driving_ = false;
 }
 
 uint8_t IC_8237A::read_data() const {

@@ -33,6 +33,14 @@ namespace bench {
 //   Pin 36: ~EOP               (I/O, end of process / terminal count)
 //   Pin 37-40: A4-A7           (output, upper address during DMA)
 //
+// DMA transfer cycle (from datasheet Figure 11):
+//   S1: AEN high, drive A0-A7 (lower addr), DB0-DB7 (upper addr A8-A15),
+//       ADSTB high, ~DACK asserted
+//   S2: ADSTB falls (latches upper addr in 74S373), release DB,
+//       assert ~MEMR/~MEMW strobes
+//   S3: Wait state (extends read pulse; skipped in compressed timing)
+//   S4: Transfer completes, deassert strobes, update addr/count, TC check
+//
 // 5150 usage:
 //   CH0: DRAM refresh (auto-init, single transfer, DREQ0 from PIT ch1)
 //   CH1-CH3: available for ISA peripherals
@@ -53,9 +61,15 @@ private:
     void on_reset();
     void on_clk_falling();
     void evaluate_dreq();
+    void end_dma_service();
     void drive_data(uint8_t value);
     void release_data();
+    void release_address();
     uint8_t read_data() const;
+    bool is_dma_active() const {
+        return state_ == State::S1 || state_ == State::S2 ||
+               state_ == State::S3 || state_ == State::S4;
+    }
 
     // Data bus pins: DB0=pin30, DB1=pin29, ..., DB5=pin23, DB4=pin26, ..., DB7=pin21
     Pin pin_db_[8];
@@ -104,13 +118,19 @@ private:
     uint8_t temp_ = 0;          // temporary register
     bool flip_flop_ = false;    // byte flip-flop (false=low byte, true=high byte)
 
-    // DMA state machine
-    enum class State { Idle, RequestPending, Transfer };
-    State state_ = State::Idle;
+    // DMA state machine -- matches datasheet Figure 11:
+    //   SI: idle, polling DREQ
+    //   BusRequested: HRQ asserted, waiting for HLDA
+    //   S1-S4: active DMA transfer states
+    enum class State { SI, BusRequested, S1, S2, S3, S4 };
+    State state_ = State::SI;
     int active_ch_ = -1;        // which channel is currently active
     bool disabled_ = false;     // controller disabled (command bit 2)
 
     bool db_driving_ = false;   // true when we're actively driving data bus
+    bool a_driving_ = false;    // true when we're driving address pins A0-A7
+    bool eop_pending_ = false;  // EOP asserted this cycle, deassert next cycle
+    uint8_t prev_upper_addr_ = 0; // last A8-A15 latched, for S1 skip optimization
 
     // Edge tracking
     Level reset_prev_ = Level::HiZ;
