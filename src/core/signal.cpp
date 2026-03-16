@@ -155,6 +155,13 @@ Signal::Signal(std::string name) : name_(std::move(name)) {
     SignalPool::names[idx] = name_.c_str();
 }
 
+Signal::Signal(std::string name, int slot) : name_(std::move(name)) {
+    assert(slot > 0 && slot < SignalPool::MAX_SIGNALS && "Invalid pre-allocated slot");
+    level_ = &SignalPool::levels[slot];
+    *level_ = Level::HiZ;
+    SignalPool::names[slot] = name_.c_str();
+}
+
 void Signal::set_pull(Level pull) {
     pull_ = pull;
     if (*level_ == Level::HiZ && pull != Level::HiZ) {

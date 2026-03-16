@@ -42,8 +42,11 @@ struct TestBoard {
     bool dma_enabled = true;
 
     // --- Signals (copper traces) ---
+    // Pre-allocate contiguous blocks for IC outputs.
+    int u97_block_ = SignalPool::allocate_block(4);  // U97 74S08: Y1=NMI, Y2=nc, Y3=RDY_TO_DMA, Y4=N-000246
+
     Signal vcc{"+5V"}, gnd{"GND"}, clk{"CLK"}, reset{"RESET"};
-    Signal ready{"READY"}, nmi{"NMI"}, intr{"INTR"}, test_pin{"~TEST"};
+    Signal ready{"READY"}, nmi{"NMI", u97_block_}, intr{"INTR"}, test_pin{"~TEST"};
     Signal cpu_lock{"~LOCK"}, rqgt0{"~RQ/GT0"};
     Signal qs0{"QS0"}, qs1{"QS1"}, s0{"~S0"}, s1{"~S1"}, s2{"~S2"};
     Bus ad{"AD", 8};
@@ -88,7 +91,10 @@ struct TestBoard {
     Signal refrsh_gate{"~REFRSH_GATE"};
     Signal bank_sel_y4{"N-000256"}, bank_sel_y5{"N-000251"};
     Signal bank_sel_y6{"N-000255"}, bank_sel_y7{"N-000252"};
-    Signal ras0{"~RAS0"}, ras1{"~RAS1"}, ras2{"~RAS2"}, ras3{"~RAS3"};
+    // U49 outputs: Y1=~RAS2, Y2=~RAS3, Y3=~RAS0, Y4=~RAS1 (contiguous block)
+    int ras_block_ = SignalPool::allocate_block(4);
+    Signal ras2{"~RAS2", ras_block_},     ras3{"~RAS3", ras_block_ + 1};
+    Signal ras0{"~RAS0", ras_block_ + 2}, ras1{"~RAS1", ras_block_ + 3};
     Signal* ras_arr[4] = {&ras0, &ras1, &ras2, &ras3};
     Signal dram_cas0{"~CAS0"}, dram_cas1{"~CAS1"}, dram_cas2{"~CAS2"}, dram_cas3{"~CAS3"};
     Signal* dram_cas_arr[4] = {&dram_cas0, &dram_cas1, &dram_cas2, &dram_cas3};
@@ -123,10 +129,11 @@ struct TestBoard {
     Signal& dma_aen_bar = aen_bar;
 
     // Glue logic intermediate signals (U84, U97, U27, U101)
-    Signal rdy_to_dma{"RDY_TO_DMA"};  // U97 gate 3 output -> DMA pin 6
+    Signal u97_y2_nc{"U97_Y2", u97_block_ + 1};          // U97 gate 2 unused
+    Signal rdy_to_dma{"RDY_TO_DMA", u97_block_ + 2};     // U97 gate 3 output -> DMA pin 6
     Signal n_000244{"N-000244"};      // U98 ~3Q -> U97 gate 3 input
     Signal n_000245{"N-000245"};      // U98 3Q -> U97 gate 4 input
-    Signal n_000246{"N-000246"};      // U97 gate 4 output
+    Signal n_000246{"N-000246", u97_block_ + 3};          // U97 gate 4 output
     Signal n_000235{"N-000235"};      // U84 gate 3 output -> U97 gate 1 input
     Signal n_000215{"N-000215"};      // U84 gate 1 output (inverted DT/~R)
     Signal n_000239{"N-000239"};      // U84 gate 2 output
@@ -224,7 +231,7 @@ struct TestBoard {
     IC_74S00_U81* nand81_ic = nullptr;
     IC_74S138<0x01>* ram_range_ic = nullptr; // U48: Y0
     IC_74S138<0xF0>* ras_dec = nullptr;     // U65: Y4-Y7
-    IC_74S08* ras_gate_ic = nullptr;
+    IC_74S08<0x0F>* ras_gate_ic = nullptr;
     IC_74S138<0x0F>* cas_dec = nullptr;     // U47: Y0-Y3
     IC_74S158* mux_lo_ic = nullptr;
     IC_74S158* mux_hi_ic = nullptr;
@@ -239,7 +246,7 @@ struct TestBoard {
     IC_74S373* dma_page_latch_ic = nullptr;  // U18
     IC_74LS670* dma_page_reg_ic = nullptr;   // U19
     IC_74S10* nand84_ic = nullptr;             // U84
-    IC_74S08* and97_ic = nullptr;              // U97
+    IC_74S08<0x0D>* and97_ic = nullptr;        // U97: gates 1,3,4
     IC_74LS02* nor27_ic = nullptr;             // U27
     IC_74LS32* or101_ic = nullptr;             // U101
     IC_74S175* ff26_ic = nullptr;               // U26
@@ -260,7 +267,7 @@ struct TestBoard {
             &aen_brd, &nclk88, &hrq_dma_bar, &n_000242,
             &n_000243, &n_000238, &n_000231, &n_000230,
             &dclk, &tc, &reset_drv_bar, &n_000328,
-            &rdy_to_dma, &n_000244, &n_000245, &n_000246,
+            &u97_y2_nc, &rdy_to_dma, &n_000244, &n_000245, &n_000246,
             &n_000235, &n_000215, &n_000239, &u101_y4,
             &n_000288, &n_000317, &n_000303, &pg_reg_cs, &wrt_dma_pg,
             &pit_clk, &pclk_div2_fb,
@@ -679,7 +686,7 @@ struct TestBoard {
         ras_gate.wire(12, bank_sel_y5);        // A4 = N-000251
         ras_gate.wire(13, refrsh_gate);        // B4 = ~REFRSH_GATE
         ras_gate.wire(14, vcc);
-        ras_gate_ic = ras_gate.emplace<IC_74S08>();
+        ras_gate_ic = ras_gate.emplace<IC_74S08<0x0F>>();
 
         // U47: 74S138 Per-Bank CAS Decoder
         // Decodes A16/A17 into per-bank ~CAS0-3, enabled by ~CAS + ~RAM_ADDR_SEL.
@@ -1033,7 +1040,7 @@ struct TestBoard {
         and97_socket.wire(13, aen_brd);        // B4 = AEN_BRD
         and97_socket.wire(11, n_000246);       // Y4 = N-000246
         and97_socket.wire(14, vcc);
-        and97_ic = and97_socket.emplace<IC_74S08>();
+        and97_ic = and97_socket.emplace<IC_74S08<0x0D>>();
 
         // U27: 74LS02 Quad NOR (ROM/RAM/IO select decode)
         // BRD: Gate 2 (5,6->4): NOR(~ROM_ADDR_SEL, ~XMEMR) -> N-000288

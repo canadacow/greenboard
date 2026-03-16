@@ -22,6 +22,13 @@ struct SignalPool {
 
     static int allocate() { return count++; }
 
+    // Reserve N contiguous slots. Returns base index.
+    static int allocate_block(int n) {
+        int base = count;
+        count += n;
+        return base;
+    }
+
 #ifdef BENCH_PIN_VALIDATION
     static constexpr int SLOT_WORDS = (MAX_SIGNALS + 63) / 64;
     static Component* active_comp_;
@@ -59,14 +66,12 @@ struct Pin {
         return SignalPool::levels[idx];
     }
     void drive(Level lvl) {
-        if (!idx) return;  // slot 0 is dummy -- never write
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::check_write(idx, lvl);
 #endif
         SignalPool::levels[idx] = lvl;
     }
     void release() {
-        if (!idx) return;  // slot 0 is dummy -- never write
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::check_write(idx, Level::HiZ);
 #endif
@@ -85,7 +90,6 @@ struct PinBlock {
     int base = 0;
 
     void drive(const Level* src) {
-        if (!base) return;  // slot 0 is dummy -- never write
 #ifdef BENCH_PIN_VALIDATION
         for (int i = 0; i < N; ++i) SignalPool::check_write(base + i, src[i]);
 #endif
@@ -98,7 +102,6 @@ struct PinBlock {
         std::memcpy(dst, &SignalPool::levels[base], N);
     }
     void fill(Level lvl) {
-        if (!base) return;  // slot 0 is dummy -- never write
 #ifdef BENCH_PIN_VALIDATION
         for (int i = 0; i < N; ++i) SignalPool::check_write(base + i, lvl);
 #endif
@@ -114,7 +117,6 @@ struct PinBlock {
         return SignalPool::levels[base + i];
     }
     void drive(int i, Level lvl) {
-        if (!base) return;  // slot 0 is dummy -- never write
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::check_write(base + i, lvl);
 #endif
@@ -133,6 +135,7 @@ struct PinBlock {
 class Signal {
 public:
     explicit Signal(std::string name);
+    Signal(std::string name, int slot);  // construct at a pre-allocated slot
 
     const std::string& name() const { return name_; }
 

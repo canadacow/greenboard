@@ -38,10 +38,10 @@ public:
 
     // --- Mock PSU (driven from main thread via atomics, acted on by clock thread) ---
     // Call from main thread. The 8284A thread picks these up each cycle.
-    void psu_power_on()  { psu_cmd_.store(PsuCmd::PowerOn, std::memory_order_release); }
-    void psu_power_off() { psu_cmd_.store(PsuCmd::PowerOff, std::memory_order_release); }
-    void psu_nmi_raise() { psu_nmi_.store(true, std::memory_order_release); }
-    void psu_nmi_lower() { psu_nmi_.store(false, std::memory_order_release); }
+    void psu_power_on()  { psu_cmd_ = PsuCmd::PowerOn; }
+    void psu_power_off() { psu_cmd_ = PsuCmd::PowerOff; }
+    void psu_nmi_raise() { psu_nmi_ = true; }
+    void psu_nmi_lower() { psu_nmi_ = false; }
 
     // Give the PSU pin handles to signals it needs to drive.
     // Call once during wiring, before power_on().
@@ -73,8 +73,8 @@ private:
 
     // --- PSU state ---
     enum class PsuCmd : int { None, PowerOn, PowerOff };
-    std::atomic<PsuCmd> psu_cmd_{PsuCmd::None};
-    std::atomic<bool> psu_nmi_{false};
+    PsuCmd psu_cmd_ = PsuCmd::None;
+    bool psu_nmi_ = false;
     Pin psu_vcc_, psu_gnd_, psu_res_, psu_nmi_pin_;
     Pin psu_s0_, psu_s1_, psu_s2_, psu_aen_;
 };

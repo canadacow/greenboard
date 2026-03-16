@@ -36,9 +36,8 @@ void IC_8284A::run(std::stop_token stop) {
 
     // Wait for PSU power-on command (main thread calls psu_power_on()).
     while (!stop.stop_requested()) {
-        auto cmd = psu_cmd_.load(std::memory_order_relaxed);
-        if (cmd == PsuCmd::PowerOn) {
-            psu_cmd_.store(PsuCmd::None, std::memory_order_relaxed);
+        if (psu_cmd_ == PsuCmd::PowerOn) {
+            psu_cmd_ = PsuCmd::None;
 #ifdef BENCH_PIN_VALIDATION
             SignalPool::set_clock_thread();
 #endif
@@ -82,7 +81,7 @@ void IC_8284A::run(std::stop_token stop) {
     // So we skip the divide-by-3 and just strobe CLK high/low.
     while (!stop.stop_requested()) {
         // PSU commands (checked each cycle, relaxed is fine).
-        if (psu_cmd_.load(std::memory_order_relaxed) == PsuCmd::PowerOff) {
+        if (psu_cmd_ == PsuCmd::PowerOff) {
             psu_res_.drive(Level::Low);
             psu_vcc_.drive(Level::HiZ);
             spdlog::debug("[8284A] PSU power-off, oscillator stopped after {} CLK cycles", clk_cycles_);
@@ -90,10 +89,9 @@ void IC_8284A::run(std::stop_token stop) {
         }
 
         // NMI: only drive on change.
-        bool nmi = psu_nmi_.load(std::memory_order_relaxed);
-        if (nmi != nmi_state) {
-            nmi_state = nmi;
-            psu_nmi_pin_.drive(nmi ? Level::High : Level::Low);
+        if (psu_nmi_ != nmi_state) {
+            nmi_state = psu_nmi_;
+            psu_nmi_pin_.drive(psu_nmi_ ? Level::High : Level::Low);
         }
 
         ++clk_cycles_;
