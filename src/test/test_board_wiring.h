@@ -39,6 +39,8 @@
 using namespace bench;
 
 struct TestBoard {
+    bool dma_enabled = true;
+
     // --- Signals (copper traces) ---
     Signal vcc{"+5V"}, gnd{"GND"}, clk{"CLK"}, reset{"RESET"};
     Signal ready{"READY"}, nmi{"NMI"}, intr{"INTR"}, test_pin{"~TEST"};
@@ -1098,8 +1100,8 @@ struct TestBoard {
 
     void register_all(Scheduler& scheduler) {
         // DMA group: skip when HRQ is Low and no DRQ pending.
-        int dma_group = scheduler.register_group("DMA", []() {
-            return false;
+        int dma_group = scheduler.register_group("DMA", [this]() {
+            return dma_enabled;
         });
 
         scheduler.register_callback(xcvr);

@@ -439,6 +439,7 @@ int main() {
     constexpr int BENCH_SECONDS = 5;
     spdlog::info("--- Benchmark: 64-bit increment ({} seconds) ---", BENCH_SECONDS);
     {
+        board.dma_enabled = false;
         std::memset(bus.io.get(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
         bus.reset();
@@ -462,7 +463,8 @@ int main() {
             clk_gen->psu_nmi_raise();
 
             // Wait for CPU to halt (NMI handler does HLT).
-            while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
+            auto halt_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            while (!cpu->halted() && std::chrono::steady_clock::now() < halt_deadline)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             auto end = std::chrono::steady_clock::now();
 
@@ -492,6 +494,7 @@ int main() {
             for (auto* sig : all_traces)
                 sig->reset();
         }
+        board.dma_enabled = true;
     }
 #endif
 

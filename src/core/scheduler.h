@@ -309,19 +309,35 @@ public:
                 for (auto* wc : wave)
                     in_wave_flag[idx_of(wc)] = true;
 
-            // Non-wave components (visuals).
-            std::vector<int> non_wave;
-            for (int i = 0; i < total; ++i)
-                if (!in_wave_flag[i]) non_wave.push_back(i);
+            // Separate non-wave components into visuals (active, threaded)
+            // and truly inactive (group-excluded).
+            std::vector<int> non_wave;      // inactive group members
+            std::vector<int> visual_idx;    // visuals (active but not in waves)
+            for (int i = 0; i < total; ++i) {
+                if (in_wave_flag[i]) continue;
+                if (all[i]->group_id_ >= 0)
+                    non_wave.push_back(i);   // group-excluded
+                else
+                    visual_idx.push_back(i); // visual/threaded
+            }
 
             // Max wave row width (inactive components excluded).
-            int max_cols = 0;
+            int max_cols = static_cast<int>(visual_idx.size());
             for (auto& wave : plan.waves)
                 max_cols = std::max(max_cols, static_cast<int>(wave.size()));
 
             int wave_area_w = PAD * 2 + max_cols * (BOX_W + GAP_X) - GAP_X + WAVE_PAD * 2;
             if (wave_area_w < 600) wave_area_w = 600;
             int cur_y = PAD + TITLE_H;
+
+            // Position visual/threaded components above wave 0.
+            if (!visual_idx.empty()) {
+                int row_w = static_cast<int>(visual_idx.size()) * (BOX_W + GAP_X) - GAP_X;
+                int x0 = (wave_area_w - row_w) / 2;
+                for (int i = 0; i < static_cast<int>(visual_idx.size()); ++i)
+                    pos[visual_idx[i]] = {x0 + i * (BOX_W + GAP_X), cur_y, BOX_W, BOX_H, -1};
+                cur_y += BOX_H + GAP_Y;
+            }
 
             // Position wave rows.
             struct WaveRect { int x, y, w, h; };
@@ -348,7 +364,7 @@ public:
             int inact_rows = (static_cast<int>(non_wave.size()) + INACT_COLS - 1) / INACT_COLS;
             int inact_box_w = INACT_COLS * INACT_COL_W + INACT_PAD * 2;
             int inact_box_h = inact_rows * INACT_ROW_H + INACT_PAD * 2 + 16;
-            int inact_x0 = wave_area_w + PAD;
+            int inact_x0 = wave_area_w * 3 / 4;
             int inact_y0 = wave_area_h - inact_box_h - PAD;
             if (inact_y0 < PAD + TITLE_H) inact_y0 = PAD + TITLE_H;
 
@@ -401,11 +417,15 @@ public:
                 std::vector<std::string> sync_names;
                 std::vector<std::string> async_names;
             };
+            // Build set of inactive component indices for edge filtering.
+            std::vector<bool> is_inactive(total, false);
+            for (int idx2 : non_wave) is_inactive[idx2] = true;
+
             std::map<std::pair<int,int>, EdgeInfo> edges;
             for (int a = 0; a < total; ++a) {
-                if (!in_wave_flag[a]) continue;  // skip inactive sources
+                if (is_inactive[a]) continue;
                 for (int b2 = 0; b2 < total; ++b2) {
-                    if (a == b2 || !in_wave_flag[b2]) continue;  // skip inactive targets
+                    if (a == b2 || is_inactive[b2]) continue;
                     for (int s = 1; s < SignalPool::count; ++s) {
                         const char* nm = SignalPool::names[s];
                         if (!nm) continue;
