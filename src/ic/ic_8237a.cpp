@@ -78,9 +78,11 @@ void IC_8237A::install(Socket& socket) {
                 ? BidirDir::Output : BidirDir::Input;
         });
 
-    // ~MEMR/~MEMW: only driven during DMA transfer (not during normal CPU ops).
-    // Not declared as output to avoid cycle: 8237A -> memr -> U12 -> D -> 8237A.
-    // When DMA transfer is enabled, these will need proper bidir handling.
+    // ~MEMR/~MEMW: input during normal CPU ops (8288 drives), output during DMA.
+    declare_input(pin_memr_); declare_input(pin_memw_);
+    declare_bidir_block({pin_memr_, pin_memw_},
+        BidirDir::Input | BidirDir::Output,
+        [this]() { return state_ == State::Transfer ? BidirDir::Output : BidirDir::Input; });
 }
 
 void IC_8237A::on_signal_change(Fiber /*caller*/) {

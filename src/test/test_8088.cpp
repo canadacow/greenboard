@@ -169,28 +169,22 @@ private:
     void on_clk_rising() {
         uint8_t status = decode_status();
 
-        static const char* cycle_names[] = {"INTA","IOR","IOW","HALT","FETCH","MEMR","MEMW","PASSIVE"};
-
         switch (t_state) {
         case TState::IDLE:
             if (status != 7) {
                 t_state = TState::T1;
                 cycle_type = status;
                 cycle_addr = read_address();
-                spdlog::trace("[BusGlue] T1 start: {} addr=0x{:05X}", cycle_names[cycle_type], cycle_addr);
             }
             break;
 
         case TState::T1:
             t_state = TState::T2;
-            spdlog::trace("[BusGlue] T2: {} addr=0x{:05X}", cycle_names[cycle_type], cycle_addr);
             break;
 
         case TState::T2:
             t_state = TState::T3;
             if (is_read_cycle()) {
-                spdlog::trace("[BusGlue] T3 read: {} addr=0x{:05X}",
-                    cycle_names[cycle_type], cycle_addr);
                 // DRAM reads: U12 (74S245) bridges MD->D automatically.
                 // INTA: PIC drives D via ~CS from U66.
                 // HW-decoded IO: handled by real ICs.
@@ -199,8 +193,6 @@ private:
                     drive_d(io_read(cycle_addr & 0xFFFF));
                 }
             } else if (is_write_cycle()) {
-                spdlog::trace("[BusGlue] T3 write: {} addr=0x{:05X} D=0x{:02X}",
-                    cycle_names[cycle_type], cycle_addr, read_d());
                 // DRAM writes: U12 (74S245) bridges D->MD automatically.
                 if (is_io_cycle() && !is_hw_decoded(cycle_addr)) {
                     io_write(cycle_addr & 0xFFFF, read_d());
@@ -218,7 +210,6 @@ private:
                 cycle_type = status;
                 bus_cycle_count++;
                 cycle_addr = read_address();
-                spdlog::trace("[BusGlue] T4->T1: {} addr=0x{:05X} (back-to-back)", cycle_names[cycle_type], cycle_addr);
             } else {
                 if (is_read_cycle()) {
                     release_d();

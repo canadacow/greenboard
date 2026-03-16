@@ -64,10 +64,6 @@ void IC_74S373::on_signal_change(Fiber /*caller*/) {
     // Transparent mode: Q tracks D continuously
     if (le == Level::High) {
         for (int i = 0; i < 8; ++i) latch_[i] = d_[i].level();
-        uint8_t val = 0;
-        for (int i = 0; i < 8; ++i)
-            if (latch_[i] == Level::High) val |= (1 << i);
-        spdlog::trace("[{}] LE=High transparent latch=0x{:02X}", name(), val);
     }
 
     update_outputs();
@@ -76,19 +72,12 @@ void IC_74S373::on_signal_change(Fiber /*caller*/) {
 void IC_74S373::update_outputs() {
     bool oe_low = oe_.level() == Level::Low;
     if (oe_low) {
-        uint8_t val = 0;
-        for (int i = 0; i < 8; ++i) {
-            q_[i].drive(latch_[i]);
-            if (latch_[i] == Level::High) val |= (1 << i);
-        }
-        if (!oe_active_)
-            spdlog::trace("[{}] ~OE=Low, driving Q=0x{:02X}", name(), val);
+        for (int i = 0; i < 8; ++i) q_[i].drive(latch_[i]);
         oe_active_ = true;
     } else if (oe_active_) {
         // ~OE went High: release Q pins once, then stop driving.
         for (int i = 0; i < 8; ++i) q_[i].release();
         oe_active_ = false;
-        spdlog::trace("[{}] ~OE=High, released Q", name());
     }
     // When !oe_active_ && !oe_low: don't touch Q pins (another driver owns them).
 }

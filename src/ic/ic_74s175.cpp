@@ -79,13 +79,10 @@ void IC_74S175::clear_all() {
 }
 
 void IC_74S175::drive_outputs() {
-    uint8_t val = 0;
     for (int i = 0; i < 4; ++i) {
         pin_q_[i].drive(q_[i] ? Level::High : Level::Low);
         pin_nq_[i].drive(q_[i] ? Level::Low : Level::High);
-        if (q_[i]) val |= (1 << i);
     }
-    spdlog::trace("[{}] Q=0b{:04b} (q0={} q1={} q2={} q3={})", name(), val, q_[0], q_[1], q_[2], q_[3]);
 }
 
 } // namespace bench

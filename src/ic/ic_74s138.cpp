@@ -67,13 +67,9 @@ void IC_74S138::update_outputs() {
 
         for (int i = 0; i < 8; ++i)
             y_[i].drive(i == sel ? Level::Low : Level::High);
-        spdlog::trace("[{}] enabled sel={} -> ~Y{}=Low", name(), sel, sel);
     } else {
         for (int i = 0; i < 8; ++i)
             y_[i].drive(Level::High);
-        spdlog::trace("[{}] disabled g1={} ~g2a={} ~g2b={} (g1.idx={} g2b.idx={})", name(),
-                      (int)g1_.level(), (int)g2a_.level(), (int)g2b_.level(),
-                      g1_.idx, g2b_.idx);
     }
 }
 

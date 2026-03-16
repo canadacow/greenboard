@@ -59,7 +59,7 @@ source_group(TREE ${CMAKE_SOURCE_DIR}/src PREFIX "Source Files" FILES ${BENCH_HE
 
 # Pin validation: runtime checks that every read/write matches declared direction.
 # Disable for release builds.
-add_compile_definitions(BENCH_PIN_VALIDATION)
+#add_compile_definitions(BENCH_PIN_VALIDATION)
 
 # AVX2
 if(MSVC)

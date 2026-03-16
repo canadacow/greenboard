@@ -2,7 +2,7 @@
 
 Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets)
 
-## Implemented (21 IC types, 63 sockets)
+## Implemented (25 IC types, 73 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -13,49 +13,46 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U34 | 8253-5 | PIT |
 | U36 | 8255A | PPI |
 | U35 | 8237A | DMA |
-| U7,U9,U10 | 74S373 | Address latches |
-| U8 | 74S245 | Data bus transceiver (AD<->D) |
-| U12 | 74S245 | Memory data bus transceiver (D<->MD, DRAM read/write) |
-| U26 | 74S175 | PCLK divider / kbd sync |
+| U7,U9,U10,U18 | 74S373 | Address latches + DMA page latch |
+| U8,U12 | 74S245 | Data bus transceivers (AD<->D, D<->MD) |
+| U26,U98 | 74S175 | Quad D FFs (PCLK divider, AEN_BRD/DMA wait) |
 | U46,U47,U48,U65,U66 | 74S138 | Address decode (ROM/RAM/IO/ISA chip selects) |
 | U64 | 74S20 | Dual 4-input NAND (ROM address decode) |
 | U62,U79 | 74S158 | DRAM address multiplexers (row/col select) |
 | U81 | 74S00 | Quad NAND (RAS/CAS timing, virtual TD1 inside) |
+| U52 | 74S00 | Quad NAND (HRQ gate, DCLK) |
 | U49 | 74S08 | Quad AND (RAS decode gating) |
-| U83 | 74S04 | Hex inverter (~WE buffer for DRAM) |
+| U51,U83,U99 | 74S04 | Hex inverters (~RESET, ~WE, ~HRQ/~CLK88/~EOP) |
 | -- | 74S244 | Octal tri-state buffer (IC type implemented, not yet instantiated) |
+| U5 | 74LS30 | 8-input NAND (bus idle detect) |
+| U67 | 74S74 | Dual D FF (HOLDA, DRQ0 latch) |
+| U19 | 74LS670 | DMA page register (4x4 register file) |
 | U37-U45,U53-U61,U69-U77,U85-U93 | 4164 (IC_DRAM_256K) | DRAM banks 0-3 (36 chips, 256KB + parity) |
 | U28-U33 | 8K_X_8ROS | ROM (6 sockets) |
 
-## Not Implemented -- Meaningful ICs (11 sockets)
+## Not Implemented -- Meaningful ICs (7 sockets)
 
 | Ref | IC | Pins | Role |
 |---|---|---|---|
 | U13,U14 | 74S245 | 20 | System bus transceivers (D<->XD, cmd strobes) |
 | U15,U16,U17 | 74S244 | 20 | Address bus buffers (A0-A19 onto system bus) |
 | U23 | 74S244 | 20 | Data bus buffer (ISA slots) |
-| U18 | 74S373 | 20 | DMA page latch |
-| U19 | L670 (74LS670) | 16 | DMA page register (4x4 register file) |
 | U24 | 74S322 | 20 | Keyboard shift register (serial->parallel) |
-| U98 | 74S175 | 16 | Quad D FF (second instance, kbd/timing) |
 | U94 | 74S280 | 14 | Parity generator/checker |
-| U67,U82,U96 | 74S74 | 14 | D flip-flops (DMA req, wait state, NMI gate) |
+| U82,U96 | 74S74 | 14 | D flip-flops (wait state, NMI gate) |
 | U1 | MC1741 | 8 | Speaker op-amp |
 | U95 | 75477 | 8 | Speaker driver |
 | TD2 | TIME_DELAY_1 | 3 | DRAM timing delay |
 | U100 | 20DIP300 | 20 | Empty socket (unpopulated) |
 | XU4 | 8087 socket | 40 | Math coprocessor (optional) |
 
-## Not Implemented -- Glue Logic (9 sockets)
+## Not Implemented -- Glue Logic (6 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
-| U5 | 74LS30 | 8-input NAND (composite READY) |
 | U27 | 74LS02 | Quad NOR |
 | U97 | 74S08 | Quad AND |
 | U50 | 74S02 | Quad NOR |
-| U51,U99 | 74S04 | Hex inverter |
-| U52 | 74S00 | Quad NAND |
 | U63 | 74S38 | Quad OC NAND |
 | U80 | 74S125 | Quad tri-state buffer |
 | U84 | 74S10 | Triple 3-input NAND |
