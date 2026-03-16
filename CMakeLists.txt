@@ -64,11 +64,13 @@ source_group(TREE ${CMAKE_SOURCE_DIR}/src PREFIX "Source Files" FILES ${BENCH_HE
 # Disable for release builds.
 #add_compile_definitions(BENCH_PIN_VALIDATION)
 
-# AVX2
+# Performance: AVX2, aggressive inlining, whole program optimization
 if(MSVC)
-    add_compile_options(/arch:AVX2)
+    add_compile_options(/arch:AVX2 /GL /Ob3 /GS- /Gw /Gy)
+    add_link_options(/LTCG)
 else()
-    add_compile_options(-mavx2)
+    add_compile_options(-mavx2 -flto)
+    add_link_options(-flto)
 endif()
 
 # Set working directory to project root so relative paths (e.g. assets/) resolve correctly.
