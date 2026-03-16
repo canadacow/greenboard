@@ -457,11 +457,11 @@ int main() {
 
             // Let it run for BENCH_SECONDS, then fire NMI.
             auto start = std::chrono::steady_clock::now();
+            auto deadline = start + std::chrono::seconds(BENCH_SECONDS);
             std::this_thread::sleep_for(std::chrono::seconds(BENCH_SECONDS));
             clk_gen->psu_nmi_raise();
 
             // Wait for CPU to halt (NMI handler does HLT).
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
             while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             auto end = std::chrono::steady_clock::now();

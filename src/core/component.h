@@ -147,6 +147,8 @@ private:
     uint64_t outputs_[SLOT_WORDS]      = {};
     uint64_t async_inputs_[SLOT_WORDS] = {};
     std::vector<BidirBlock> bidir_blocks_;
+    int group_id_ = -1;
+    friend class Scheduler;
 };
 
 } // namespace bench

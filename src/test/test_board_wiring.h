@@ -1097,6 +1097,11 @@ struct TestBoard {
     }
 
     void register_all(Scheduler& scheduler) {
+        // DMA group: skip when HRQ is Low and no DRQ pending.
+        int dma_group = scheduler.register_group("DMA", []() {
+            return false;
+        });
+
         scheduler.register_callback(xcvr);
         scheduler.register_callback(mem_xcvr);
         scheduler.register_callback(latch_lo_ic);
@@ -1114,15 +1119,15 @@ struct TestBoard {
         scheduler.register_callback(ras_gate_ic);
         scheduler.register_callback(cas_dec);
         scheduler.register_callback(inv_ic);
-        scheduler.register_callback(dma_ic);
-        scheduler.register_callback(inv99_ic);
-        scheduler.register_callback(nand52_ic);
-        scheduler.register_callback(nand5_ic);
-        scheduler.register_callback(ff67_ic);
-        scheduler.register_callback(ff98_ic);
-        scheduler.register_callback(inv51_ic);
-        scheduler.register_callback(dma_page_latch_ic);
-        scheduler.register_callback(dma_page_reg_ic);
+        scheduler.register_callback(dma_ic,             dma_group);
+        scheduler.register_callback(inv99_ic,           dma_group);
+        scheduler.register_callback(nand52_ic,          dma_group);
+        scheduler.register_callback(nand5_ic,           dma_group);
+        scheduler.register_callback(ff67_ic,            dma_group);
+        scheduler.register_callback(ff98_ic,            dma_group);
+        scheduler.register_callback(inv51_ic,           dma_group);
+        scheduler.register_callback(dma_page_latch_ic,  dma_group);
+        scheduler.register_callback(dma_page_reg_ic,    dma_group);
         scheduler.register_callback(nand84_ic);
         scheduler.register_callback(and97_ic);
         scheduler.register_callback(nor27_ic);

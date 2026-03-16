@@ -26,8 +26,27 @@ namespace bench {
 // topologically sorts into waves, and inserts a commit() between each wave.
 class Scheduler {
 public:
-    void register_callback(CallbackComponent* cc) {
+    // A group of components that can be skipped when inactive.
+    // is_active() is called once per evaluate(); if false, all components
+    // in the group are skipped for that cycle.
+    struct ComponentGroup {
+        std::string name;
+        std::function<bool()> is_active;
+    };
+
+    static constexpr int MAX_GROUPS = 1;
+
+    int register_group(std::string name, std::function<bool()> is_active_fn) {
+        int id = num_groups_++;
+        assert(id < MAX_GROUPS);
+        groups_[id] = {std::move(name), std::move(is_active_fn)};
+        return id;
+    }
+
+    void register_callback(CallbackComponent* cc, int group_id = -1) {
         callbacks_.push_back(cc);
+        callback_group_.push_back(group_id);
+        cc->group_id_ = group_id;
     }
 
     void register_fiber(FiberComponent* fc) {
@@ -295,23 +314,14 @@ public:
             for (int i = 0; i < total; ++i)
                 if (!in_wave_flag[i]) non_wave.push_back(i);
 
-            // Max row width.
-            int max_cols = static_cast<int>(non_wave.size());
+            // Max wave row width (inactive components excluded).
+            int max_cols = 0;
             for (auto& wave : plan.waves)
                 max_cols = std::max(max_cols, static_cast<int>(wave.size()));
 
-            int svg_w = PAD * 2 + max_cols * (BOX_W + GAP_X) - GAP_X + WAVE_PAD * 2;
-            if (svg_w < 600) svg_w = 600;
+            int wave_area_w = PAD * 2 + max_cols * (BOX_W + GAP_X) - GAP_X + WAVE_PAD * 2;
+            if (wave_area_w < 600) wave_area_w = 600;
             int cur_y = PAD + TITLE_H;
-
-            // Position non-wave row.
-            if (!non_wave.empty()) {
-                int row_w = static_cast<int>(non_wave.size()) * (BOX_W + GAP_X) - GAP_X;
-                int x0 = (svg_w - row_w) / 2;
-                for (int i = 0; i < static_cast<int>(non_wave.size()); ++i)
-                    pos[non_wave[i]] = {x0 + i * (BOX_W + GAP_X), cur_y, BOX_W, BOX_H, -1};
-                cur_y += BOX_H + GAP_Y;
-            }
 
             // Position wave rows.
             struct WaveRect { int x, y, w, h; };
@@ -320,7 +330,7 @@ public:
                 int nc = static_cast<int>(plan.waves[w].size());
                 int row_w = nc * (BOX_W + GAP_X) - GAP_X;
                 int wave_w = row_w + WAVE_PAD * 2;
-                int x0 = (svg_w - wave_w) / 2;
+                int x0 = (wave_area_w - wave_w) / 2;
                 int wave_h = BOX_H + WAVE_PAD * 2 + 16;
                 wave_rects.push_back({x0, cur_y, wave_w, wave_h});
                 int bx = x0 + WAVE_PAD;
@@ -330,7 +340,27 @@ public:
                 }
                 cur_y += wave_h + GAP_Y;
             }
-            int svg_h = cur_y + PAD;
+            int wave_area_h = cur_y + PAD;
+
+            // Position inactive components in a box to the lower right.
+            constexpr int INACT_COL_W = 140, INACT_ROW_H = 50, INACT_PAD = 12;
+            constexpr int INACT_COLS = 3;
+            int inact_rows = (static_cast<int>(non_wave.size()) + INACT_COLS - 1) / INACT_COLS;
+            int inact_box_w = INACT_COLS * INACT_COL_W + INACT_PAD * 2;
+            int inact_box_h = inact_rows * INACT_ROW_H + INACT_PAD * 2 + 16;
+            int inact_x0 = wave_area_w + PAD;
+            int inact_y0 = wave_area_h - inact_box_h - PAD;
+            if (inact_y0 < PAD + TITLE_H) inact_y0 = PAD + TITLE_H;
+
+            for (int i = 0; i < static_cast<int>(non_wave.size()); ++i) {
+                int col = i % INACT_COLS, row = i / INACT_COLS;
+                int bx = inact_x0 + INACT_PAD + col * INACT_COL_W + (INACT_COL_W - BOX_W) / 2;
+                int by = inact_y0 + INACT_PAD + 16 + row * INACT_ROW_H;
+                pos[non_wave[i]] = {bx, by, BOX_W, BOX_H, -1};
+            }
+
+            int svg_w = non_wave.empty() ? wave_area_w : inact_x0 + inact_box_w + PAD;
+            int svg_h = std::max(wave_area_h, inact_y0 + inact_box_h + PAD);
 
             // Compute effective outputs/inputs for this permutation.
             std::vector<std::array<uint64_t, W>> eff_out(total), eff_in(total);
@@ -373,8 +403,9 @@ public:
             };
             std::map<std::pair<int,int>, EdgeInfo> edges;
             for (int a = 0; a < total; ++a) {
+                if (!in_wave_flag[a]) continue;  // skip inactive sources
                 for (int b2 = 0; b2 < total; ++b2) {
-                    if (a == b2) continue;
+                    if (a == b2 || !in_wave_flag[b2]) continue;  // skip inactive targets
                     for (int s = 1; s < SignalPool::count; ++s) {
                         const char* nm = SignalPool::names[s];
                         if (!nm) continue;
@@ -439,6 +470,15 @@ public:
                              r.x, r.y, r.w, r.h, wave_colors[w % 8]);
                 std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"wave-label\">wave %d</text>\n",
                              r.x + 6, r.y + 12, w);
+            }
+
+            // Inactive box.
+            if (!non_wave.empty()) {
+                std::fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" "
+                                "rx=\"6\" fill=\"#f5f5f5\" stroke=\"#ccc\" stroke-dasharray=\"4,3\"/>\n",
+                             inact_x0, inact_y0, inact_box_w, inact_box_h);
+                std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"wave-label\" fill=\"#999\">inactive</text>\n",
+                             inact_x0 + 6, inact_y0 + 12);
             }
 
             // Edges -- spread attachment points across bottom/top of boxes.
@@ -546,6 +586,14 @@ public:
             mul *= 3;
         }
 
+        // Fold group active/inactive state into permutation key.
+        // Group bits sit above the bidir base-3 digits.
+        int group_bits = 0;
+        for (int g = 0; g < MAX_GROUPS; ++g)
+            if (groups_[g].is_active())
+                group_bits |= (1 << g);
+        perm += group_bits * mul;
+
         auto it = wave_plans_.find(perm);
         if (it == wave_plans_.end())
             it = wave_plans_.emplace(perm, solve_perm(perm)).first;
@@ -567,6 +615,11 @@ private:
     bool unified_resolved_ = false;
 
     std::vector<CallbackComponent*> callbacks_;
+    std::vector<int> callback_group_;  // group id per callback (-1 = none)
+
+    // Component groups (skippable subsystems).
+    std::array<ComponentGroup, MAX_GROUPS> groups_;
+    int num_groups_ = 0;
 
     // Resolved callback waves (populated by resolve(), used for diagnostics).
     std::vector<std::vector<CallbackComponent*>> waves_;
@@ -597,18 +650,41 @@ private:
             return digit_to_dir[p % 3];
         };
 
-        const int n = static_cast<int>(evals_.size());
+        // Extract group bits from the top of the permutation key.
+        int bidir_space = 1;
+        for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) bidir_space *= 3;
+        int group_bits = (bidir_space > 0) ? perm / bidir_space : 0;
+
+        // Filter out components belonging to inactive groups.
+        std::vector<Component*> active_evals;
+        active_evals.reserve(evals_.size());
+        for (auto* c : evals_) {
+            int gid = c->group_id_;
+            if (gid >= 0 && !(group_bits & (1 << gid))) continue;
+            active_evals.push_back(c);
+        }
+
+        // Remap bidir block indices to filtered component list.
         const int num_bidir = static_cast<int>(bidir_refs_.size());
+        std::vector<int> bidir_active_idx(num_bidir, -1);
+        for (int b = 0; b < num_bidir; ++b) {
+            for (int i = 0; i < static_cast<int>(active_evals.size()); ++i) {
+                if (active_evals[i] == bidir_refs_[b].comp) { bidir_active_idx[b] = i; break; }
+            }
+        }
+
+        const int n = static_cast<int>(active_evals.size());
 
         std::vector<std::array<uint64_t, W>> eff_out(n), eff_in(n);
         for (int i = 0; i < n; ++i)
             for (int w = 0; w < W; ++w) {
-                eff_out[i][w] = evals_[i]->outputs()[w] & ~evals_[i]->inputs()[w];
-                eff_in[i][w]  = evals_[i]->inputs()[w]  & ~evals_[i]->async_inputs()[w];
+                eff_out[i][w] = active_evals[i]->outputs()[w] & ~active_evals[i]->inputs()[w];
+                eff_in[i][w]  = active_evals[i]->inputs()[w]  & ~active_evals[i]->async_inputs()[w];
             }
 
         for (int b = 0; b < num_bidir; ++b) {
-            int ci = bidir_comp_idx_[b];
+            int ci = bidir_active_idx[b];
+            if (ci < 0) continue;  // bidir block's component excluded
             BidirDir dir = perm_dir(perm, b);
             for (int w = 0; w < W; ++w) {
                 uint64_t om = bidir_refs_[b].block->out_mask[w];
@@ -665,7 +741,7 @@ private:
             spdlog::critical("[Scheduler] solve_perm {}: cycle in DAG (sorted {} of {})", perm, sorted, n);
             for (int i = 0; i < n; ++i) {
                 if (in_deg[i] <= 0) continue;
-                spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", evals_[i]->name(), in_deg[i]);
+                spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", active_evals[i]->name(), in_deg[i]);
                 for (int j = 0; j < n; ++j) {
                     if (!depends[i][j]) continue;
                     // Find which signal creates this edge.
@@ -674,7 +750,7 @@ private:
                         uint64_t bit = uint64_t(1) << (s % 64);
                         if ((eff_out[j][w] & bit) && (eff_in[i][w] & bit)) {
                             const char* nm = SignalPool::names[s];
-                            spdlog::critical("[Scheduler]     <- {} via {}", evals_[j]->name(), nm ? nm : "?");
+                            spdlog::critical("[Scheduler]     <- {} via {}", active_evals[j]->name(), nm ? nm : "?");
                         }
                     }
                 }
@@ -691,7 +767,7 @@ private:
             std::vector<Component*> wave;
             for (int i = 0; i < n; ++i)
                 if (level[i] == w)
-                    wave.push_back(evals_[i]);
+                    wave.push_back(active_evals[i]);
             if (!wave.empty())
                 plan.waves.push_back(std::move(wave));
         }
