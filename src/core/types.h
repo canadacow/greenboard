@@ -4,10 +4,10 @@
 namespace bench {
 
 // Tri-state logic level on a wire/trace
-enum class Level : uint8_t {
-    Low  = 0,
+enum class Level : int8_t {
+    Low  = -1,
     High = 1,
-    HiZ  = 2,   // High-impedance / floating
+    HiZ  = 0,   // High-impedance / floating
 };
 
 // Physical pin direction from the IC's perspective
