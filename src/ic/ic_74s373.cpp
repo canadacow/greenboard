@@ -32,20 +32,25 @@ void IC_74S373::install(Socket& socket) {
     if (vcc) vcc->connect(this);
 
     // Pin directions for wiring visualization.
-    for (int i = 0; i < 8; ++i) declare_input(d_[i]);
+    if (async_d_)
+        for (int i = 0; i < 8; ++i) declare_async_input(d_[i]);
+    else
+        for (int i = 0; i < 8; ++i) declare_input(d_[i]);
     declare_input(le_); declare_input(oe_);
     for (int i = 0; i < 8; ++i) declare_output(q_[i]);
 
     // D inputs are only active when LE=High (transparent mode).
     // When LE=Low (latched), D inputs are disconnected -- no DAG dependency.
-    declare_bidir_block({d_[0], d_[1], d_[2], d_[3], d_[4], d_[5], d_[6], d_[7]},
-                        BidirDir::HiZ | BidirDir::Input,
-                        [this]() { return le_.level() == Level::High ? BidirDir::Input : BidirDir::HiZ; });
+    if (!async_d_)
+        declare_bidir_block({d_[0], d_[1], d_[2], d_[3], d_[4], d_[5], d_[6], d_[7]},
+                            BidirDir::HiZ | BidirDir::Input,
+                            [this]() { return le_.level() == Level::High ? BidirDir::Input : BidirDir::HiZ; });
 }
 
 void IC_74S373::on_power_on() {
     std::memset(latch_, static_cast<uint8_t>(Level::HiZ), 8);
     le_prev_ = Level::HiZ;
+    oe_active_ = false;
 }
 
 void IC_74S373::on_signal_change(Fiber /*caller*/) {
@@ -68,10 +73,16 @@ void IC_74S373::on_signal_change(Fiber /*caller*/) {
 }
 
 void IC_74S373::update_outputs() {
-    if (oe_.level() == Level::Low)
+    bool oe_low = oe_.level() == Level::Low;
+    if (oe_low) {
         for (int i = 0; i < 8; ++i) q_[i].drive(latch_[i]);
-    else
-        for (int i = 0; i < 8; ++i) q_[i].drive(Level::HiZ);
+        oe_active_ = true;
+    } else if (oe_active_) {
+        // ~OE went High: release Q pins once, then stop driving.
+        for (int i = 0; i < 8; ++i) q_[i].release();
+        oe_active_ = false;
+    }
+    // When !oe_active_ && !oe_low: don't touch Q pins (another driver owns them).
 }
 
 } // namespace bench

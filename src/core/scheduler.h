@@ -104,9 +104,22 @@ public:
         }
         if (sorted != n) {
             spdlog::critical("[Scheduler] cycle in callback dependencies (sorted {} of {})", sorted, n);
-            for (int i = 0; i < n; ++i)
-                if (in_deg[i] > 0)
-                    spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", callbacks_[i]->name(), in_deg[i]);
+            for (int i = 0; i < n; ++i) {
+                if (in_deg[i] <= 0) continue;
+                spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", callbacks_[i]->name(), in_deg[i]);
+                for (int j = 0; j < n; ++j) {
+                    if (!depends[i][j] || in_deg[j] <= 0) continue;
+                    // Find which signal creates this edge.
+                    for (int s = 1; s < SignalPool::count; ++s) {
+                        int w2 = s / 64;
+                        uint64_t bit = uint64_t(1) << (s % 64);
+                        uint64_t eff_out = callbacks_[j]->outputs()[w2] & ~callbacks_[j]->inputs()[w2];
+                        uint64_t eff_in  = callbacks_[i]->inputs()[w2]  & ~callbacks_[i]->async_inputs()[w2];
+                        if ((eff_out & bit) && (eff_in & bit))
+                            spdlog::critical("[Scheduler]     <- {} via signal #{}", callbacks_[j]->name(), s);
+                    }
+                }
+            }
             std::_Exit(1);
         }
 

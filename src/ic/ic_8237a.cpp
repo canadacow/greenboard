@@ -48,9 +48,12 @@ void IC_8237A::install(Socket& socket) {
     pin_aen_   = pin(9);
 
     // Pin directions for wiring visualization / DAG construction.
-    declare_input(pin_ior_); declare_input(pin_iow_); declare_input(pin_cs_);
-    declare_input(pin_clk_); declare_input(pin_reset_); declare_input(pin_hlda_);
-    for (int i = 0; i < 4; ++i) declare_input(pin_dreq_[i]);
+    declare_input(pin_ior_); declare_input(pin_iow_);
+    declare_async_input(pin_cs_);    // ~CS: CPU programming only, never during DMA transfers
+    declare_async_input(pin_clk_);   // DCLK: clock input, no combinational dependency
+    declare_input(pin_reset_);
+    declare_async_input(pin_hlda_);  // HLDA: latched by external FFs, cross-cycle
+    for (int i = 0; i < 4; ++i) declare_async_input(pin_dreq_[i]);  // async DMA requests
     declare_output(pin_hrq_); declare_output(pin_eop_);
     for (int i = 0; i < 4; ++i) declare_output(pin_dack_[i]);
     declare_output(pin_adstb_); declare_output(pin_aen_);
@@ -104,9 +107,9 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     if (cs_cur == Level::Low && cs_prev_ != Level::Low && ior_cur == Level::Low)
         on_bus_read();
 
-    // Release data bus when ~IOR or ~CS goes inactive
-    if ((ior_cur == Level::High && ior_prev_ != Level::High) ||
-        (cs_cur == Level::High && cs_prev_ != Level::High))
+    // Release data bus when ~IOR or ~CS goes inactive (was active Low, now not)
+    if ((ior_cur != Level::Low && ior_prev_ == Level::Low) ||
+        (cs_cur != Level::Low && cs_prev_ == Level::Low))
         release_data();
 
     // DREQ changes -- check for new DMA requests
@@ -402,12 +405,15 @@ void IC_8237A::drive_data(uint8_t value) {
     for (int i = 0; i < 8; ++i) {
         pin_db_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
     }
+    db_driving_ = true;
 }
 
 void IC_8237A::release_data() {
+    if (!db_driving_) return;
     for (int i = 0; i < 8; ++i) {
         pin_db_[i].release();
     }
+    db_driving_ = false;
 }
 
 uint8_t IC_8237A::read_data() const {

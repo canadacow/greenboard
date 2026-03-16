@@ -62,9 +62,12 @@ void IC_74S08::on_signal_change(Fiber /*caller*/) {
 }
 
 void IC_74S08::update_outputs() {
-    for (auto& g : gates_) {
+    for (int i = 0; i < 4; ++i) {
+        auto& g = gates_[i];
         bool both = g.a.level() == Level::High && g.b.level() == Level::High;
-        g.y.drive(both ? Level::High : Level::Low);
+        Level y = both ? Level::High : Level::Low;
+        spdlog::trace("[{}] gate{}: a={} b={} -> y={}", name(), i, (int)g.a.level(), (int)g.b.level(), (int)y);
+        g.y.drive(y);
     }
 }
 

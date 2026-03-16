@@ -12,6 +12,9 @@ alignas(64) Level SignalPool::levels[MAX_SIGNALS] = {};
 const char* SignalPool::names[MAX_SIGNALS] = {};
 int SignalPool::count = 1;  // slot 0 reserved as dummy (reads HiZ, writes vanish)
 
+// Static init: slot 0 must read HiZ (default zero-init gives Level::Low = 0).
+static struct Slot0Init { Slot0Init() { SignalPool::levels[0] = Level::HiZ; } } slot0_init_;
+
 #ifdef BENCH_PIN_VALIDATION
 thread_local bool SignalPool::is_clock_thread_ = false;
 bool SignalPool::validation_enabled_ = true;
@@ -26,35 +29,75 @@ static bool is_power_rail(int idx) {
     return (n[0] == '+' || (n[0] == 'G' && n[1] == 'N' && n[2] == 'D'));
 }
 
-void SignalPool::check_write(int idx, Level lvl) {
-    if (!is_clock_thread_ || !validation_enabled_ || !active_comp_ || idx == 0 || is_power_rail(idx)) return;
-    uint64_t bit = uint64_t(1) << (idx % 64);
-    int word = idx / 64;
-    if (valid_write_[word] & bit) return;
-    if (lvl == Level::HiZ && (valid_hiz_release_[word] & bit)) return;
-    auto comp_name = active_comp_->name();
-    uint64_t comp_out = active_comp_->outputs()[word];
+void SignalPool::print_out_pin_and_exit(bool wrongThread, int word, int idx, uint64_t bit, const Level* lvl)
+{
+    auto comp_name = active_comp_ ? active_comp_->name() : "Unknown";
     const char* pin_name = names[idx] ? names[idx] : "???";
-    spdlog::critical("[PinValidation] {} writing slot {} ({}) without output declaration",
-                     comp_name, idx, pin_name);
-    spdlog::critical("[PinValidation]   outputs[{}] = 0x{:016X}, bit = 0x{:016X}",
-                     word, comp_out, bit);
+
+    if (wrongThread)
+    {
+        if (lvl)
+        {
+            spdlog::critical("[PinValidation] Pin writes to {} ({}) with lvl={} from non-simulation thread.", idx, pin_name, (int)*lvl);
+        }
+        else
+        {
+            spdlog::critical("[PinValidation] Pin reads to {} ({}) from non-simulation thread.", idx, pin_name);
+        }
+    }
+    else if (lvl)
+    {
+        uint64_t comp_out = active_comp_ ? active_comp_->outputs()[word] : UINT64_MAX;
+        spdlog::critical("[PinValidation] {} writing slot {} ({}) without output declaration",
+            comp_name, idx, pin_name);
+        spdlog::critical("[PinValidation]   outputs[{}] = 0x{:016X}, valid_write[{}] = 0x{:016X}, bit = 0x{:016X}",
+            word, comp_out, word, valid_write_[word], bit);
+        spdlog::critical("[PinValidation]   valid_hiz_release[{}] = 0x{:016X}, lvl={}",
+            word, valid_hiz_release_[word], (int)*lvl);
+    }
+    else
+    {
+        uint64_t comp_in = active_comp_ ? active_comp_->inputs()[word] : UINT64_MAX;
+        spdlog::critical("[PinValidation] {} reading slot {} ({}) without input declaration",
+            comp_name, idx, pin_name);
+        spdlog::critical("[PinValidation]   inputs[{}] = 0x{:016X}, bit = 0x{:016X}",
+            word, comp_in, bit);
+    }
     std::_Exit(1);
 }
 
-void SignalPool::check_read(int idx) {
-    if (!is_clock_thread_ || !validation_enabled_ || !active_comp_ || idx == 0 || is_power_rail(idx)) return;
+void SignalPool::check_write(int idx, Level lvl) {
+    if (!validation_enabled_) return;
+
     uint64_t bit = uint64_t(1) << (idx % 64);
     int word = idx / 64;
+
+    if (!is_clock_thread_) {
+        print_out_pin_and_exit(true, word, idx, bit, &lvl);
+    }
+
+    if (!active_comp_ || idx == 0 || is_power_rail(idx)) return;
+
+    if (valid_write_[word] & bit) return;
+    if (lvl == Level::HiZ && (valid_hiz_release_[word] & bit)) return;
+
+    print_out_pin_and_exit(false, word, idx, bit, &lvl);
+}
+
+void SignalPool::check_read(int idx) {
+    if (!validation_enabled_) return;
+
+    uint64_t bit = uint64_t(1) << (idx % 64);
+    int word = idx / 64;
+
+    if (!is_clock_thread_) {
+        print_out_pin_and_exit(true, word, idx, bit, nullptr);
+    }
+
+    if (!active_comp_ || idx == 0 || is_power_rail(idx)) return;
+
     if (valid_read_[word] & bit) return;
-    auto comp_name = active_comp_->name();
-    uint64_t comp_in = active_comp_->inputs()[word];
-    const char* pin_name = names[idx] ? names[idx] : "???";
-    spdlog::critical("[PinValidation] {} reading slot {} ({}) without input declaration",
-                     comp_name, idx, pin_name);
-    spdlog::critical("[PinValidation]   inputs[{}] = 0x{:016X}, bit = 0x{:016X}",
-                     word, comp_in, bit);
-    std::_Exit(1);
+    print_out_pin_and_exit(false, word, idx, bit, nullptr);
 }
 
 void SignalPool::begin_component(Component* c) {

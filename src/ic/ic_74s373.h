@@ -33,6 +33,11 @@ class IC_74S373 : public CallbackComponent {
 public:
     IC_74S373();
 
+    /// Mark D inputs as async (cross-cycle) for DAG ordering.
+    /// Use for instances where LE is pulsed briefly (e.g. ADSTB on U18)
+    /// so the D->Q path is effectively cross-cycle, not combinational.
+    void set_async_inputs() { async_d_ = true; }
+
     void install(Socket& socket);
 
 protected:
@@ -49,6 +54,8 @@ private:
 
     Level latch_[8] = {};  // Latched values
     Level le_prev_ = Level::HiZ;
+    bool oe_active_ = false;   // true when ~OE is Low (outputs driven)
+    bool async_d_ = false;
 };
 
 } // namespace bench

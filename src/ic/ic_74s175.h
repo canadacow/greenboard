@@ -41,6 +41,8 @@ public:
     void install(Socket& socket);
 
 protected:
+    void on_power_on() override;
+    void on_power_off() override;
     void on_signal_change(Fiber caller) override;
 
 private:

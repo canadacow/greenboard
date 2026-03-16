@@ -45,6 +45,8 @@ add_executable(bench
     src/ic/ic_td1.cpp
     src/ic/ic_74s74.cpp
     src/ic/ic_74s00_u81.cpp
+    src/ic/ic_74ls30.cpp
+    src/ic/ic_74ls670.cpp
     src/ic/ic_dram_256k.cpp
     ${BENCH_HEADERS}
 )
@@ -57,7 +59,7 @@ source_group(TREE ${CMAKE_SOURCE_DIR}/src PREFIX "Source Files" FILES ${BENCH_HE
 
 # Pin validation: runtime checks that every read/write matches declared direction.
 # Disable for release builds.
-#add_compile_definitions(BENCH_PIN_VALIDATION)
+add_compile_definitions(BENCH_PIN_VALIDATION)
 
 # AVX2
 if(MSVC)
@@ -96,7 +98,10 @@ add_executable(test_8088
     src/ic/ic_74s158.cpp
     src/ic/ic_td1.cpp
     src/ic/ic_74s74.cpp
+    src/ic/ic_74s175.cpp
     src/ic/ic_74s00_u81.cpp
+    src/ic/ic_74ls30.cpp
+    src/ic/ic_74ls670.cpp
     src/ic/ic_rom_8k.cpp
     src/ic/ic_dram_256k.cpp
     ${BENCH_HEADERS}

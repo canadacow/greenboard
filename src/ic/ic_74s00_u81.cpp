@@ -1,4 +1,5 @@
 #include "ic/ic_74s00_u81.h"
+#include <spdlog/spdlog.h>
 
 namespace bench {
 
@@ -73,15 +74,22 @@ void IC_74S00_U81::on_signal_change(Fiber /*caller*/) {
     // Gate 2 first (drives RAS)
     {
         auto& g = gates_[1];
-        bool both = g.a.level() == Level::High && g.b.level() == Level::High;
-        g.y.drive(both ? Level::Low : Level::High);
+        Level a = g.a.level(), b = g.b.level();
+        bool both = a == Level::High && b == Level::High;
+        Level y = both ? Level::Low : Level::High;
+        spdlog::trace("[U81] gate2: ~MEMR={} ~MEMW={} -> RAS={}", (int)a, (int)b, (int)y);
+        g.y.drive(y);
     }
 
     // Gate 3: virtual TD1 -- use delayed RAS, not pin inputs
     {
         Level ras_now = gates_[1].y.level();
-        if (addr_sel_pin_.idx != 0) addr_sel_pin_.drive(td1_pending_);
+        if (addr_sel_pin_.idx != 0) {
+            spdlog::trace("[U81] addr_sel <- td1_pending={}", (int)td1_pending_);
+            addr_sel_pin_.drive(td1_pending_);
+        }
         Level out = (td1_pending_ == Level::High) ? Level::Low : Level::High;
+        spdlog::trace("[U81] gate3(CAS): td1_pending={} -> ~CAS={}", (int)td1_pending_, (int)out);
         gates_[2].y.drive(out);
         td1_pending_ = ras_now;
     }

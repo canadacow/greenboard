@@ -39,6 +39,9 @@ void IC_8284A::run(std::stop_token stop) {
         auto cmd = psu_cmd_.load(std::memory_order_relaxed);
         if (cmd == PsuCmd::PowerOn) {
             psu_cmd_.store(PsuCmd::None, std::memory_order_relaxed);
+#ifdef BENCH_PIN_VALIDATION
+            SignalPool::set_clock_thread();
+#endif
             // Power on all components before driving VCC (like seating ICs).
             scheduler_->power_on_all();
             psu_gnd_.drive(Level::Low);
@@ -56,9 +59,6 @@ void IC_8284A::run(std::stop_token stop) {
         return;
     }
 
-#ifdef BENCH_PIN_VALIDATION
-    SignalPool::set_clock_thread();
-#endif
     spdlog::debug("[8284A] VCC is High, oscillator spinning");
 
     // Assert RESET on power-up (RES starts low from RC delay).

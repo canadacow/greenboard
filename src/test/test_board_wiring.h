@@ -23,6 +23,10 @@
 #include "ic/ic_74s04.h"
 #include "ic/ic_74s08.h"
 #include "ic/ic_74s244.h"
+#include "ic/ic_74s175.h"
+#include "ic/ic_74s74.h"
+#include "ic/ic_74ls30.h"
+#include "ic/ic_74ls670.h"
 #include "ic/ic_8237a.h"
 #include "board/isa_slot.h"
 #include <string>
@@ -84,15 +88,30 @@ struct TestBoard {
     Signal* dram_cas_arr[4] = {&dram_cas0, &dram_cas1, &dram_cas2, &dram_cas3};
 
     // DMA controller signals
-    Signal holda{"HOLDA"};              // Hold acknowledge (undriven = DMA never gets bus)
-    Signal hrq{"HRQ"};                  // Hold request (from 8237A)
-    Signal adstb{"ADSTB"};              // Address strobe (for DMA page latch)
-    Signal dma_aen_out{"DMA_AEN"};      // AEN output from 8237A
-    Signal drq0{"DRQ0"};               // DMA request 0 (DRAM refresh, undriven)
-    Signal drq1{"DRQ1"}, drq2{"DRQ2"}, drq3{"DRQ3"};  // ISA DMA requests
+    Signal holda{"HOLDA"};              // U67 FF1 Q -> 8237A HLDA
+    Signal hrq{"HRQ"};                  // Hold request (from 8237A, N-000286)
+    Signal adstb{"ADSTB"};              // Address strobe (for DMA page latch, N-000280)
+    Signal dma_aen_out{"DMA_AEN"};      // AEN output from 8237A pin 9
+    Signal drq0{"DRQ0"};               // DMA request 0 (U67 FF2 Q -> 8237A)
+    Signal drq1{"DRQ1"}, drq2{"DRQ2"}, drq3{"DRQ3"};
     Signal dack0_brd{"~DACK_0_BRD"};   // ~DACK0 from 8237A
     Signal dack1{"~DACK1"}, dack2{"~DACK2"}, dack3{"~DACK3"};
     Signal eop{"~EOP"};                 // End of process / terminal count
+
+    // DMA bus grant handshake signals
+    Signal aen_brd{"AEN_BRD"};          // U98 FF1 Q: Low=CPU, High=DMA owns bus
+    Signal nclk88{"N-000247"};          // ~CLK88 from U99 inverter 4
+    Signal hrq_dma_bar{"~HRQ_DMA"};    // U99 inv1: ~HRQ
+    Signal n_000242{"N-000242"};        // U52 gate1 -> U5 + U67 ~CLR
+    Signal n_000243{"N-000243"};        // U5 output (bus idle NAND)
+    Signal n_000238{"N-000238"};        // U83 inv4 output -> U98 FF4 D
+    Signal n_000231{"N-000231"};        // U98 FF4 Q -> U67 FF1 D
+    Signal n_000230{"N-000230"};        // U67 FF1 ~Q -> ~PRE1 (feedback)
+    Signal dclk{"DCLK"};               // U52 gate2: DMA clock
+    Signal tc{"T/C"};                   // U99 inv2: inverted ~EOP
+    Signal reset_drv_bar{"~RESET_DRV"}; // U51 inv1: ~RESET
+    Signal n_000328{"N-000328"};        // PIT OUT1 -> U67 FF2 CLK (stub)
+    Signal dma_aen_bar{"~DMA_AEN"};     // U18/U19 output enable (stub=VCC)
 
     // 8284A signals
     Signal osc{"OSC"}, pclk{"PCLK"}, res{"RES"};
@@ -144,6 +163,14 @@ struct TestBoard {
     Socket mux_hi{"U79", "74S158", 16};
     Socket inv_socket{"U83", "74S04", 14};
     Socket dma_socket{"U35", "8237A", 40};
+    Socket inv99_socket{"U99", "74S04", 14};   // Hex inverter (HRQ, CLK88, EOP)
+    Socket nand52_socket{"U52", "74S00", 14};  // Quad NAND (HRQ gate, DCLK)
+    Socket nand5_socket{"U5", "74LS30", 14};   // 8-input NAND (bus idle)
+    Socket ff67_socket{"U67", "74S74", 14};    // Dual D FF (HOLDA, DRQ0 latch)
+    Socket ff98_socket{"U98", "74S175", 16};   // Quad D FF (AEN_BRD)
+    Socket inv51_socket{"U51", "74S04", 14};   // Hex inverter (~RESET_DRV)
+    Socket dma_page_latch{"U18", "74S373", 20};  // DMA address latch (A8-A15)
+    Socket dma_page_reg{"U19", "74LS670", 16};   // DMA page register (A16-A19)
     std::vector<Socket> ram_bank0, ram_bank1, ram_bank2, ram_bank3;
 
     // --- IC pointers (set by wire()) ---
@@ -169,6 +196,14 @@ struct TestBoard {
     IC_74S158* mux_hi_ic = nullptr;
     IC_74S04* inv_ic = nullptr;
     IC_8237A* dma_ic = nullptr;
+    IC_74S04* inv99_ic = nullptr;     // U99
+    IC_74S00* nand52_ic = nullptr;    // U52
+    IC_74LS30* nand5_ic = nullptr;    // U5
+    IC_74S74* ff67_ic = nullptr;      // U67
+    IC_74S175* ff98_ic = nullptr;     // U98
+    IC_74S04* inv51_ic = nullptr;     // U51
+    IC_74S373* dma_page_latch_ic = nullptr;  // U18
+    IC_74LS670* dma_page_reg_ic = nullptr;   // U19
     IC_DRAM_256K dram;
 
     void wire(const std::string& bios_path) {
@@ -182,6 +217,9 @@ struct TestBoard {
             &holda, &hrq, &adstb, &dma_aen_out,
             &drq0, &drq1, &drq2, &drq3,
             &dack0_brd, &dack1, &dack2, &dack3, &eop,
+            &aen_brd, &nclk88, &hrq_dma_bar, &n_000242,
+            &n_000243, &n_000238, &n_000231, &n_000230,
+            &dclk, &tc, &reset_drv_bar, &n_000328, &dma_aen_bar,
         };
         for (int i = 0; i < 8; ++i)  all_traces.push_back(&ad[i]);
         for (int i = 0; i < 12; ++i) all_traces.push_back(&a_upper[i]);
@@ -244,7 +282,7 @@ struct TestBoard {
         bc_socket.wire(12, iow_sig);
         bc_socket.wire(13, ior_sig);
         bc_socket.wire(14, inta_sig);
-        bc_socket.wire(15, vcc);   // ~AEN = High (no DMA)
+        bc_socket.wire(15, aen_bar);  // ~AEN from U98 (High=CPU, Low=DMA disables cmds)
         bc_socket.wire(16, dtr);
         bc_socket.wire(18, s2);
         bc_socket.wire(19, s0);
@@ -300,7 +338,7 @@ struct TestBoard {
         // (outputs enabled).  During DMA, AEN_BRD goes High to tri-state
         // latch outputs so the DMA controller can drive XA.
         // Without full DMA handshake, tie ~OE to GND (always enabled).
-        latch_lo.wire(1, gnd);       // ~OE = GND (real board: AEN_BRD)
+        latch_lo.wire(1, aen_brd);   // ~OE = AEN_BRD (Low=enabled, High=DMA tri-states)
         latch_lo.wire(11, ale);      // LE = ALE
         latch_lo.wire(10, gnd);
         latch_lo.wire(20, vcc);
@@ -316,7 +354,7 @@ struct TestBoard {
         latch_lo_ic = latch_lo.emplace<IC_74S373>();
 
         // U9: 74S373 Address Latch (mid byte: A0-A7 -> XA8-XA15)
-        latch_mid.wire(1, gnd);      // ~OE = GND (real board: AEN_BRD)
+        latch_mid.wire(1, aen_brd);  // ~OE = AEN_BRD
         latch_mid.wire(11, ale);     // LE = ALE
         latch_mid.wire(10, gnd);
         latch_mid.wire(20, vcc);
@@ -331,7 +369,7 @@ struct TestBoard {
         latch_mid_ic = latch_mid.emplace<IC_74S373>();
 
         // U7: 74S373 Address Latch (high nibble: A8-A11 -> XA16-XA19)
-        latch_hi.wire(1, gnd);       // ~OE = GND (real board: AEN_BRD)
+        latch_hi.wire(1, aen_brd);   // ~OE = AEN_BRD
         latch_hi.wire(11, ale);      // LE = ALE
         latch_hi.wire(10, gnd);
         latch_hi.wire(20, vcc);
@@ -622,6 +660,8 @@ struct TestBoard {
         inv_socket.wire(3, u83_mid);       // A2 = inverted ~MEMW
         inv_socket.wire(4, dram_we);       // Y2 = ~WE (double-inverted = buffered ~MEMW)
         inv_socket.wire(7, gnd);
+        inv_socket.wire(8, n_000238);      // Y4 = bus idle grant (inverted N-000243)
+        inv_socket.wire(9, n_000243);      // A4 = N-000243 (from U5 output)
         inv_socket.wire(14, vcc);
         inv_ic = inv_socket.emplace<IC_74S04>();
 
@@ -635,12 +675,12 @@ struct TestBoard {
         dma_socket.wire(4, memw);          // ~XMEMW (DMA drives during transfer)
         dma_socket.wire(5, vcc);           // VCC
         dma_socket.wire(6, vcc);           // RDY_TO_DMA = always ready
-        dma_socket.wire(7, gnd);           // HOLDA = never grant bus
+        dma_socket.wire(7, holda);         // HOLDA from U67 FF1
         dma_socket.wire(8, adstb);         // ADSTB (N-000280 aliased)
         dma_socket.wire(9, dma_aen_out);   // AEN output (unconnected on real 5150)
         dma_socket.wire(10, hrq);          // HRQ (N-000286 aliased)
         dma_socket.wire(11, dma_cs);       // ~DMA_CS (from U66)
-        dma_socket.wire(12, clk);          // DCLK (aliased to CLK)
+        dma_socket.wire(12, dclk);         // DCLK from U52 gate 2
         dma_socket.wire(13, reset);        // RESET
         dma_socket.wire(14, dack2);        // ~DACK2
         dma_socket.wire(15, dack3);        // ~DACK3
@@ -671,6 +711,167 @@ struct TestBoard {
         dma_socket.wire(40, xa[7]);        // A7 (N-000283 aliased to XA7)
         dma_ic = dma_socket.emplace<IC_8237A>();
 
+        // --- DMA Bus Grant Handshake ---
+        // Path: HRQ -> U99(inv) -> U52(NAND) -> U5(8-NAND) -> U83(inv)
+        //       -> U98(FF) -> U67(FF) -> HOLDA -> 8237A
+        //       -> U98(FF) -> AEN_BRD -> 74S373 ~OE + 8288 ~AEN
+
+        // U51: 74S04 Hex Inverter (~RESET_DRV, ~WRT_DMA_PG_REG)
+        // BRD: inv1: RESET -> ~RESET_DRV
+        inv51_socket.wire(1, reset);           // A1 = RESET
+        inv51_socket.wire(2, reset_drv_bar);   // Y1 = ~RESET_DRV
+        // Remaining inverters unconnected for now
+        inv51_socket.wire(7, gnd);
+        inv51_socket.wire(14, vcc);
+        inv51_ic = inv51_socket.emplace<IC_74S04>();
+
+        // U99: 74S04 Hex Inverter (HRQ, ~EOP, CLK88)
+        // BRD: inv1: HRQ(N-000286) -> ~HRQ_DMA
+        //       inv2: ~EOP(N-000281) -> T/C
+        //       inv4: CLK88 -> N-000247 (~CLK88)
+        inv99_socket.wire(1, hrq);             // A1 = HRQ (N-000286)
+        inv99_socket.wire(2, hrq_dma_bar);     // Y1 = ~HRQ_DMA
+        inv99_socket.wire(3, eop);             // A2 = ~EOP (N-000281)
+        inv99_socket.wire(4, tc);              // Y2 = T/C
+        inv99_socket.wire(7, gnd);
+        inv99_socket.wire(8, nclk88);          // Y4 = N-000247 (~CLK88)
+        inv99_socket.wire(9, clk);             // A4 = CLK88 (= CLK in test bench)
+        inv99_socket.wire(14, vcc);
+        inv99_ic = inv99_socket.emplace<IC_74S04>();
+
+        // U52: 74S00 Quad NAND
+        // BRD: gate1: N-000227 NAND ~HRQ_DMA -> N-000242
+        //       gate2: N-000247 NAND N-000249 -> DCLK
+        // N-000227 is pulled up via RN1 (= VCC). N-000249 = VCC (RC timing stub).
+        nand52_socket.wire(1, vcc);            // A1 = N-000227 (pull-up, always High)
+        nand52_socket.wire(2, hrq_dma_bar);    // B1 = ~HRQ_DMA
+        nand52_socket.wire(3, n_000242);       // Y1 = N-000242
+        nand52_socket.wire(4, nclk88);         // A2 = N-000247 (~CLK88)
+        nand52_socket.wire(5, vcc);            // B2 = N-000249 (RC timing, stub VCC)
+        nand52_socket.wire(6, dclk);           // Y2 = DCLK = ~(~CLK88 & VCC) = CLK88
+        nand52_socket.wire(7, gnd);
+        nand52_socket.wire(14, vcc);
+        nand52_ic = nand52_socket.emplace<IC_74S00>();
+
+        // U5: 74LS30 8-Input NAND (bus idle detect)
+        // BRD: all 8 inputs must be High for output Low (bus idle + HRQ active)
+        // Inputs: +5V(1), +5V(2), U5.3(3), N-000242(4), ~LOCK(5), ~S1(6), ~S0(11), ~S2(12)
+        // U5.3 comes from U101 (74LS32, not implemented) -- tie to VCC.
+        nand5_socket.wire(1, vcc);             // A = +5V
+        nand5_socket.wire(2, vcc);             // B = +5V
+        nand5_socket.wire(3, vcc);             // C = U5.3 (from U101, stub VCC)
+        nand5_socket.wire(4, n_000242);        // D = N-000242 (HRQ active flag)
+        nand5_socket.wire(5, cpu_lock);        // E = ~LOCK
+        nand5_socket.wire(6, s1);              // F = ~S1
+        nand5_socket.wire(7, gnd);
+        nand5_socket.wire(8, n_000243);        // Y = N-000243 (Low when bus idle)
+        nand5_socket.wire(11, s0);             // G = ~S0
+        nand5_socket.wire(12, s2);             // H = ~S2
+        nand5_socket.wire(14, vcc);
+        nand5_ic = nand5_socket.emplace<IC_74LS30>();
+
+        // U98: 74S175 Quad D Flip-Flop (AEN_BRD generation)
+        // BRD: CLK=CLK, ~MR=~RESET_DRV
+        // FF1: D=HOLDA(4) -> Q=AEN_BRD(2), ~Q=~AEN(3)
+        // FF4: D=N-000238(13) -> Q=N-000231(15)
+        // FF2: D=AEN_BRD(5) -> ~Q=~DMA_WAIT(6)
+        // FF3: D=N-000245(10) -> ~Q=N-000244(11) (not used, tie D to GND)
+        ff98_socket.wire(1, reset_drv_bar);    // ~MR = ~RESET_DRV
+        ff98_socket.wire(2, aen_brd);          // 1Q = AEN_BRD
+        ff98_socket.wire(3, aen_bar);          // ~1Q = ~AEN (drives U6.15, U66.6)
+        ff98_socket.wire(4, holda);            // 1D = HOLDA
+        ff98_socket.wire(5, aen_brd);          // 2D = AEN_BRD (latches AEN_BRD again)
+        ff98_socket.wire(8, gnd);              // GND
+        ff98_socket.wire(9, clk);              // CLK
+        ff98_socket.wire(10, gnd);             // 3D = tied low (unused)
+        ff98_socket.wire(13, n_000238);        // 4D = N-000238 (bus idle grant)
+        ff98_socket.wire(15, n_000231);        // 4Q = N-000231 -> U67 FF1 D
+        ff98_socket.wire(16, vcc);             // VCC
+        ff98_ic = ff98_socket.emplace<IC_74S175>();
+
+        // U67: 74S74 Dual D Flip-Flop (HOLDA + DRQ0 latch)
+        // FF1: generates HOLDA from bus idle grant
+        //   ~CLR=N-000242, D=N-000231, CLK=N-000247(~CLK88),
+        //   ~PRE=N-000230(=~Q feedback), Q=HOLDA, ~Q=N-000230
+        // FF2: DRQ0 latch (PIT CH1 -> DREQ0)
+        //   ~CLR=~DACK_0_BRD, D=VCC, CLK=N-000328(PIT OUT1),
+        //   ~PRE=VCC, Q=DRQ0
+        ff67_socket.wire(1, n_000242);         // ~CLR1 = N-000242 (cleared when HRQ inactive)
+        ff67_socket.wire(2, n_000231);         // D1 = N-000231 (bus idle, delayed by U98)
+        ff67_socket.wire(3, nclk88);           // CLK1 = N-000247 (~CLK88)
+        ff67_socket.wire(4, n_000230);         // ~PRE1 = N-000230 (~Q1 feedback)
+        ff67_socket.wire(5, holda);            // Q1 = HOLDA
+        ff67_socket.wire(6, n_000230);         // ~Q1 = N-000230 -> ~PRE1 feedback
+        ff67_socket.wire(7, gnd);              // GND
+        // FF2: DRQ0 latch
+        ff67_socket.wire(9, drq0);             // Q2 = DRQ0
+        ff67_socket.wire(10, vcc);             // ~PRE2 = VCC (no preset)
+        ff67_socket.wire(11, n_000328);        // CLK2 = N-000328 (PIT OUT1, stub)
+        ff67_socket.wire(12, vcc);             // D2 = VCC (always latch High)
+        ff67_socket.wire(13, dack0_brd);       // ~CLR2 = ~DACK_0_BRD (clears on DMA ack)
+        ff67_socket.wire(14, vcc);             // VCC
+        ff67_ic = ff67_socket.emplace<IC_74S74>();
+
+        // U18: 74S373 DMA Page Address Latch (A8-A15 from data bus via ADSTB)
+        // BRD: ~OC=~DMA_AEN, LE=ADSTB(N-000280)
+        // During DMA transfer, 8237A multiplexes upper address onto data bus,
+        // then strobes ADSTB to latch A8-A15 into U18.
+        dma_page_latch.wire(1, dma_aen_bar);   // ~OE = ~DMA_AEN (stub VCC = disabled)
+        dma_page_latch.wire(2, xa[8]);          // Q0 = A8 (output to address bus)
+        dma_page_latch.wire(3, d0);             // D0 = XD0 (from data bus)
+        dma_page_latch.wire(4, d1);             // D1 = XD1
+        dma_page_latch.wire(5, xa[9]);          // Q1 = A9
+        dma_page_latch.wire(6, xa[10]);         // Q2 = A10
+        dma_page_latch.wire(7, d2);             // D2 = XD2
+        dma_page_latch.wire(8, d3);             // D3 = XD3
+        dma_page_latch.wire(9, xa[11]);         // Q3 = A11
+        dma_page_latch.wire(10, gnd);           // GND
+        dma_page_latch.wire(11, adstb);         // LE = ADSTB (N-000280)
+        dma_page_latch.wire(12, xa[12]);        // Q4 = A12
+        dma_page_latch.wire(13, d4);            // D4 = XD4
+        dma_page_latch.wire(14, d5);            // D5 = XD5
+        dma_page_latch.wire(15, xa[13]);        // Q5 = A13
+        dma_page_latch.wire(16, xa[14]);        // Q6 = A14
+        dma_page_latch.wire(17, d6);            // D6 = XD6
+        dma_page_latch.wire(18, d7);            // D7 = XD7
+        dma_page_latch.wire(19, xa[15]);        // Q7 = A15
+        dma_page_latch.wire(20, vcc);           // VCC
+        {   // U18 D inputs are async: latched by ADSTB pulse, not combinational D->Q.
+            auto ic = std::make_unique<IC_74S373>();
+            ic->set_async_inputs();
+            dma_page_latch_ic = ic.get();
+            ic->set_name("U18-74S373");
+            ic->install(dma_page_latch);
+            dma_page_latch.insert(std::move(ic));
+        }
+
+        // U19: 74LS670 4x4 Register File (DMA page register, A16-A19)
+        // BRD: write by CPU via I/O port, read by DMA channel via ~DACK2/~DACK3
+        dma_page_reg.wire(1, d1);               // D1 = XD1
+        dma_page_reg.wire(2, d2);               // D2 = XD2
+        dma_page_reg.wire(3, d3);               // D3 = XD3
+        dma_page_reg.wire(4, dack2);            // RA = ~DACK2 (read address A)
+        dma_page_reg.wire(5, dack3);            // RB = ~DACK3 (read address B)
+        dma_page_reg.wire(6, xa[19]);           // Q3 = A19
+        dma_page_reg.wire(7, xa[18]);           // Q2 = A18
+        dma_page_reg.wire(8, gnd);              // GND
+        dma_page_reg.wire(9, xa[17]);           // Q1 = A17
+        dma_page_reg.wire(10, xa[16]);          // Q0 = A16
+        dma_page_reg.wire(11, dma_aen_bar);     // ~RE = ~DMA_AEN (stub VCC = disabled)
+        dma_page_reg.wire(12, vcc);             // ~WE = VCC (stub, no write port decode)
+        dma_page_reg.wire(13, xa[1]);           // WB = XA1
+        dma_page_reg.wire(14, xa[0]);           // WA = XA0
+        dma_page_reg.wire(15, d0);              // D0 = XD0
+        dma_page_reg.wire(16, vcc);             // VCC
+        {   // U19 D inputs are async: written by ~WE pulse, not combinational D->Q.
+            auto ic = std::make_unique<IC_74LS670>();
+            ic->set_async_inputs();
+            dma_page_reg_ic = ic.get();
+            ic->set_name("U19-74LS670");
+            ic->install(dma_page_reg);
+            dma_page_reg.insert(std::move(ic));
+        }
+
         // --- ISA Slots (J1-J5) ---
         // Wired directly to motherboard signals. Buffer ICs (U14-U17) omitted
         // because series termination resistors are aliased and no DMA is present.
@@ -700,8 +901,8 @@ struct TestBoard {
             // Reset
             slot.wire_pin(33, &reset);     // RESET DRV (B2)
 
-            // AEN_BRD on B28 (IBM 5150 uses this pin for AEN_BRD, not ALE)
-            slot.wire_pin(59, &gnd);       // AEN_BRD = Low (no DMA)
+            // AEN_BRD on B28
+            slot.wire_pin(59, &aen_brd);   // AEN_BRD from U98
 
             // IRQ lines
             slot.wire_pin(35, &irq2);      // IRQ2 (B4)
@@ -752,6 +953,14 @@ struct TestBoard {
         scheduler.register_callback(cas_dec);
         scheduler.register_callback(inv_ic);
         scheduler.register_callback(dma_ic);
+        scheduler.register_callback(inv99_ic);
+        scheduler.register_callback(nand52_ic);
+        scheduler.register_callback(nand5_ic);
+        scheduler.register_callback(ff67_ic);
+        scheduler.register_callback(ff98_ic);
+        scheduler.register_callback(inv51_ic);
+        scheduler.register_callback(dma_page_latch_ic);
+        scheduler.register_callback(dma_page_reg_ic);
         scheduler.register_callback(&dram);
         scheduler.register_callback(bc);
         scheduler.register_callback(pic);

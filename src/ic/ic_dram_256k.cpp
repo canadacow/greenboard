@@ -106,6 +106,7 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         if (ras_cur == Level::Low && bank.ras_prev != Level::Low) {
             bank.row_addr = read_address();
             bank.row_latched = true;
+            spdlog::trace("[DRAM] bank{} ~RAS fall, row=0x{:02X}", b, bank.row_addr);
         }
 
         // ~RAS rising edge: end of cycle, release outputs
@@ -133,6 +134,8 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
                 }
                 ram_[addr] = data;
                 parity_[addr] = bank.din[8].level() == Level::High ? 1 : 0;
+                spdlog::trace("[DRAM] WRITE bank{} row=0x{:02X} col=0x{:02X} addr=0x{:05X} data=0x{:02X}",
+                              b, bank.row_addr, col_addr, addr, data);
             } else {
                 // Read: drive DOUT pins from RAM
                 uint8_t data = ram_[addr];
@@ -141,6 +144,8 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
                 }
                 bank.dout[8].drive(parity_[addr] ? Level::High : Level::Low);
                 bank.driving = true;
+                spdlog::trace("[DRAM] READ  bank{} row=0x{:02X} col=0x{:02X} addr=0x{:05X} data=0x{:02X}",
+                              b, bank.row_addr, col_addr, addr, data);
             }
         }
 

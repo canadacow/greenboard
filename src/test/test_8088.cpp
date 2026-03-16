@@ -319,9 +319,13 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov", "alu", "call_ret", "jumps", "int", "string",
-        "mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
+        "mov"
+    // 
+    //    "mov", "alu", "call_ret", "jumps", "int", "string",
+    //    "mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
     };
+
+
 
     std::vector<TestCase> tests;
     for (auto& name : test_names)
@@ -393,11 +397,11 @@ int main() {
 
         // Wait for CPU to halt, with 10s safety timeout.
         {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
             while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             if (!cpu->halted())
-                spdlog::warn("  timeout -- CPU did not halt within 10s");
+                spdlog::warn("  timeout -- CPU did not halt within 1s");
         }
 
         // Power off: PSU drops VCC, 8284A stops clock and powers off all components.

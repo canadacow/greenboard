@@ -35,10 +35,21 @@ void IC_74S175::install(Socket& socket) {
     pin_nq_[2] = pin(11);
     pin_nq_[3] = pin(13);
 
-    // Pin directions for wiring visualization.
+    // Pin directions for DAG ordering.
+    // D pins are async: sampled on CLK edge only, value read this cycle
+    // was driven in a previous cycle -- no combinational DAG dependency.
     declare_input(pin_clr_); declare_input(pin_clk_);
-    for (int i = 0; i < 4; ++i) declare_input(pin_d_[i]);
+    for (int i = 0; i < 4; ++i) declare_async_input(pin_d_[i]);
     for (int i = 0; i < 4; ++i) { declare_output(pin_q_[i]); declare_output(pin_nq_[i]); }
+}
+
+void IC_74S175::on_power_on() {
+    // Drive initial state (all Q=Low after power-on/reset).
+    clear_all();
+}
+
+void IC_74S175::on_power_off() {
+    for (int i = 0; i < 4; ++i) { pin_q_[i].release(); pin_nq_[i].release(); }
 }
 
 void IC_74S175::on_signal_change(Fiber /*caller*/) {

@@ -110,6 +110,8 @@ private:
     int active_ch_ = -1;        // which channel is currently active
     bool disabled_ = false;     // controller disabled (command bit 2)
 
+    bool db_driving_ = false;   // true when we're actively driving data bus
+
     // Edge tracking
     Level reset_prev_ = Level::HiZ;
     Level iow_prev_ = Level::HiZ;
