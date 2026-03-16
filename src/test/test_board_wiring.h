@@ -1032,6 +1032,7 @@ struct TestBoard {
         and97_socket.wire(1, n_000235);        // A1 = N-000235 (from U84 gate 3)
         and97_socket.wire(2, gnd);             // B1 = N-000225 (parity, stub GND -> NMI Low)
         and97_socket.wire(3, nmi);             // Y1 = NMI
+        and97_socket.wire(6, u97_y2_nc);        // Y2 = dummy (gate 2 unused)
         and97_socket.wire(7, gnd);
         and97_socket.wire(9, vcc);             // A3 = N-000237 (pulled up)
         and97_socket.wire(10, n_000244);       // B3 = N-000244 (U98 ~3Q)

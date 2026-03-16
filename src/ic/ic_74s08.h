@@ -48,42 +48,43 @@ public:
             return s ? s->pin() : Pin{};
         };
 
-        if constexpr (MASK & 0x01) {
-            gates_[0].a = connect_pin(1);
-            gates_[0].b = connect_pin(2);
-            gates_[0].y = pin(3);
-            declare_input(gates_[0].a); declare_input(gates_[0].b);
-            declare_output(gates_[0].y);
-        }
-        if constexpr (MASK & 0x02) {
-            gates_[1].a = connect_pin(4);
-            gates_[1].b = connect_pin(5);
-            gates_[1].y = pin(6);
-            declare_input(gates_[1].a); declare_input(gates_[1].b);
-            declare_output(gates_[1].y);
-        }
-        if constexpr (MASK & 0x04) {
-            gates_[2].a = connect_pin(9);
-            gates_[2].b = connect_pin(10);
-            gates_[2].y = pin(8);
-            declare_input(gates_[2].a); declare_input(gates_[2].b);
-            declare_output(gates_[2].y);
-        }
-        if constexpr (MASK & 0x08) {
-            gates_[3].a = connect_pin(12);
-            gates_[3].b = connect_pin(13);
-            gates_[3].y = pin(11);
-            declare_input(gates_[3].a); declare_input(gates_[3].b);
-            declare_output(gates_[3].y);
+        // Gate 1: pins 1,2 -> 3
+        gates_[0].a = connect_pin(1);
+        gates_[0].b = connect_pin(2);
+        gates_[0].y = pin(3);
+
+        // Gate 2: pins 4,5 -> 6
+        gates_[1].a = connect_pin(4);
+        gates_[1].b = connect_pin(5);
+        gates_[1].y = pin(6);
+
+        // Gate 3: pins 9,10 -> 8
+        gates_[2].a = connect_pin(9);
+        gates_[2].b = connect_pin(10);
+        gates_[2].y = pin(8);
+
+        // Gate 4: pins 12,13 -> 11
+        gates_[3].a = connect_pin(12);
+        gates_[3].b = connect_pin(13);
+        gates_[3].y = pin(11);
+
+        for (auto& g : gates_) {
+            declare_input(g.a);
+            declare_input(g.b);
+            declare_output(g.y);
         }
 
-        // Check output contiguity for PinBlock optimization.
-        if constexpr (MASK == 0x0F) {
+        // Require all 4 output slots contiguous (masked-out gates use dummy signals).
+        {
             int y0 = gates_[0].y.idx;
-            if (y0 && gates_[1].y.idx == y0 + 1 &&
-                gates_[2].y.idx == y0 + 2 && gates_[3].y.idx == y0 + 3) {
-                out_block_.base = y0;
+            for (int i = 1; i < 4; ++i) {
+                if (gates_[i].y.idx != y0 + i) {
+                    spdlog::critical("[{}] output pins not contiguous: gate {} idx {} != {} + {}",
+                                     name(), i, gates_[i].y.idx, y0, i);
+                    std::_Exit(1);
+                }
             }
+            out_block_.base = y0;
         }
 
         Signal* vcc = socket.pin_signal(14);
@@ -94,11 +95,7 @@ protected:
     void on_power_on() override { update_outputs(); }
 
     void on_power_off() override {
-        if (out_block_.base) { out_block_.release(); return; }
-        if constexpr (MASK & 0x01) gates_[0].y.release();
-        if constexpr (MASK & 0x02) gates_[1].y.release();
-        if constexpr (MASK & 0x04) gates_[2].y.release();
-        if constexpr (MASK & 0x08) gates_[3].y.release();
+        for (auto& g : gates_) g.y.release();
     }
 
     void on_signal_change(Fiber /*caller*/) override { update_outputs(); }
@@ -106,25 +103,13 @@ protected:
 private:
     void update_outputs() {
         // AND: Y = min(A, B). High(1) only when both High(1).
-        if constexpr (MASK == 0x0F) {
-            if (out_block_.base) {
-                Level results[4];
-                results[0] = std::min(gates_[0].a.level(), gates_[0].b.level());
-                results[1] = std::min(gates_[1].a.level(), gates_[1].b.level());
-                results[2] = std::min(gates_[2].a.level(), gates_[2].b.level());
-                results[3] = std::min(gates_[3].a.level(), gates_[3].b.level());
-                out_block_.drive(results);
-                return;
-            }
-        }
-        if constexpr (MASK & 0x01)
-            gates_[0].y.drive(std::min(gates_[0].a.level(), gates_[0].b.level()));
-        if constexpr (MASK & 0x02)
-            gates_[1].y.drive(std::min(gates_[1].a.level(), gates_[1].b.level()));
-        if constexpr (MASK & 0x04)
-            gates_[2].y.drive(std::min(gates_[2].a.level(), gates_[2].b.level()));
-        if constexpr (MASK & 0x08)
-            gates_[3].y.drive(std::min(gates_[3].a.level(), gates_[3].b.level()));
+        // Outputs are contiguous -- bulk write via PinBlock<4>.
+        Level results[4];
+        results[0] = std::min(gates_[0].a.level(), gates_[0].b.level());
+        results[1] = std::min(gates_[1].a.level(), gates_[1].b.level());
+        results[2] = std::min(gates_[2].a.level(), gates_[2].b.level());
+        results[3] = std::min(gates_[3].a.level(), gates_[3].b.level());
+        out_block_.drive(results);
     }
 
     struct Gate {
