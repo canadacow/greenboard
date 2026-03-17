@@ -586,10 +586,10 @@ struct TestBoard {
         pic_socket.wire(1, intr_cs);
         pic_socket.wire(2, xiow);
         pic_socket.wire(3, xior);
-        pic_socket.wire(4, d7);  pic_socket.wire(5, d6);
-        pic_socket.wire(6, d5);  pic_socket.wire(7, d4);
-        pic_socket.wire(8, d3);  pic_socket.wire(9, d2);
-        pic_socket.wire(10, d1); pic_socket.wire(11, d0);
+        pic_socket.wire(4, xd7);  pic_socket.wire(5, xd6);
+        pic_socket.wire(6, xd5);  pic_socket.wire(7, xd4);
+        pic_socket.wire(8, xd3);  pic_socket.wire(9, xd2);
+        pic_socket.wire(10, xd1); pic_socket.wire(11, xd0);
         pic_socket.wire(14, gnd);
         pic_socket.wire(16, vcc);         // ~SP/~EN = VCC (master mode)
         pic_socket.wire(17, intr);        // INT -> CPU INTR
@@ -1168,22 +1168,22 @@ struct TestBoard {
         // --- ISA Slots (J1-J5) ---
         // All 5 slots share identical wiring (parallel bus).
         for (auto& slot : isa_slots) {
-            // Data bus: SD0-SD7 = D0-D7 (pins 2-9 = SD7..SD0)
-            slot.wire_pin(2, &d7);  slot.wire_pin(3, &d6);
-            slot.wire_pin(4, &d5);  slot.wire_pin(5, &d4);
-            slot.wire_pin(6, &d3);  slot.wire_pin(7, &d2);
-            slot.wire_pin(8, &d1);  slot.wire_pin(9, &d0);
+            // Data bus: SD0-SD7 = XD0-XD7 (ISA-side, after U13 buffer)
+            slot.wire_pin(2, &xd7);  slot.wire_pin(3, &xd6);
+            slot.wire_pin(4, &xd5);  slot.wire_pin(5, &xd4);
+            slot.wire_pin(6, &xd3);  slot.wire_pin(7, &xd2);
+            slot.wire_pin(8, &xd1);  slot.wire_pin(9, &xd0);
 
             // Address bus: SA0-SA19 = XA0-XA19 (pins 31..12 = SA0..SA19)
             for (int a = 0; a < 20; ++a)
                 slot.wire_pin(31 - a, &xa[a]);
 
-            // Control signals
+            // Control signals (ISA-side, after U14 buffer)
             slot.wire_pin(11, &gnd);       // AEN (A11) = Low (no DMA)
-            slot.wire_pin(42, &memw);      // ~MEMW (B11)
-            slot.wire_pin(43, &memr);      // ~MEMR (B12)
-            slot.wire_pin(44, &iow_sig);   // ~IOW (B13)
-            slot.wire_pin(45, &ior_sig);   // ~IOR (B14)
+            slot.wire_pin(42, &xmemw);     // ~MEMW (B11) = ~XMEMW
+            slot.wire_pin(43, &xmemr);     // ~MEMR (B12) = ~XMEMR
+            slot.wire_pin(44, &xiow);      // ~IOW (B13) = ~XIOW
+            slot.wire_pin(45, &xior);      // ~IOR (B14) = ~XIOR
 
             // Clocks
             slot.wire_pin(51, &clk);       // CLK (B20)
