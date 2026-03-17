@@ -78,6 +78,7 @@ void IC_74S00_U81::on_signal_change(Fiber /*caller*/) {
         bool both = a == Level::High && b == Level::High;
         Level y = both ? Level::Low : Level::High;
         g.y.drive(y);
+        spdlog::trace("[{}] gate2: NAND(~XMEMR={}, ~XMEMW={}) -> RAS={}", name(), int(a), int(b), int(y));
     }
 
     // Gate 3: virtual TD1 -- use delayed RAS, not pin inputs
@@ -87,6 +88,7 @@ void IC_74S00_U81::on_signal_change(Fiber /*caller*/) {
             addr_sel_pin_.drive(td1_pending_);
         Level out = (td1_pending_ == Level::High) ? Level::Low : Level::High;
         gates_[2].y.drive(out);
+        spdlog::trace("[{}] gate3(TD1): td1_pending={} -> ~CAS={} (ras_now={})", name(), int(td1_pending_), int(out), int(ras_now));
         td1_pending_ = ras_now;
     }
 

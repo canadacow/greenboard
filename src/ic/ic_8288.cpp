@@ -109,6 +109,18 @@ void IC_8288::on_clk_rising() {
         return;
     }
 
+    auto cyc_name = [](BusCycle c) -> const char* {
+        if (c == BusCycle::Passive) return "Passive";
+        if (c == BusCycle::Halt)    return "Halt";
+        if (c == BusCycle::Fetch)   return "Fetch";
+        if (c == BusCycle::MemR)    return "MemR";
+        if (c == BusCycle::MemW)    return "MemW";
+        if (c == BusCycle::IOR)     return "IOR";
+        if (c == BusCycle::IOW)     return "IOW";
+        if (c == BusCycle::INTA)    return "INTA";
+        return "???";
+    };
+
     switch (state_) {
         case State::Idle:
         idle_recheck:
@@ -121,6 +133,7 @@ void IC_8288::on_clk_rising() {
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
                 pin_ale_.drive_immediate(Level::High);
                 pin_dtr_.drive_immediate(is_write ? Level::High : Level::Low);
+                spdlog::trace("[{}] Idle->T1 cycle={} DT/~R={}", name(), cyc_name(bus), is_write ? "H(wr)" : "L(rd)");
             }
             break;
         }
@@ -142,6 +155,7 @@ void IC_8288::on_clk_rising() {
                         default: break;
                     }
                 }
+                spdlog::trace("[{}] T1->T2 cycle={} cmd asserted CEN={}", name(), cyc_name(cycle_), cen);
                 pin_den_.drive_immediate(Level::Low);
             }
             break;
@@ -150,12 +164,14 @@ void IC_8288::on_clk_rising() {
         case State::T2:
             // T3: Commands stay active. Nothing changes.
             state_ = State::T3;
+            spdlog::trace("[{}] T2->T3 cycle={}", name(), cyc_name(cycle_));
             break;
 
         case State::T3: {
             // T4: Deassert commands, deassert ~DEN, back to idle.
             release_command();
             pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
+            spdlog::trace("[{}] T3->T4(Idle) cycle={} cmds released", name(), cyc_name(cycle_));
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
             // Back-to-back bus cycles: T4 of one overlaps T1 of the next.

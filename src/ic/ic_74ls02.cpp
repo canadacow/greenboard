@@ -16,7 +16,9 @@ void IC_74LS02::install(Socket& socket) {
         return s ? s->pin() : Pin{};
     };
 
-    // 74LS02 NOR pinout: outputs are on pins 1,4,8,11 (same positions as 74S00/08)
+    // 74LS02 NOR pinout (NOT same as 74S00/08!):
+    //   Gates 1,2: Y first  (Y,A,B) -> pins 1,2,3 and 4,5,6
+    //   Gates 3,4: Y last   (A,B,Y) -> pins 8,9,10 and 11,12,13
     // Gate 1: pins 2,3 -> 1
     gates_[0].a = connect_pin(2);
     gates_[0].b = connect_pin(3);
@@ -27,15 +29,15 @@ void IC_74LS02::install(Socket& socket) {
     gates_[1].b = connect_pin(6);
     gates_[1].y = pin(4);
 
-    // Gate 3: pins 9,10 -> 8
-    gates_[2].a = connect_pin(9);
-    gates_[2].b = connect_pin(10);
-    gates_[2].y = pin(8);
+    // Gate 3: pins 8,9 -> 10
+    gates_[2].a = connect_pin(8);
+    gates_[2].b = connect_pin(9);
+    gates_[2].y = pin(10);
 
-    // Gate 4: pins 12,13 -> 11
-    gates_[3].a = connect_pin(12);
-    gates_[3].b = connect_pin(13);
-    gates_[3].y = pin(11);
+    // Gate 4: pins 11,12 -> 13
+    gates_[3].a = connect_pin(11);
+    gates_[3].b = connect_pin(12);
+    gates_[3].y = pin(13);
 
     // VCC
     Signal* vcc = socket.pin_signal(14);

@@ -1337,12 +1337,12 @@ struct TestBoard {
         nor27_socket.wire(5, rom_addr_sel);    // A2 = ~ROM_ADDR_SEL
         nor27_socket.wire(6, xmemr);           // B2 = ~XMEMR
         nor27_socket.wire(7, gnd);
-        nor27_socket.wire(8, ram_addr_sel);    // A3 = ~RAM_ADDR_SEL
-        nor27_socket.wire(9, n_000304);        // B3 = N-000304 (~XMEMW net alias)
-        nor27_socket.wire(10, n_000317);       // Y3 = N-000317
-        nor27_socket.wire(11, xa[9]);          // A4 = XA9
-        nor27_socket.wire(12, xior);           // B4 = ~XIOR
-        nor27_socket.wire(13, n_000303);       // Y4 = N-000303
+        nor27_socket.wire(8, ram_addr_sel);    // 3A = ~RAM_ADDR_SEL (input)
+        nor27_socket.wire(9, n_000304);        // 3B = N-000304 (~XMEMW net alias, input)
+        nor27_socket.wire(10, n_000317);       // 3Y = N-000317 (output)
+        nor27_socket.wire(11, xa[9]);          // 4A = XA9 (input)
+        nor27_socket.wire(12, xior);           // 4B = ~XIOR (input)
+        nor27_socket.wire(13, n_000303);       // 4Y = N-000303 (output)
         nor27_socket.wire(14, vcc);
         nor27_ic = nor27_socket.emplace<IC_74LS02>();
 
