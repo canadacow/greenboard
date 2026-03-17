@@ -456,7 +456,10 @@ struct TestBoard {
         mem_xcvr_socket.wire(19, xmemr);         // DIR = ~XMEMR
         mem_xcvr_socket.wire(20, vcc);
         mem_xcvr = mem_xcvr_socket.emplace<IC_74S245>();
-
+        // ~XMEMR feeds back through memory path (U12->D->U8->AD->CPU->addr->DRAM->MD->U12).
+        // Break the DAG cycle by marking DIR as async -- it only changes between bus cycles.
+        mem_xcvr->declare_async_input(mem_xcvr_socket.pin_signal(19)->pin());
+        
         // U13: 74S245 System Data Bus Transceiver (D0-D7 <-> XD0-XD7)
         // BRD: pin 1=N-000290 (DIR on real chip), pin 19=AEN_BRD (~OE on real chip).
         // Our IC_74S245 swaps: pin 1=~G, pin 19=DIR.
@@ -503,6 +506,9 @@ struct TestBoard {
         xcvr14_socket.wire(19, dma_aen_bar);     // DIR = ~DMA_AEN
         xcvr14_socket.wire(20, vcc);
         xcvr14_ic = xcvr14_socket.emplace<IC_74S245>(true);
+        // ~DMA_AEN feeds back through DMA chain (U14->~XMEMR->...->U50->~DMA_AEN->U14).
+        // Break the DAG cycle by marking DIR as async -- it only changes between bus cycles.
+        xcvr14_ic->declare_async_input(xcvr14_socket.pin_signal(19)->pin());
 
         // U10: 74S373 Address Latch (low byte: AD0-AD7 -> XA0-XA7)
         // BRD: pin 1 (~OE) = AEN_BRD.  During normal CPU ops AEN_BRD is Low
@@ -719,6 +725,9 @@ struct TestBoard {
         mux_lo.wire(15, gnd);              // ~STROBE = GND (always enabled)
         mux_lo.wire(16, vcc);              // VCC
         mux_lo_ic = mux_lo.emplace<IC_74S158>();
+        // ADDR_SEL feeds back through memory path (MUX->DRAM->MD->U12->D->...->U18->LA->MUX).
+        // Break the DAG cycle by marking SELECT as async -- it only changes between bus cycles.
+        mux_lo_ic->declare_async_input(mux_lo.pin_signal(1)->pin());
 
         // U79: 74S158 DRAM Address MUX (high nibble: MA4-MA7)
         mux_hi.wire(1, addr_sel);          // SELECT
@@ -1028,6 +1037,19 @@ struct TestBoard {
             dma_page_latch_ic = ic.get();
             ic->set_name("U18-74S373");
             ic->install(dma_page_latch);
+            // Q outputs only driven when ~OE(~DMA_AEN)=Low (DMA mode).
+            // During CPU mode (~DMA_AEN=High), Q is tri-stated -- no DAG edges.
+            static constexpr int q_pins[] = {2, 5, 6, 9, 12, 15, 16, 19};
+            Pin qp[8];
+            for (int i = 0; i < 8; ++i)
+                qp[i] = dma_page_latch.pin_signal(q_pins[i])->pin();
+            auto* raw = ic.get();
+            ic->declare_bidir_block({qp[0],qp[1],qp[2],qp[3],qp[4],qp[5],qp[6],qp[7]},
+                Component::BidirDir::HiZ | Component::BidirDir::Output,
+                [raw]() {
+                    return raw->oe_level() == Level::Low
+                        ? Component::BidirDir::Output : Component::BidirDir::HiZ;
+                });
             dma_page_latch.insert(std::move(ic));
         }
 

@@ -13,6 +13,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#include <fstream>
 #include <spdlog/spdlog.h>
 
 #define WAVE_DEBUGS
@@ -569,9 +570,14 @@ public:
         SignalPool::end_component();
 #endif
         static constexpr uint64_t dir_to_digit[] = {0, 0, 1, 0, 2};  // indexed by uint8_t(BidirDir)
+        static constexpr const char* dir_names[] = {"?", "HiZ", "IN", "?", "OUT"};
         uint64_t perm = 0, mul = 1;
         for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
-            perm += dir_to_digit[uint8_t(bidir_refs_[i].block->direction())] * mul;
+            auto dir = bidir_refs_[i].block->direction();
+            uint8_t d = uint8_t(dir);
+            spdlog::trace("[Scheduler] evaluate bidir[{}] comp={} dir={}({})",
+                          i, bidir_refs_[i].comp->name(), d, (d <= 4 ? dir_names[d] : "?"));
+            perm += dir_to_digit[d] * mul;
             mul *= 3;
         }
 
@@ -676,13 +682,13 @@ private:
             int ci = bidir_active_idx[b];
             if (ci < 0) continue;  // bidir block's component excluded
             BidirDir dir = perm_dir(perm, b);
-            spdlog::info("[Scheduler] perm {} bidir[{}] comp={} dir={} ci={}",
-                         perm, b, bidir_refs_[b].comp->name(), int(dir), ci);
+            //spdlog::info("[Scheduler] perm {} bidir[{}] comp={} dir={} ci={}",
+            //             perm, b, bidir_refs_[b].comp->name(), int(dir), ci);
             for (int w = 0; w < W; ++w) {
                 uint64_t om = bidir_refs_[b].block->out_mask[w];
                 uint64_t im = bidir_refs_[b].block->in_mask[w];
-                if (om || im)
-                    spdlog::info("[Scheduler]   w={} om=0x{:016X} im=0x{:016X}", w, om, im);
+                //if (om || im)
+                //    spdlog::info("[Scheduler]   w={} om=0x{:016X} im=0x{:016X}", w, om, im);
                 switch (dir) {
                     case BidirDir::Output:
                         eff_out[ci][w] |= om;  eff_in[ci][w] &= ~om;
@@ -699,6 +705,21 @@ private:
                 }
             }
         }
+
+#if 0
+        // Dump effective masks after bidir processing.
+        for (int i = 0; i < n; ++i) {
+            bool has_any = false;
+            for (int w = 0; w < W; ++w)
+                if (eff_out[i][w] || eff_in[i][w]) has_any = true;
+            if (!has_any) continue;
+            for (int w = 0; w < W; ++w) {
+                if (eff_out[i][w] || eff_in[i][w])
+                    spdlog::info("[Scheduler] perm {} eff[{}] {} w={} out=0x{:016X} in=0x{:016X}",
+                                 perm, i, active_evals[i]->name(), w, eff_out[i][w], eff_in[i][w]);
+            }
+        }
+#endif
 
         std::vector<std::vector<bool>> depends(n, std::vector<bool>(n, false));
         for (int a = 0; a < n; ++a)
@@ -748,6 +769,49 @@ private:
                         }
                     }
                 }
+            }
+            // Dump full DAG as DOT -> SVG. Stuck nodes in red.
+            {
+                std::string dot = "digraph dag {\n  rankdir=LR;\n  node [shape=box fontname=\"Consolas\" fontsize=10];\n  edge [fontname=\"Consolas\" fontsize=8];\n";
+                for (int i = 0; i < n; ++i) {
+                    const char* color = (in_deg[i] > 0) ? "red" : "black";
+                    dot += fmt::format("  n{} [label=\"{}\" color={} fontcolor={}];\n",
+                                       i, active_evals[i]->name(), color, color);
+                }
+                for (int i = 0; i < n; ++i) {
+                    for (int j = 0; j < n; ++j) {
+                        if (!depends[i][j]) continue;
+                        std::string sigs;
+                        int sig_count = 0;
+                        for (int s = 1; s < SignalPool::count; ++s) {
+                            int sw = s / 64;
+                            uint64_t bit = uint64_t(1) << (s % 64);
+                            if ((eff_out[j][sw] & bit) && (eff_in[i][sw] & bit)) {
+                                const char* nm = SignalPool::names[s];
+                                if (sig_count < 4) {
+                                    if (!sigs.empty()) sigs += "\\n";
+                                    sigs += (nm ? nm : "?");
+                                }
+                                ++sig_count;
+                            }
+                        }
+                        if (sig_count > 4)
+                            sigs += fmt::format("\\n+{} more", sig_count - 4);
+                        const char* ec = (in_deg[i] > 0 && in_deg[j] > 0) ? "red" : "black";
+                        dot += fmt::format("  n{} -> n{} [label=\"{}\" color={}];\n", j, i, sigs, ec);
+                    }
+                }
+                dot += "}\n";
+                {
+                    std::ofstream f("cycle_debug.dot");
+                    f << dot;
+                }
+                spdlog::critical("[Scheduler] Wrote cycle_debug.dot");
+                int rc = std::system("\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg cycle_debug.dot -o cycle_debug.svg");
+                if (rc == 0)
+                    spdlog::critical("[Scheduler] Rendered cycle_debug.svg");
+                else
+                    spdlog::critical("[Scheduler] dot failed (rc={}), SVG not generated", rc);
             }
             std::_Exit(1);
         }

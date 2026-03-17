@@ -35,14 +35,7 @@ void IC_74S245::install(Socket& socket) {
     Signal* vcc = socket.pin_signal(20);
     if (vcc) vcc->connect(this);
 
-    // ~G and DIR feed the bidir lambda (sampled at permutation time).
-    // Async mode breaks DAG cycles for ISA bus buffers (U13, U14).
-    // CPU-local buffers (U8, U12) need sync for proper ordering.
-    if (async_controls_) {
-        declare_async_input(g_); declare_async_input(dir_);
-    } else {
-        declare_input(g_); declare_input(dir_);
-    }
+    declare_input(g_); declare_input(dir_);
     for (int i = 0; i < 8; ++i) { declare_input(a_[i]); declare_output(a_[i]); }
     for (int i = 0; i < 8; ++i) { declare_input(b_[i]); declare_output(b_[i]); }
 
@@ -57,9 +50,14 @@ void IC_74S245::install(Socket& socket) {
         [this]() -> BidirDir {
             auto gv = g_.level();
             auto dv = dir_.level();
-            spdlog::trace("[{}] bidir lambda: ~G={} DIR={}", name(), int(gv), int(dv));
-            if (gv != Level::Low) return BidirDir::HiZ;
-            return dv == Level::Low ? BidirDir::Output : BidirDir::Input;
+            BidirDir result = BidirDir::HiZ;
+            if (gv == Level::Low)
+                result = (dv == Level::Low) ? BidirDir::Output : BidirDir::Input;
+            spdlog::trace("[{}] bidir lambda: ~G={} DIR={} -> {} g.idx={} dir.idx={}",
+                          name(), int(gv), int(dv),
+                          result == BidirDir::HiZ ? "HiZ" : (result == BidirDir::Output ? "OUT(A->B)" : "IN(B->A)"),
+                          g_.idx, dir_.idx);
+            return result;
         });
 }
 

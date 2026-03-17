@@ -37,6 +37,7 @@ public:
     /// Use for instances where LE is pulsed briefly (e.g. ADSTB on U18)
     /// so the D->Q path is effectively cross-cycle, not combinational.
     void set_async_inputs() { async_d_ = true; }
+    Level oe_level() const { return oe_.level(); }
 
     void install(Socket& socket);
 

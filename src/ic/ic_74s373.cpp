@@ -34,19 +34,8 @@ void IC_74S373::install(Socket& socket) {
         Pin p{d_.base + i};
         if (async_d_) declare_async_input(p); else declare_input(p);
     }
-    // LE and ~OE feed bidir lambdas (sampled at permutation time), async.
-    declare_async_input(le_); declare_async_input(oe_);
-    for (int i = 0; i < 8; ++i) { declare_input(Pin{q_.base + i}); declare_output(Pin{q_.base + i}); }
-
-    // Q outputs are only driven when ~OE=Low.
-    // When ~OE=High, outputs are tri-stated (HiZ) -- no DAG dependency.
-    {
-        Pin q0{q_.base}, q1{q_.base+1}, q2{q_.base+2}, q3{q_.base+3};
-        Pin q4{q_.base+4}, q5{q_.base+5}, q6{q_.base+6}, q7{q_.base+7};
-        declare_bidir_block({q0, q1, q2, q3, q4, q5, q6, q7},
-                            BidirDir::HiZ | BidirDir::Output,
-                            [this]() { return oe_.level() == Level::Low ? BidirDir::Output : BidirDir::HiZ; });
-    }
+    declare_input(le_); declare_input(oe_);
+    for (int i = 0; i < 8; ++i) declare_output(Pin{q_.base + i});
 
     // D inputs are only active when LE=High (transparent mode).
     // When LE=Low (latched), D inputs are disconnected -- no DAG dependency.
