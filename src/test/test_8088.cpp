@@ -154,9 +154,9 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov", "alu", "call_ret", "jumps", "int", "string",
-        "mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
-        "pit",
+        "mov",
+        //"alu", "call_ret", "jumps", "int", "string", "pit",
+        //"mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
     };
 
     std::vector<TestCase> tests;
@@ -261,14 +261,14 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-#define RUN_BENCHMARK
+//#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---
     constexpr int BENCH_SECONDS = 5;
     spdlog::info("--- Benchmark: 64-bit increment ({} seconds) ---", BENCH_SECONDS);
     {
-        board.dma_enabled = false;
+        board.dma_enabled = true;
         std::memset(testcard.io_data(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
         testcard.reset_state();

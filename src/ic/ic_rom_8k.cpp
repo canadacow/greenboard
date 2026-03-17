@@ -46,7 +46,13 @@ void IC_ROM_8K::install(Socket& socket) {
     // Pin directions for wiring visualization.
     for (int i = 0; i < 13; ++i) declare_input(pin_a_[i]);
     declare_input(pin_cs_);
-    for (int i = 0; i < 8; ++i) declare_output(pin_d_[i]);
+    for (int i = 0; i < 8; ++i) { declare_input(pin_d_[i]); declare_output(pin_d_[i]); }
+
+    // Data outputs are tri-stated when ~CS is High -- no DAG dependency.
+    declare_bidir_block({pin_d_[0], pin_d_[1], pin_d_[2], pin_d_[3],
+                         pin_d_[4], pin_d_[5], pin_d_[6], pin_d_[7]},
+                        BidirDir::HiZ | BidirDir::Output,
+                        [this]() { return pin_cs_.level() == Level::Low ? BidirDir::Output : BidirDir::HiZ; });
 }
 
 void IC_ROM_8K::on_power_on() {
