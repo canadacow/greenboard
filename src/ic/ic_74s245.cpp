@@ -3,8 +3,8 @@
 
 namespace bench {
 
-IC_74S245::IC_74S245(bool async_controls)
-    : CallbackComponent("74S245"), async_controls_(async_controls) { set_description("Bus Transceiver"); }
+IC_74S245::IC_74S245()
+    : CallbackComponent("74S245") { set_description("Bus Transceiver"); }
 
 void IC_74S245::on_power_on() {
     driving_ = Driving::None;
