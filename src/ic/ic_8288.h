@@ -2,6 +2,9 @@
 #include "core/callback_component.h"
 #include "board/socket.h"
 
+// Forward declaration -- 8288 can nudge a folded-in 74S245 transceiver.
+namespace bench { class IC_74S245; }
+
 namespace bench {
 
 // Intel 8288 Bus Controller.
@@ -57,6 +60,11 @@ public:
 
     void install(Socket& socket);
 
+    // Fold U8 (AD<->D transceiver) and optionally U13 (D<->XD transceiver)
+    // into the 8288 so their data transfers happen synchronously with
+    // ~DEN/DT/~R assertion -- no one-cycle DAG lag.
+    void set_xcvr(IC_74S245* u8, IC_74S245* u13 = nullptr);
+
 protected:
     void on_power_on() override;
     void on_signal_change(Fiber caller) override;
@@ -93,6 +101,12 @@ private:
     // Internal state
     State state_ = State::Idle;
     BusCycle cycle_ = BusCycle::Passive;
+
+    // Folded-in transceivers: nudged after ~DEN/DT/~R changes.
+    IC_74S245* xcvr_ = nullptr;   // U8: AD <-> D
+    IC_74S245* xcvr_x_ = nullptr; // U13: D <-> XD
+
+    void nudge_xcvr();
 };
 
 } // namespace bench

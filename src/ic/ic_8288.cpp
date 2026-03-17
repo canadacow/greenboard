@@ -1,4 +1,5 @@
 #include "ic/ic_8288.h"
+#include "ic/ic_74s245.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -87,6 +88,16 @@ IC_8288::BusCycle IC_8288::decode_status() const {
         default: return BusCycle::Passive; // none active
     }
 }
+void IC_8288::set_xcvr(IC_74S245* u8, IC_74S245* u13) {
+    xcvr_ = u8;
+    xcvr_x_ = u13;
+}
+
+void IC_8288::nudge_xcvr() {
+    if (xcvr_) xcvr_->evaluate_now();
+    if (xcvr_x_) xcvr_x_->evaluate_now();
+}
+
 void IC_8288::release_command() {
     // Deassert all command strobes (active low -> High).
     pin_memr_.drive_immediate(Level::High);
@@ -158,6 +169,7 @@ void IC_8288::on_clk_rising() {
                 spdlog::trace("[{}] T1->T2 cycle={} cmd asserted CEN={}", name(), cyc_name(cycle_), cen);
                 pin_den_.drive_immediate(Level::Low);
             }
+            nudge_xcvr();
             break;
         }
 
@@ -171,6 +183,7 @@ void IC_8288::on_clk_rising() {
             // T4: Deassert commands, deassert ~DEN, back to idle.
             release_command();
             pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
+            nudge_xcvr();
             spdlog::trace("[{}] T3->T4(Idle) cycle={} cmds released", name(), cyc_name(cycle_));
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;

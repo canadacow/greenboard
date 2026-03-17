@@ -490,6 +490,10 @@ struct TestBoard {
         xcvr13_socket.wire(20, vcc);
         xcvr13_ic = xcvr13_socket.emplace<IC_74S245>();
 
+        // Fold U8 and U13 into the 8288 so AD<->D<->XD transfers happen
+        // synchronously with ~DEN/DT/~R assertion (no one-cycle DAG lag).
+        bc->set_xcvr(xcvr, xcvr13_ic);
+
         // U14: 74S245 Command Strobe Transceiver
         // BRD: pin 1=~DMA_AEN (DIR on real chip), pin 19=GND (~OE on real chip).
         // Our IC_74S245 swaps: pin 1=~G, pin 19=DIR.

@@ -1,5 +1,6 @@
 #include "isa/isa_testcard.h"
 #include <cstring>
+#include <spdlog/spdlog.h>
 
 namespace bench {
 
@@ -56,8 +57,14 @@ void ISA_TestCard::install(IsaSlot& slot) {
         {sd_[0], sd_[1], sd_[2], sd_[3], sd_[4], sd_[5], sd_[6], sd_[7]},
         BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
         [this]() -> BidirDir {
-            if (ior_.level() == Level::Low) return BidirDir::Output;
-            if (iow_.level() == Level::Low) return BidirDir::Input;
+            auto ior_lev = ior_.level();
+            auto iow_lev = iow_.level();
+            if (ior_lev == Level::Low || iow_lev == Level::Low) {
+                spdlog::trace("[{}] bidir: ~IOR={} ~IOW={} idx_ior={} idx_iow={}",
+                              name(), int(ior_lev), int(iow_lev), ior_.idx, iow_.idx);
+            }
+            if (ior_lev == Level::Low) return BidirDir::Output;
+            if (iow_lev == Level::Low) return BidirDir::Input;
             return BidirDir::HiZ;
         });
 }
@@ -80,8 +87,14 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     // ~IOW falling edge: CPU writes to I/O port.
     if (iow_cur == Level::Low && iow_prev_ != Level::Low) {
         uint16_t port = static_cast<uint16_t>(read_address());
+        uint8_t val = read_sd();
+        spdlog::trace("[{}] IOW edge: port=0x{:04X} val=0x{:02X} my={} sa7={}(idx={}) sa5={}(idx={}) sa0={}(idx={})",
+                      name(), port, val, my_port(port),
+                      int(sa_[7].level()), sa_[7].idx,
+                      int(sa_[5].level()), sa_[5].idx,
+                      int(sa_[0].level()), sa_[0].idx);
         if (my_port(port)) {
-            io_write(port, read_sd());
+            io_write(port, val);
         }
     }
     iow_prev_ = iow_cur;
@@ -94,6 +107,7 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
             uint16_t port = static_cast<uint16_t>(read_address());
             if (my_port(port)) {
                 read_byte_ = io_read(port);
+                spdlog::trace("[{}] READ port=0x{:04X} -> 0x{:02X}", name(), port, read_byte_);
                 drive_sd(read_byte_);
             }
         } else {

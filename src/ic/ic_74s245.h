@@ -35,6 +35,10 @@ public:
 
     void install(Socket& socket);
 
+    // Force re-evaluation (used when a driving component folds this
+    // transceiver's timing into its own wave, e.g. 8288 folding U8).
+    void evaluate_now() { on_signal_change(nullptr); }
+
 protected:
     void on_power_on() override;
     void on_signal_change(Fiber caller) override;
