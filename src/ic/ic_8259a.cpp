@@ -82,11 +82,10 @@ void IC_8259A::on_signal_change(Fiber /*caller*/) {
     if (cs_cur == Level::Low && cs_prev_ != Level::Low && wr_cur == Level::Low)
         on_bus_write();
 
-    // Bus read: ~RD falling while ~CS active
-    if (rd_cur == Level::Low && rd_prev_ != Level::Low && cs_cur == Level::Low)
-        on_bus_read();
-    // Bus read: ~CS falling while ~RD active
-    if (cs_cur == Level::Low && cs_prev_ != Level::Low && rd_cur == Level::Low)
+    // Bus read: continuously drive data while ~RD and ~CS both active.
+    // Edge-only driving fails when another driver (U8 nudge) overwrites AD
+    // between the falling edge and the 8088's read_data() in a later wave.
+    if (rd_cur == Level::Low && cs_cur == Level::Low)
         on_bus_read();
 
     // Release data bus when ~RD or ~CS goes inactive

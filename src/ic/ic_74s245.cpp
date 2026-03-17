@@ -72,23 +72,53 @@ void IC_74S245::on_signal_change(Fiber /*caller*/) {
 
 void IC_74S245::update_outputs() {
     if (dir_.level() == Level::High) {
-        // A -> B: drive B from A
-        uint8_t val = 0;
-        for (int i = 0; i < 8; ++i) {
-            b_[i].drive(a_[i].level());
-            if (a_[i].level() == Level::High) val |= (1 << i);
+        // A -> B: release old A-side drive before sampling A (avoid reading our own output).
+        if (driving_ == Driving::A) {
+            for (int i = 0; i < 8; ++i) a_[i].release();
+            driving_ = Driving::None;
         }
-        spdlog::trace("[{}] A->B: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
-        driving_ = Driving::B;
+        uint8_t val = 0;
+        bool all_hiz = true;
+        for (int i = 0; i < 8; ++i) {
+            Level lv = a_[i].level();
+            if (lv != Level::HiZ) all_hiz = false;
+            if (lv == Level::High) val |= (1 << i);
+        }
+        if (all_hiz) {
+            if (driving_ == Driving::B)
+                for (int i = 0; i < 8; ++i) b_[i].release();
+            spdlog::trace("[{}] A->B: HiZ (source floating)", name());
+            driving_ = Driving::None;
+        } else {
+            for (int i = 0; i < 8; ++i)
+                b_[i].drive(a_[i].level());
+            spdlog::trace("[{}] A->B: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
+            driving_ = Driving::B;
+        }
     } else {
-        // B -> A: drive A from B
-        uint8_t val = 0;
-        for (int i = 0; i < 8; ++i) {
-            a_[i].drive(b_[i].level());
-            if (b_[i].level() == Level::High) val |= (1 << i);
+        // B -> A: release old B-side drive before sampling B (avoid reading our own output).
+        if (driving_ == Driving::B) {
+            for (int i = 0; i < 8; ++i) b_[i].release();
+            driving_ = Driving::None;
         }
-        spdlog::trace("[{}] B->A: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
-        driving_ = Driving::A;
+        uint8_t val = 0;
+        bool all_hiz = true;
+        for (int i = 0; i < 8; ++i) {
+            Level lv = b_[i].level();
+            if (lv != Level::HiZ) all_hiz = false;
+            if (lv == Level::High) val |= (1 << i);
+        }
+        if (all_hiz) {
+            if (driving_ == Driving::A)
+                for (int i = 0; i < 8; ++i) a_[i].release();
+            spdlog::trace("[{}] B->A: HiZ (source floating)", name());
+            driving_ = Driving::None;
+        } else {
+            for (int i = 0; i < 8; ++i)
+                a_[i].drive(b_[i].level());
+            spdlog::trace("[{}] B->A: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
+            driving_ = Driving::A;
+        }
     }
 }
 
@@ -108,23 +138,53 @@ void IC_74S245::release_outputs() {
 
 void IC_74S245::transfer(bool a_to_b) {
     if (a_to_b) {
-        // A -> B: drive B from A
-        uint8_t val = 0;
-        for (int i = 0; i < 8; ++i) {
-            b_[i].drive(a_[i].level());
-            if (a_[i].level() == Level::High) val |= (1 << i);
+        // A -> B: release old A-side drive before sampling A.
+        if (driving_ == Driving::A) {
+            for (int i = 0; i < 8; ++i) a_[i].release();
+            driving_ = Driving::None;
         }
-        spdlog::trace("[{}] transfer A->B: 0x{:02X}", name(), val);
-        driving_ = Driving::B;
+        uint8_t val = 0;
+        bool all_hiz = true;
+        for (int i = 0; i < 8; ++i) {
+            Level lv = a_[i].level();
+            if (lv != Level::HiZ) all_hiz = false;
+            if (lv == Level::High) val |= (1 << i);
+        }
+        if (all_hiz) {
+            if (driving_ == Driving::B)
+                for (int i = 0; i < 8; ++i) b_[i].release();
+            spdlog::trace("[{}] transfer A->B: HiZ (source floating)", name());
+            driving_ = Driving::None;
+        } else {
+            for (int i = 0; i < 8; ++i)
+                b_[i].drive(a_[i].level());
+            spdlog::trace("[{}] transfer A->B: 0x{:02X}", name(), val);
+            driving_ = Driving::B;
+        }
     } else {
-        // B -> A: drive A from B
-        uint8_t val = 0;
-        for (int i = 0; i < 8; ++i) {
-            a_[i].drive(b_[i].level());
-            if (b_[i].level() == Level::High) val |= (1 << i);
+        // B -> A: release old B-side drive before sampling B.
+        if (driving_ == Driving::B) {
+            for (int i = 0; i < 8; ++i) b_[i].release();
+            driving_ = Driving::None;
         }
-        spdlog::trace("[{}] transfer B->A: 0x{:02X}", name(), val);
-        driving_ = Driving::A;
+        uint8_t val = 0;
+        bool all_hiz = true;
+        for (int i = 0; i < 8; ++i) {
+            Level lv = b_[i].level();
+            if (lv != Level::HiZ) all_hiz = false;
+            if (lv == Level::High) val |= (1 << i);
+        }
+        if (all_hiz) {
+            if (driving_ == Driving::A)
+                for (int i = 0; i < 8; ++i) a_[i].release();
+            spdlog::trace("[{}] transfer B->A: HiZ (source floating)", name());
+            driving_ = Driving::None;
+        } else {
+            for (int i = 0; i < 8; ++i)
+                a_[i].drive(b_[i].level());
+            spdlog::trace("[{}] transfer B->A: 0x{:02X}", name(), val);
+            driving_ = Driving::A;
+        }
     }
 }
 

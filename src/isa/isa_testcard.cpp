@@ -52,18 +52,25 @@ void ISA_TestCard::install(IsaSlot& slot) {
             declare_output(irq_pin_[i]);
     }
 
-    // SD is bidirectional: output during reads (~IOR low), input during writes (~IOW low).
+    // SD is bidirectional: output during reads (~IOR low AND our port), input during writes.
+    // Must check address in bidir lambda so we don't claim the bus during reads to other
+    // devices (e.g. PIC at port 0x20 which is on the CPU-local AD bus, not ISA XD).
     declare_bidir_block(
         {sd_[0], sd_[1], sd_[2], sd_[3], sd_[4], sd_[5], sd_[6], sd_[7]},
         BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
         [this]() -> BidirDir {
             auto ior_lev = ior_.level();
             auto iow_lev = iow_.level();
-            if (ior_lev == Level::Low || iow_lev == Level::Low) {
-                spdlog::trace("[{}] bidir: ~IOR={} ~IOW={} idx_ior={} idx_iow={}",
-                              name(), int(ior_lev), int(iow_lev), ior_.idx, iow_.idx);
+            if (ior_lev == Level::Low) {
+                // Only claim bus if this is our port range.
+                uint16_t port = static_cast<uint16_t>(read_address());
+                if (my_port(port)) {
+                    spdlog::trace("[{}] bidir: ~IOR={} port=0x{:04X} -> OUT",
+                                  name(), int(ior_lev), port);
+                    return BidirDir::Output;
+                }
+                return BidirDir::HiZ;
             }
-            if (ior_lev == Level::Low) return BidirDir::Output;
             if (iow_lev == Level::Low) return BidirDir::Input;
             return BidirDir::HiZ;
         });
