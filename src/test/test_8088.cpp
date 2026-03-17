@@ -10,12 +10,13 @@
 // The 74S138 ROM decoder is real -- U46 decodes A13-A15 into ROM chip selects.
 // The IC_ROM_8K is real -- U33 serves FE000-FFFFF from the BIOS binary.
 // The 8259A PIC is real -- signal-level interrupt handling.
-// BusGlue is a reactive Component: memory + generic I/O, subscribes to CLK.
+// ISA Test Card: expansion card in J1 -- handles I/O ports > 0x7F, test IRQ triggers.
 //
 // Each test is a flat binary assembled by NASM, loaded at 0100:0100
 // (physical 0x01100) in DRAM. DS=SS=0 after reset. Results checked at 0x0500+.
 
 #include "test_board_wiring.h"
+#include "isa/isa_testcard.h"
 #include "core/signal.h"
 #include "core/callback_component.h"
 #include "core/fiber_component.h"
@@ -46,189 +47,6 @@ protected:
     void on_signal_change(Fiber) override {}
 };
 
-// =========================================================================
-// BusGlue: reactive Component -- address decode + memory.
-// Subscribes to CLK, detects edges, drives data/control for each T-state.
-// Handles memory and generic I/O. PIC chip-select comes from U66 (74S138).
-// =========================================================================
-class BusGlue : public CallbackComponent {
-public:
-    BusGlue() : CallbackComponent("BusGlue") { set_description("Bus Glue"); }
-
-    Pin xa[20];                  // XA0-XA19 -- latched address from 74S373s
-    Pin d[8];                    // D0-D7 -- system data bus
-    Pin pin_s0, pin_s1, pin_s2;
-    std::unique_ptr<uint8_t[]> io  = std::make_unique<uint8_t[]>(1 << 16);
-
-    Signal* pic_ir[8] = {};       // IR0-IR7 (for test trigger port 0xF0)
-
-    void init(Signal* xa_sigs[], Signal* d_sigs[], Signal& s0, Signal& s1, Signal& s2, Signal& clk) {
-        for (int i = 0; i < 20; ++i) xa[i] = xa_sigs[i]->pin();
-        for (int i = 0; i < 8; ++i)  d[i]  = d_sigs[i]->pin();
-        pin_s0 = s0.pin();
-        pin_s1 = s1.pin();
-        pin_s2 = s2.pin();
-        clk.connect(this);
-
-        // Pin directions for wiring visualization.
-        for (int i = 0; i < 20; ++i) declare_input(xa[i]);
-        for (int i = 0; i < 8; ++i) { declare_input(d[i]); declare_output(d[i]); }
-        declare_async_input(pin_s0); declare_async_input(pin_s1); declare_async_input(pin_s2);
-        declare_input(clk.pin());
-
-        // D pins are bidirectional: read cycles drive D (output), write cycles read D (input).
-        declare_bidir_block({d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]},
-                            [this]() { return is_read_cycle() ? BidirDir::Output : BidirDir::Input; });
-    }
-
-    // T-state machine
-    enum class TState { IDLE, T1, T2, T3, T4 };
-    TState t_state = TState::IDLE;
-    uint8_t cycle_type = 7;
-    uint32_t cycle_addr = 0;
-    int bus_cycle_count = 0;
-
-    void reset() {
-        t_state = TState::IDLE;
-        cycle_type = 7;
-        cycle_addr = 0;
-        bus_cycle_count = 0;
-    }
-
-protected:
-    void on_signal_change(Fiber caller) override {
-        on_clk_rising();
-        on_clk_falling();
-    }
-
-private:
-    uint8_t decode_status() {
-        uint8_t v2 = (pin_s2.level() == Level::High) ? 1 : 0;
-        uint8_t v1 = (pin_s1.level() == Level::High) ? 1 : 0;
-        uint8_t v0 = (pin_s0.level() == Level::High) ? 1 : 0;
-        return (v2 << 2) | (v1 << 1) | v0;
-    }
-
-    uint32_t read_address() {
-        uint32_t addr = 0;
-        for (int i = 0; i < 20; ++i)
-            if (xa[i].level() == Level::High)
-                addr |= (1u << i);
-        return addr;
-    }
-
-    uint8_t read_d() {
-        uint8_t val = 0;
-        for (int i = 0; i < 8; ++i)
-            if (d[i].level() == Level::High)
-                val |= (1u << i);
-        return val;
-    }
-
-    void drive_d(uint8_t val) {
-        for (int i = 0; i < 8; ++i)
-            d[i].drive((val >> i) & 1 ? Level::High : Level::Low);
-    }
-
-    void release_d() {
-        for (int i = 0; i < 8; ++i)
-            d[i].release();
-    }
-
-    bool is_read_cycle()  { return cycle_type == 0 || cycle_type == 1 || cycle_type == 4 || cycle_type == 5; }
-    bool is_write_cycle() { return cycle_type == 2 || cycle_type == 6; }
-    bool is_io_cycle()    { return cycle_type == 1 || cycle_type == 2; }
-    bool is_inta_cycle()  { return cycle_type == 0; }
-    // U66 (74S138) decodes I/O ports into chip selects for real ICs:
-    //   0x00-0x1F: DMA (8237A)
-    //   0x20-0x3F: PIC (8259A)
-    //   0x40-0x5F: PIT (8253)
-    //   0x60-0x7F: PPI (8255A)
-    // BusGlue must not drive the data bus for these ports.
-    bool is_hw_decoded(uint32_t addr) { return (addr & 0xFFFF) <= 0x7F; }
-
-
-    uint8_t io_read(uint16_t port) { return io[port]; }
-
-    void io_write(uint16_t port, uint8_t val) {
-        if (port == 0xF0) {
-            // Test trigger port: drive IR lines High.
-            // The 8284A's wait_quiescent after this CLK edge ensures the PIC
-            // processes the rising edge before the next CLK tick.
-            for (int i = 0; i < 8; i++) {
-                if ((val & (1 << i)) && pic_ir[i])
-                    pic_ir[i]->drive(Level::High);
-            }
-        } else if (port == 0xF1) {
-            // Test clear port: drive IR lines Low.
-            for (int i = 0; i < 8; i++) {
-                if ((val & (1 << i)) && pic_ir[i])
-                    pic_ir[i]->drive(Level::Low);
-            }
-        } else {
-            io[port] = val;
-        }
-    }
-
-    void on_clk_rising() {
-        uint8_t status = decode_status();
-
-        switch (t_state) {
-        case TState::IDLE:
-            if (status != 7) {
-                t_state = TState::T1;
-                cycle_type = status;
-                cycle_addr = read_address();
-            }
-            break;
-
-        case TState::T1:
-            t_state = TState::T2;
-            break;
-
-        case TState::T2:
-            t_state = TState::T3;
-            if (is_read_cycle()) {
-                // DRAM reads: U12 (74S245) bridges MD->D automatically.
-                // INTA: PIC drives D via ~CS from U66.
-                // HW-decoded IO: handled by real ICs.
-                if (!is_inta_cycle()
-                    && is_io_cycle() && !is_hw_decoded(cycle_addr)) {
-                    drive_d(io_read(cycle_addr & 0xFFFF));
-                }
-            } else if (is_write_cycle()) {
-                // DRAM writes: U12 (74S245) bridges D->MD automatically.
-                if (is_io_cycle() && !is_hw_decoded(cycle_addr)) {
-                    io_write(cycle_addr & 0xFFFF, read_d());
-                }
-            }
-            break;
-
-        case TState::T3:
-            t_state = TState::T4;
-            break;
-
-        case TState::T4:
-            if (status != 7) {
-                t_state = TState::T1;
-                cycle_type = status;
-                bus_cycle_count++;
-                cycle_addr = read_address();
-            } else {
-                if (is_read_cycle()) {
-                    release_d();
-                }
-                bus_cycle_count++;
-                t_state = TState::IDLE;
-            }
-            break;
-        }
-    }
-
-    void on_clk_falling() {
-        // DRAM write data transfer (D->MD) handled by U12 (74S245).
-    }
-};
 
 // =========================================================================
 // Test definition: binary file + expected memory values.
@@ -356,19 +174,9 @@ int main() {
     auto& dram = board.dram;
     auto& all_traces = board.all_traces;
 
-    // BusGlue: reactive address decode + memory
-    Signal* xa_ptrs[20];
-    Signal* d_ptrs[8];
-    for (int i = 0; i < 20; ++i) xa_ptrs[i] = &board.xa[i];
-    for (int i = 0; i < 8; ++i)  d_ptrs[i] = board.d_arr[i];
-
-    BusGlue bus;
-    bus.init(xa_ptrs, d_ptrs, board.s0, board.s1, board.s2, board.clk);
-
-    for (int i = 0; i < 8; ++i) {
-        bus.pic_ir[i] = board.irq_arr[i];
-        bus.declare_output(board.irq_arr[i]->pin());
-    }
+    // ISA Test Card: plugs into J1, handles I/O ports > 0x7F and test IRQ triggers.
+    ISA_TestCard testcard;
+    testcard.install(board.isa_slots[0]);
 
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
     // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.
@@ -376,8 +184,8 @@ int main() {
     Scheduler scheduler;
     Signal::set_scheduler(&scheduler);
     board.register_all(scheduler);
-    scheduler.register_callback(&bus);
-    // Resolve callback dependency graph (DRAM outputs -> BusGlue inputs).
+    scheduler.register_callback(&testcard);
+    // Resolve callback dependency graph.
     // Must be called after all register_*() calls so dump_dot sees everything.
     scheduler.resolve();
 
@@ -387,10 +195,10 @@ int main() {
     for (auto& tc : tests) {
         spdlog::info("--- {} ---", tc.name);
 
-        // Reset I/O space, DRAM, and BusGlue state
-        std::memset(bus.io.get(), 0xFF, 1 << 16);
+        // Reset I/O space, DRAM, and test card state
+        std::memset(testcard.io_data(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
-        bus.reset();
+        testcard.reset_state();
 
         // Load binary into DRAM at 0100:0100 (physical 0x01100)
         std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;

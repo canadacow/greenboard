@@ -2,24 +2,19 @@
 ; Loaded at F000:0123 (physical 0xF0123). DS=0 after reset.
 ; SP initialized to 0x0800.
 ;
-; BusGlue provides:
+; ISA Test Card provides:
 ;   - 8259A PIC at ports 0x20-0x21
 ;   - Test trigger port 0xF0: writing bit N raises IRQ N (drives High)
 ;   - Test clear port 0xF1: writing bit N clears IRQ N (drives Low)
+;   - Only ISA-bus IRQs available: IRQ2-IRQ7 (bits 2-7)
 ;
-; Expected results:
-;   [0500] = 0x0001   IRQ1 fires with correct vector (INT 9)
-;   [0502] = 0x0001   Priority: IRQ0 serviced before IRQ1
-;   [0504] = 0x0001   Priority: IRQ1 serviced second
-;   [0506] = 0x0001   Masked IRQ does not fire
-;   [0508] = 0x0001   Specific EOI clears ISR bit
-;   [050A] = 0x0001   Auto-EOI: ISR cleared automatically
-;   [050C] = 0x0002   Nested HW interrupts: both handlers ran
+; Tests use IRQ3 (INT 11), IRQ4 (INT 12), IRQ5 (INT 13).
+; Priority: IRQ3 > IRQ4 > IRQ5.
 
 ; @name IRQ (advanced)
-; @expect 0500 0001 IRQ1 fires (INT 9)
-; @expect 0502 0001 Priority: IRQ0 first
-; @expect 0504 0001 Priority: IRQ1 second
+; @expect 0500 0001 IRQ4 fires (INT 12)
+; @expect 0502 0001 Priority: IRQ3 first
+; @expect 0504 0001 Priority: IRQ4 second
 ; @expect 0506 0001 Masked IRQ blocked
 ; @expect 0508 0001 Specific EOI
 ; @expect 050A 0001 Auto-EOI
@@ -46,13 +41,13 @@ mov word [0x050C], 0x0000
 mov byte [0x05F0], 0       ; test phase
 mov word [0x0600], 0       ; order index (for priority test)
 
-; Install IRQ handlers: INT 8 (IRQ0), INT 9 (IRQ1), INT 10 (IRQ2)
-mov word [8*4],    irq0_handler
-mov word [8*4+2],  0x0100
-mov word [9*4],    irq1_handler
-mov word [9*4+2],  0x0100
-mov word [10*4],   irq2_handler
-mov word [10*4+2], 0x0100
+; Install IRQ handlers: INT 11 (IRQ3), INT 12 (IRQ4), INT 13 (IRQ5)
+mov word [11*4],   irq3_handler
+mov word [11*4+2], 0x0100
+mov word [12*4],   irq4_handler
+mov word [12*4+2], 0x0100
+mov word [13*4],   irq5_handler
+mov word [13*4+2], 0x0100
 
 ; Initialize PIC: edge-triggered, single, ICW4
 mov al, 0x13
@@ -63,13 +58,13 @@ mov al, 0x01              ; 8086 mode, normal EOI
 out 0x21, al
 
 ; =====================================================================
-; Test 1: IRQ1 fires with correct vector
+; Test 1: IRQ4 fires with correct vector
 ; =====================================================================
 mov byte [0x05F0], 1
-mov al, 0xFC              ; unmask IRQ0 + IRQ1
+mov al, 0xE7              ; unmask IRQ3 + IRQ4 (clear bits 3,4)
 out 0x21, al
 sti
-mov al, 0x02              ; trigger IRQ1
+mov al, 0x10              ; trigger IRQ4 (bit 4)
 out 0xF0, al
 nop
 nop
@@ -78,11 +73,11 @@ nop
 cli
 
 ; =====================================================================
-; Test 2 & 3: Priority -- both IRQ0 and IRQ1 pending, IRQ0 first
+; Test 2 & 3: Priority -- both IRQ3 and IRQ4 pending, IRQ3 first
 ; =====================================================================
 mov byte [0x05F0], 2
 mov word [0x0600], 0      ; order index = 0
-mov al, 0x03              ; trigger both IRQ0 and IRQ1
+mov al, 0x18              ; trigger both IRQ3 and IRQ4 (bits 3,4)
 out 0xF0, al
 sti
 nop
@@ -101,7 +96,7 @@ cli
 mov byte [0x05F0], 4
 mov al, 0xFF              ; mask all IRQs
 out 0x21, al
-mov al, 0x04              ; trigger IRQ2
+mov al, 0x20              ; trigger IRQ5 (bit 5)
 out 0xF0, al
 sti
 nop
@@ -109,7 +104,7 @@ nop
 nop
 nop
 cli
-; If IRQ2 handler ran, [0506] would be 0xDEAD
+; If IRQ5 handler ran, [0506] would be 0xDEAD
 cmp word [0x0506], 0x0000
 jne .mask_fail
 mov word [0x0506], 0x0001
@@ -125,12 +120,12 @@ mov al, 0x08
 out 0x21, al
 mov al, 0x01
 out 0x21, al
-mov al, 0xFE              ; unmask IRQ0
+mov al, 0xF7              ; unmask IRQ3 (clear bit 3)
 out 0x21, al
 
 mov byte [0x05F0], 5
 sti
-mov al, 0x01              ; trigger IRQ0
+mov al, 0x08              ; trigger IRQ3 (bit 3)
 out 0xF0, al
 nop
 nop
@@ -148,12 +143,12 @@ mov al, 0x08
 out 0x21, al
 mov al, 0x03              ; 8086 mode + auto-EOI (bit 1)
 out 0x21, al
-mov al, 0xFE              ; unmask IRQ0
+mov al, 0xF7              ; unmask IRQ3 (clear bit 3)
 out 0x21, al
 
 mov byte [0x05F0], 6
 sti
-mov al, 0x01              ; trigger IRQ0
+mov al, 0x08              ; trigger IRQ3 (bit 3)
 out 0xF0, al
 nop
 nop
@@ -163,8 +158,8 @@ cli
 
 ; =====================================================================
 ; Test 7: Nested hardware interrupts
-; IRQ0 handler: increment [050C], EOI, STI, trigger IRQ1
-; IRQ1 handler: increment [050C], EOI
+; IRQ3 handler: increment [050C], EOI, STI, trigger IRQ4
+; IRQ4 handler: increment [050C], EOI
 ; Total [050C] = 2
 ; =====================================================================
 ; Re-init PIC, normal EOI
@@ -174,13 +169,13 @@ mov al, 0x08
 out 0x21, al
 mov al, 0x01
 out 0x21, al
-mov al, 0xFC              ; unmask IRQ0 + IRQ1
+mov al, 0xE7              ; unmask IRQ3 + IRQ4
 out 0x21, al
 
 mov byte [0x05F0], 7
 mov word [0x050C], 0x0000
 sti
-mov al, 0x01              ; trigger IRQ0
+mov al, 0x08              ; trigger IRQ3 (bit 3)
 out 0xF0, al
 nop
 nop
@@ -195,158 +190,158 @@ cli
 hlt
 
 ; =====================================================================
-; IRQ0 handler (INT 8)
+; IRQ3 handler (INT 11)
 ; =====================================================================
-irq0_handler:
+irq3_handler:
     push ax
     push bx
 
     mov al, [0x05F0]
 
     cmp al, 2
-    je .irq0_phase2
+    je .irq3_phase2
     cmp al, 5
-    je .irq0_phase5
+    je .irq3_phase5
     cmp al, 6
-    je .irq0_phase6
+    je .irq3_phase6
     cmp al, 7
-    je .irq0_phase7
+    je .irq3_phase7
     ; Unexpected phase -- just EOI and return
     mov al, 0x20
     out 0x20, al
-    jmp .irq0_done
+    jmp .irq3_done
 
-.irq0_phase2:
-    ; Priority test: record that IRQ0 fired at current order index
+.irq3_phase2:
+    ; Priority test: record that IRQ3 fired at current order index
     mov bx, [0x0600]
     cmp bx, 0
-    jne .irq0_p2_not_first
-    mov word [0x0502], 0x0001  ; IRQ0 came first
-.irq0_p2_not_first:
+    jne .irq3_p2_not_first
+    mov word [0x0502], 0x0001  ; IRQ3 came first
+.irq3_p2_not_first:
     inc bx
     mov [0x0600], bx
-    mov al, 0x01
-    out 0xF1, al               ; clear IRQ0 line
+    mov al, 0x08
+    out 0xF1, al               ; clear IRQ3 line (bit 3)
     mov al, 0x20
     out 0x20, al               ; non-specific EOI
-    jmp .irq0_done
+    jmp .irq3_done
 
-.irq0_phase5:
-    ; Specific EOI for IRQ0: OCW2 = 0x60 (cmd=3, L=0)
-    mov al, 0x01
-    out 0xF1, al               ; clear IRQ0 line
-    mov al, 0x60
+.irq3_phase5:
+    ; Specific EOI for IRQ3: OCW2 = 0x63 (cmd=3, L=3)
+    mov al, 0x08
+    out 0xF1, al               ; clear IRQ3 line
+    mov al, 0x63
     out 0x20, al
     ; Read ISR
     mov al, 0x0B
     out 0x20, al
     in al, 0x20
     cmp al, 0x00
-    jne .irq0_p5_fail
+    jne .irq3_p5_fail
     mov word [0x0508], 0x0001
-.irq0_p5_fail:
-    jmp .irq0_done
+.irq3_p5_fail:
+    jmp .irq3_done
 
-.irq0_phase6:
+.irq3_phase6:
     ; Auto-EOI: ISR should already be 0
-    mov al, 0x01
-    out 0xF1, al               ; clear IRQ0 line
+    mov al, 0x08
+    out 0xF1, al               ; clear IRQ3 line
     mov al, 0x0B
     out 0x20, al
     in al, 0x20
     cmp al, 0x00
-    jne .irq0_p6_fail
+    jne .irq3_p6_fail
     mov word [0x050A], 0x0001
-.irq0_p6_fail:
+.irq3_p6_fail:
     ; No EOI needed (auto-EOI mode)
-    jmp .irq0_done
+    jmp .irq3_done
 
-.irq0_phase7:
-    ; Nested: increment counter, EOI, STI, trigger IRQ1
+.irq3_phase7:
+    ; Nested: increment counter, EOI, STI, trigger IRQ4
     add word [0x050C], 1
-    mov al, 0x01
-    out 0xF1, al               ; clear IRQ0 line
+    mov al, 0x08
+    out 0xF1, al               ; clear IRQ3 line
     mov al, 0x20
-    out 0x20, al               ; EOI for IRQ0 first (so IRQ1 can nest)
+    out 0x20, al               ; EOI for IRQ3 first (so IRQ4 can nest)
     sti                        ; re-enable interrupts
-    mov al, 0x02               ; trigger IRQ1
+    mov al, 0x10               ; trigger IRQ4 (bit 4)
     out 0xF0, al
     nop
     nop
     nop
     nop
     cli
-    jmp .irq0_done
+    jmp .irq3_done
 
-.irq0_done:
+.irq3_done:
     pop bx
     pop ax
     iret
 
 ; =====================================================================
-; IRQ1 handler (INT 9)
+; IRQ4 handler (INT 12)
 ; =====================================================================
-irq1_handler:
+irq4_handler:
     push ax
     push bx
 
     mov al, [0x05F0]
 
     cmp al, 1
-    je .irq1_phase1
+    je .irq4_phase1
     cmp al, 2
-    je .irq1_phase2
+    je .irq4_phase2
     cmp al, 7
-    je .irq1_phase7
+    je .irq4_phase7
     mov al, 0x20
     out 0x20, al
-    jmp .irq1_done
+    jmp .irq4_done
 
-.irq1_phase1:
-    ; IRQ1 fires test: mark success
+.irq4_phase1:
+    ; IRQ4 fires test: mark success
     mov word [0x0500], 0x0001
-    mov al, 0x02
-    out 0xF1, al               ; clear IRQ1 line
+    mov al, 0x10
+    out 0xF1, al               ; clear IRQ4 line (bit 4)
     mov al, 0x20
     out 0x20, al
-    jmp .irq1_done
+    jmp .irq4_done
 
-.irq1_phase2:
-    ; Priority test: record that IRQ1 fired at current order index
+.irq4_phase2:
+    ; Priority test: record that IRQ4 fired at current order index
     mov bx, [0x0600]
     cmp bx, 1
-    jne .irq1_p2_not_second
-    mov word [0x0504], 0x0001  ; IRQ1 came second
-.irq1_p2_not_second:
+    jne .irq4_p2_not_second
+    mov word [0x0504], 0x0001  ; IRQ4 came second
+.irq4_p2_not_second:
     inc bx
     mov [0x0600], bx
-    mov al, 0x02
-    out 0xF1, al               ; clear IRQ1 line
+    mov al, 0x10
+    out 0xF1, al               ; clear IRQ4 line
     mov al, 0x20
     out 0x20, al
-    jmp .irq1_done
+    jmp .irq4_done
 
-.irq1_phase7:
+.irq4_phase7:
     ; Nested: increment counter, EOI
     add word [0x050C], 1
-    mov al, 0x02
-    out 0xF1, al               ; clear IRQ1 line
+    mov al, 0x10
+    out 0xF1, al               ; clear IRQ4 line
     mov al, 0x20
     out 0x20, al
-    jmp .irq1_done
+    jmp .irq4_done
 
-.irq1_done:
+.irq4_done:
     pop bx
     pop ax
     iret
 
 ; =====================================================================
-; IRQ2 handler (INT 10) -- should never fire when masked
+; IRQ5 handler (INT 13) -- should never fire when masked
 ; =====================================================================
-irq2_handler:
+irq5_handler:
     mov word [0x0506], 0xDEAD
-    mov al, 0x04
-    out 0xF1, al               ; clear IRQ2 line
+    mov al, 0x20
+    out 0xF1, al               ; clear IRQ5 line (bit 5)
     mov al, 0x20
     out 0x20, al
     iret
