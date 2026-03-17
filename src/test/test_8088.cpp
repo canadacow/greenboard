@@ -147,7 +147,7 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::trace);
+    spdlog::set_level(spdlog::level::info);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
@@ -261,7 +261,7 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-//#define RUN_BENCHMARK
+#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---
@@ -269,9 +269,9 @@ int main() {
     spdlog::info("--- Benchmark: 64-bit increment ({} seconds) ---", BENCH_SECONDS);
     {
         board.dma_enabled = false;
-        std::memset(bus.io.get(), 0xFF, 1 << 16);
+        std::memset(testcard.io_data(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
-        bus.reset();
+        testcard.reset_state();
 
         std::string path = std::string(ASM_TEST_DIR) + "/test_bench64.bin";
         if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) {

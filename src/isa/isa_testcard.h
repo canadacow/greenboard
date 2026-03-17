@@ -55,8 +55,8 @@ private:
     void     drive_sd(uint8_t val);
     void     release_sd();
 
-    // I/O decode: ports 0x00-0x7F are handled by real ICs on the motherboard.
-    static bool is_hw_decoded(uint16_t port) { return port <= 0x7F; }
+    // Address decode: this card claims ports 0x80-0xFF.
+    static bool my_port(uint16_t port) { return (port & 0xFF80) == 0x0080; }
 
     // I/O handlers
     uint8_t io_read(uint16_t port);

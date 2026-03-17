@@ -80,7 +80,7 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     // ~IOW falling edge: CPU writes to I/O port.
     if (iow_cur == Level::Low && iow_prev_ != Level::Low) {
         uint16_t port = static_cast<uint16_t>(read_address());
-        if (!is_hw_decoded(port)) {
+        if (my_port(port)) {
             io_write(port, read_sd());
         }
     }
@@ -92,7 +92,7 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
         if (!data_driven_) {
             // First cycle: latch address and look up I/O value.
             uint16_t port = static_cast<uint16_t>(read_address());
-            if (!is_hw_decoded(port)) {
+            if (my_port(port)) {
                 read_byte_ = io_read(port);
                 drive_sd(read_byte_);
             }
