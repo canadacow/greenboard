@@ -325,6 +325,10 @@ struct TestBoard {
     IC_DRAM_256K dram;
 
     void wire(const std::string& bios_path) {
+        // Power rails never create dependency edges.
+        vcc.set_power_rail();
+        gnd.set_power_rail();
+
         // Build all_traces
         all_traces = {
             &vcc, &clk, &reset, &ready, &nmi, &intr, &test_pin,
@@ -952,7 +956,7 @@ struct TestBoard {
         // U5: 74LS30 8-Input NAND (bus idle detect)
         // BRD: all 8 inputs must be High for output Low (bus idle + HRQ active)
         // Inputs: +5V(1), +5V(2), U5.3(3), N-000242(4), ~LOCK(5), ~S1(6), ~S0(11), ~S2(12)
-        // U5.3 comes from U101 (74LS32, not implemented) -- tie to VCC.
+        // U5.3 = N-000291 = OR(~DMA_CS, ~XIOW) from U101 gate 4.
         nand5_socket.wire(1, vcc);             // A = +5V
         nand5_socket.wire(2, vcc);             // B = +5V
         nand5_socket.wire(3, u101_y4);         // C = U101 gate 4 output
@@ -1243,6 +1247,22 @@ struct TestBoard {
         or101_socket.wire(11, u101_y4);        // Y4 = -> U5 pin 3
         or101_socket.wire(14, vcc);
         or101_ic = or101_socket.emplace<IC_74LS32>();
+
+        // Gate 4 output (N-000291) feeds U5 which loops back through
+        // U83->U84->U64->U27->U66->U101.  In CPU mode ~DMA_CS is High,
+        // so OR(High, ~XIOW) = High (constant).  Sense ~DMA_CS externally:
+        // HiZ when inactive, Output when DMA chip-selected.
+        {
+            Pin dma_cs_pin = dma_cs.pin();
+            Pin y4_pin = u101_y4.pin();
+            using BD = Component::BidirDir;
+            or101_ic->declare_bidir_block({y4_pin},
+                BD::HiZ | BD::Output,
+                [dma_cs_pin]() -> BD {
+                    return dma_cs_pin.level() == Level::Low
+                        ? BD::Output : BD::HiZ;
+                });
+        }
 
         // U50: 74S02 Quad NOR (~DMA_AEN, ~WRT_DMA_PG_REG path)
         // BRD: Gate 1 (2,3->1): NOR(N-000246, N-000246) = ~N-000246 -> ~DMA_AEN

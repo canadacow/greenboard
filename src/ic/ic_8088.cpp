@@ -88,7 +88,8 @@ void IC_8088::install(Socket& socket) {
     for (int i = 0; i < 8; ++i) { declare_input(pin_ad_[i]); declare_output(pin_ad_[i]); }
     for (int i = 0; i < 12; ++i) declare_output(pin_a_upper_[i]);
     declare_output(pin_s0_); declare_output(pin_s1_); declare_output(pin_s2_);
-    declare_output(pin_qs0_); declare_output(pin_qs1_); declare_output(pin_lock_);
+    declare_output(pin_qs0_); declare_output(pin_qs1_);
+    declare_output(pin_lock_);
     declare_input(pin_clk_); declare_input(pin_reset_);
     declare_async_input(pin_ready_); declare_async_input(pin_intr_);
     declare_async_input(pin_nmi_);   declare_async_input(pin_test_);
@@ -102,9 +103,11 @@ void IC_8088::install(Socket& socket) {
                                    ? BidirDir::Output : BidirDir::Input;
                         });
 
-    // S0-S2: Output unless AD is in Input mode (T2_Read), where they
-    // vanish from the DAG to break the 8088->8288->74S245->8088 cycle.
-    declare_bidir_block({pin_s0_, pin_s1_, pin_s2_},
+    // S0-S2 + ~LOCK: Output unless AD is in Input mode (T2_Read), where they
+    // vanish from the DAG to break the 8088->8288->...->8088 cycle.
+    // ~LOCK is always High during normal bus cycles; including it here breaks
+    // the U3->U5->...->DRAM->U12->U8->U3 cycle in the read-phase perm.
+    declare_bidir_block({pin_s0_, pin_s1_, pin_s2_, pin_lock_},
                         BidirDir::Output | BidirDir::HiZ,
                         [this]() {
                             return bus_t_ == BusT::T2_Read ? BidirDir::HiZ : BidirDir::Output;

@@ -29,6 +29,16 @@ struct SignalPool {
         return base;
     }
 
+    // Power rail bitmask -- signals that should never create dependency edges.
+    static constexpr int PW = (MAX_SIGNALS + 63) / 64;
+    static uint64_t power_rails[PW];
+    static void mark_power_rail(int idx) {
+        power_rails[idx / 64] |= uint64_t(1) << (idx % 64);
+    }
+    static bool is_power_rail(int idx) {
+        return (power_rails[idx / 64] >> (idx % 64)) & 1;
+    }
+
 #ifdef BENCH_PIN_VALIDATION
     static constexpr int SLOT_WORDS = (MAX_SIGNALS + 63) / 64;
     static Component* active_comp_;
@@ -150,6 +160,9 @@ public:
 
     // Index-based handle -- no pointer chase on the hot path.
     Pin pin() const { return Pin{static_cast<int>(level_ - SignalPool::levels)}; }
+
+    // Mark as power rail (VCC/GND) -- excluded from dependency edges.
+    void set_power_rail() { SignalPool::mark_power_rail(pin().idx); }
 
     // Release the signal (go Hi-Z, or to pull level if set).
     void release() { drive(pull_); }

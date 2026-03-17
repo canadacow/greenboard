@@ -11,6 +11,7 @@ namespace bench {
 alignas(64) Level SignalPool::levels[MAX_SIGNALS] = {};
 const char* SignalPool::names[MAX_SIGNALS] = {};
 int SignalPool::count = 1;  // slot 0 reserved as dummy (reads HiZ, writes vanish)
+uint64_t SignalPool::power_rails[PW] = {};
 
 // Static init: slot 0 must read HiZ (default zero-init gives Level::Low = 0).
 static struct Slot0Init { Slot0Init() { SignalPool::levels[0] = Level::HiZ; } } slot0_init_;

@@ -74,101 +74,9 @@ public:
         for (auto* cc : callbacks_) cc->power_off();
     }
 
-    // Build the callback dependency graph and topologically sort into waves.
-    // Call once after all callbacks are registered, before the first evaluate().
-    void resolve() {
-        const int n = static_cast<int>(callbacks_.size());
-        if (n == 0) { resolved_ = true; return; }
-
-        constexpr int W = Component::SLOT_WORDS;
-
-        // Build adjacency: depends[b][a] = true means b depends on a.
-        // Uses effective outputs (output & ~input) to exclude bidirectional pins,
-        // and effective inputs (input & ~async) to exclude cross-cycle signals.
-        std::vector<std::vector<bool>> depends(n, std::vector<bool>(n, false));
-        for (int a = 0; a < n; ++a) {
-            for (int b = 0; b < n; ++b) {
-                if (a == b) continue;
-                for (int w = 0; w < W; ++w) {
-                    uint64_t eff_out = callbacks_[a]->outputs()[w] & ~callbacks_[a]->inputs()[w];
-                    uint64_t eff_in  = callbacks_[b]->inputs()[w]  & ~callbacks_[b]->async_inputs()[w];
-                    if (eff_out & eff_in) {
-                        depends[b][a] = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Kahn's algorithm -- topological sort with level assignment.
-        std::vector<int> in_deg(n, 0);
-        std::vector<int> level(n, 0);
-        for (int b = 0; b < n; ++b)
-            for (int a = 0; a < n; ++a)
-                if (depends[b][a]) ++in_deg[b];
-
-        std::vector<int> queue;
-        queue.reserve(n);
-        for (int i = 0; i < n; ++i)
-            if (in_deg[i] == 0) queue.push_back(i);
-
-        int sorted = 0;
-        for (int front = 0; front < static_cast<int>(queue.size()); ++front) {
-            int u = queue[front];
-            ++sorted;
-            for (int v = 0; v < n; ++v) {
-                if (!depends[v][u]) continue;
-                level[v] = std::max(level[v], level[u] + 1);
-                if (--in_deg[v] == 0) queue.push_back(v);
-            }
-        }
-        if (sorted != n) {
-            spdlog::critical("[Scheduler] cycle in callback dependencies (sorted {} of {})", sorted, n);
-            std::vector<std::array<uint64_t, W>> cb_eff_out(n), cb_eff_in(n);
-            for (int i = 0; i < n; ++i)
-                for (int w = 0; w < W; ++w) {
-                    cb_eff_out[i][w] = callbacks_[i]->outputs()[w] & ~callbacks_[i]->inputs()[w];
-                    cb_eff_in[i][w]  = callbacks_[i]->inputs()[w]  & ~callbacks_[i]->async_inputs()[w];
-                }
-            for (int i = 0; i < n; ++i) {
-                if (in_deg[i] <= 0) continue;
-                spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", callbacks_[i]->name(), in_deg[i]);
-                for (int j = 0; j < n; ++j) {
-                    if (!depends[i][j] || in_deg[j] <= 0) continue;
-                    for (int s = 1; s < SignalPool::count; ++s) {
-                        int w2 = s / 64;
-                        uint64_t bit = uint64_t(1) << (s % 64);
-                        if ((cb_eff_out[j][w2] & bit) && (cb_eff_in[i][w2] & bit))
-                            spdlog::critical("[Scheduler]     <- {} via signal #{}", callbacks_[j]->name(), s);
-                    }
-                }
-            }
-            dump_cycle_dot(reinterpret_cast<Component* const*>(callbacks_.data()), n, depends, in_deg, cb_eff_out, cb_eff_in);
-            std::_Exit(1);
-        }
-
-        // Populate waves.
-        int num_waves = 0;
-        for (int i = 0; i < n; ++i)
-            num_waves = std::max(num_waves, level[i] + 1);
-
-        waves_.resize(num_waves);
-        for (auto& w : waves_) w.clear();
-
-        for (int i = 0; i < n; ++i)
-            waves_[level[i]].push_back(callbacks_[i]);
-
-        #if defined(WAVE_DEBUGS)
-        for (int w = 0; w < num_waves; ++w) {
-            spdlog::info("[Scheduler] wave {}: {} callbacks", w, waves_[w].size());
-            for (auto* c : waves_[w])
-                spdlog::info("[Scheduler]   - {}", c->name());
-        }
-        #endif
-
-        dump_unified_waves();
-        resolved_ = true;
-    }
+    // Initialize the per-perm DAG infrastructure. Static callback ordering
+    // was removed -- the per-perm DAG handles all dependency ordering at runtime.
+    void resolve() { dump_unified_waves(); }
 
     // Build per-permutation wave plans for all bidirectional pin configurations.
     // For N bidir blocks across all components, builds 2^N DAGs. At runtime,
@@ -661,7 +569,6 @@ public:
     }
 
 private:
-    bool resolved_ = false;
     bool unified_resolved_ = false;
 
     std::vector<CallbackComponent*> callbacks_;
@@ -670,9 +577,6 @@ private:
     // Component groups (skippable subsystems).
     std::array<ComponentGroup, MAX_GROUPS> groups_;
     int num_groups_ = 0;
-
-    // Resolved callback waves (populated by resolve(), used for diagnostics).
-    std::vector<std::vector<CallbackComponent*>> waves_;
 
     // Per-permutation wave plans (populated by dump_unified_waves()).
     struct WavePlan {
@@ -728,8 +632,9 @@ private:
         std::vector<std::array<uint64_t, W>> eff_out(n), eff_in(n);
         for (int i = 0; i < n; ++i)
             for (int w = 0; w < W; ++w) {
-                eff_out[i][w] = active_evals[i]->outputs()[w] & ~active_evals[i]->inputs()[w];
-                eff_in[i][w]  = active_evals[i]->inputs()[w]  & ~active_evals[i]->async_inputs()[w];
+                uint64_t pwr = SignalPool::power_rails[w];
+                eff_out[i][w] = active_evals[i]->outputs()[w] & ~active_evals[i]->inputs()[w] & ~pwr;
+                eff_in[i][w]  = active_evals[i]->inputs()[w]  & ~active_evals[i]->async_inputs()[w] & ~pwr;
             }
 
         for (int b = 0; b < num_bidir; ++b) {

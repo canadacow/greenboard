@@ -58,6 +58,14 @@ void IC_8237A::install(Socket& socket) {
     for (int i = 0; i < 4; ++i) declare_output(pin_dack_[i]);
     declare_output(pin_adstb_); declare_output(pin_aen_);
 
+    // DMA-only outputs: HiZ in CPU mode, Output during DMA.
+    // Removes false DAG edges (U35->U84 via ~DACK0, U35->U15 via ~DACK0,
+    // U35->U99 via HRQ/~EOP, U35->U18 via ADSTB) in CPU-mode perms.
+    declare_bidir_block({pin_hrq_, pin_eop_, pin_dack_[0], pin_dack_[1],
+                         pin_dack_[2], pin_dack_[3], pin_adstb_, pin_aen_},
+        BidirDir::HiZ | BidirDir::Output,
+        [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::HiZ; });
+
     // Address pins: input during CPU I/O (register select), output only during
     // DMA transfer.  Declaring as bidir avoids a DAG cycle (8237A -> XA -> U66
     // -> ~DMA_CS -> 8237A).  Direction starts as Input since DMA is idle.
