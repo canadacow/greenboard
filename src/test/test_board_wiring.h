@@ -158,6 +158,8 @@ struct TestBoard {
     Signal n_000225{"N-000225"};      // Parity check stub -> U97 gate 1 B input (PSU NMI)
     Signal n_000215{"N-000215"};      // U84 gate 1 output (inverted DT/~R)
     Signal n_000239{"N-000239"};      // U84 gate 2 output
+    Signal n_000241{"N-000241"};      // U83 gate 5 output (inverted ~XMEMR)
+    Signal n_000240{"N-000240"};      // U64 gate 2 output -> U82 (unimpl)
     Signal u101_y4{"N-000291"};       // U101 gate 4 output -> U5 pin 3
     Signal pg_reg_cs{"N-000259"};      // U66 ~Y4: I/O decode 0x80-0x9F
     Signal wrt_dma_pg{"~WRT_DMA_PG_REG"}; // U51 inv6 output -> U19 ~WE
@@ -288,7 +290,7 @@ struct TestBoard {
     IC_74S373* latch_hi_ic = nullptr;
     IC_74S138<0x1F>* io_dec = nullptr;      // U66: Y0-Y4
     IC_8259A* pic = nullptr;
-    IC_74S20<0x01>* nand_ic = nullptr;
+    IC_74S20<0x03>* nand_ic = nullptr;
     IC_74S138<0x80>* rom_dec = nullptr;     // U46: Y7
     IC_ROM_8K* rom_ic = nullptr;
     IC_74S00_U81* nand81_ic = nullptr;
@@ -337,7 +339,7 @@ struct TestBoard {
             &n_000243, &n_000238, &n_000231, &n_000230,
             &dclk, &tc, &reset_drv_bar, &n_000328,
             &u97_y2_nc, &rdy_to_dma, &n_000244, &n_000245, &n_000246,
-            &n_000235, &n_000215, &n_000239, &u101_y4,
+            &n_000235, &n_000215, &n_000239, &n_000241, &n_000240, &u101_y4,
             &n_000288, &n_000317, &n_000303, &pg_reg_cs, &wrt_dma_pg,
             &pit_clk, &pclk_div2_fb,
             &xior, &xiow, &xmemr, &xmemw, &n_000290, &dma_aen_bar,
@@ -605,8 +607,13 @@ struct TestBoard {
         nand_socket.wire(5, la[16]);            // D1 = A16
         nand_socket.wire(6, rom_addr_sel);      // Y1 = ~ROM_ADDR_SEL
         nand_socket.wire(7, gnd);
+        nand_socket.wire(8, n_000240);          // Y2 = N-000240 -> U82 (unimpl)
+        nand_socket.wire(9, n_000239);          // A2 = N-000239 (from U84 gate 2)
+        nand_socket.wire(10, n_000239);         // B2 = N-000239 (doubled)
+        nand_socket.wire(12, xiow);             // C2 = ~XIOW
+        nand_socket.wire(13, xior);             // D2 = ~XIOR
         nand_socket.wire(14, vcc);
-        nand_ic = nand_socket.emplace<IC_74S20<0x01>>();
+        nand_ic = nand_socket.emplace<IC_74S20<0x03>>();
 
         // U46: 74S138 ROM Chip Select Decoder
         // Decodes A15:A13 into ~CS2-~CS7 when ~ROM_ADDR_SEL=Low and ~MEMR=Low.
@@ -839,6 +846,8 @@ struct TestBoard {
         inv_socket.wire(7, gnd);
         inv_socket.wire(8, n_000238);      // Y4 = bus idle grant (inverted N-000243)
         inv_socket.wire(9, n_000243);      // A4 = N-000243 (from U5 output)
+        inv_socket.wire(10, n_000241);     // Y5 = N-000241 (inverted ~XMEMR)
+        inv_socket.wire(11, xmemr);        // A5 = ~XMEMR
         inv_socket.wire(14, vcc);
         inv_ic = inv_socket.emplace<IC_74S04>();
 
@@ -1266,7 +1275,7 @@ struct TestBoard {
         nand84_socket.wire(12, n_000215);      // Y1 = N-000215
         nand84_socket.wire(3, dack0_brd);      // A2 = ~DACK_0_BRD
         nand84_socket.wire(4, aen_brd);        // B2 = AEN_BRD
-        nand84_socket.wire(5, gnd);            // C2 = N-000241 (stub GND)
+        nand84_socket.wire(5, n_000241);       // C2 = N-000241 (inverted ~XMEMR from U83)
         nand84_socket.wire(6, n_000239);       // Y2 = N-000239
         nand84_socket.wire(9, gnd);            // A3 = N-000236 (stub GND)
         nand84_socket.wire(10, gnd);           // B3 = ~PCK (stub GND)

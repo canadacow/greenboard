@@ -79,11 +79,12 @@ void IC_8237A::install(Socket& socket) {
                 ? BidirDir::Output : BidirDir::Input;
         });
 
-    // ~MEMR/~MEMW: input during normal CPU ops (8288 drives), output during DMA.
+    // ~MEMR/~MEMW: output during DMA transfers, HiZ otherwise.
+    // HiZ in CPU mode removes false DAG edges U14->U35 via command strobes.
     declare_input(pin_memr_); declare_input(pin_memw_);
     declare_bidir_block({pin_memr_, pin_memw_},
-        BidirDir::Input | BidirDir::Output,
-        [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::Input; });
+        BidirDir::HiZ | BidirDir::Output,
+        [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::HiZ; });
 }
 
 void IC_8237A::on_signal_change(Fiber /*caller*/) {

@@ -84,7 +84,12 @@ void IC_74S158::update_outputs() {
         m.y.drive(y);
         if (y == Level::High) out |= (1 << i);
     }
-    spdlog::trace("[{}] sel={} out=0x{:X}", name(), sel, out);
+    spdlog::trace("[{}] sel={} out=0x{:X} sel_raw={} i0=[{},{},{},{}] i1=[{},{},{},{}]",
+                  name(), sel, out, int(pin_select_.level()),
+                  int(muxes_[0].i0.level()), int(muxes_[1].i0.level()),
+                  int(muxes_[2].i0.level()), int(muxes_[3].i0.level()),
+                  int(muxes_[0].i1.level()), int(muxes_[1].i1.level()),
+                  int(muxes_[2].i1.level()), int(muxes_[3].i1.level()));
 }
 
 } // namespace bench

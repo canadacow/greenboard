@@ -124,6 +124,12 @@ public:
         }
         if (sorted != n) {
             spdlog::critical("[Scheduler] cycle in callback dependencies (sorted {} of {})", sorted, n);
+            std::vector<std::array<uint64_t, W>> cb_eff_out(n), cb_eff_in(n);
+            for (int i = 0; i < n; ++i)
+                for (int w = 0; w < W; ++w) {
+                    cb_eff_out[i][w] = callbacks_[i]->outputs()[w] & ~callbacks_[i]->inputs()[w];
+                    cb_eff_in[i][w]  = callbacks_[i]->inputs()[w]  & ~callbacks_[i]->async_inputs()[w];
+                }
             for (int i = 0; i < n; ++i) {
                 if (in_deg[i] <= 0) continue;
                 spdlog::critical("[Scheduler]   stuck: {} (in_deg={})", callbacks_[i]->name(), in_deg[i]);
@@ -132,13 +138,12 @@ public:
                     for (int s = 1; s < SignalPool::count; ++s) {
                         int w2 = s / 64;
                         uint64_t bit = uint64_t(1) << (s % 64);
-                        uint64_t eff_out = callbacks_[j]->outputs()[w2] & ~callbacks_[j]->inputs()[w2];
-                        uint64_t eff_in  = callbacks_[i]->inputs()[w2]  & ~callbacks_[i]->async_inputs()[w2];
-                        if ((eff_out & bit) && (eff_in & bit))
+                        if ((cb_eff_out[j][w2] & bit) && (cb_eff_in[i][w2] & bit))
                             spdlog::critical("[Scheduler]     <- {} via signal #{}", callbacks_[j]->name(), s);
                     }
                 }
             }
+            dump_cycle_dot(reinterpret_cast<Component* const*>(callbacks_.data()), n, depends, in_deg, cb_eff_out, cb_eff_in);
             std::_Exit(1);
         }
 
@@ -606,6 +611,55 @@ public:
         }
     }
 
+    // Dump a dependency cycle as DOT -> SVG for debugging.
+    static constexpr int W = Component::SLOT_WORDS;
+    static void dump_cycle_dot(Component* const* comps, int n,
+                               const std::vector<std::vector<bool>>& depends,
+                               const std::vector<int>& in_deg,
+                               const std::vector<std::array<uint64_t, W>>& eff_out,
+                               const std::vector<std::array<uint64_t, W>>& eff_in) {
+        std::string dot = "digraph dag {\n  rankdir=LR;\n  node [shape=box fontname=\"Consolas\" fontsize=10];\n  edge [fontname=\"Consolas\" fontsize=8];\n";
+        for (int i = 0; i < n; ++i) {
+            const char* color = (in_deg[i] > 0) ? "red" : "black";
+            dot += fmt::format("  n{} [label=\"{}\" color={} fontcolor={}];\n",
+                               i, comps[i]->name(), color, color);
+        }
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                if (!depends[i][j]) continue;
+                std::string sigs;
+                int sig_count = 0;
+                for (int s = 1; s < SignalPool::count; ++s) {
+                    int w = s / 64;
+                    uint64_t bit = uint64_t(1) << (s % 64);
+                    if ((eff_out[j][w] & bit) && (eff_in[i][w] & bit)) {
+                        const char* nm = SignalPool::names[s];
+                        if (sig_count < 4) {
+                            if (!sigs.empty()) sigs += "\\n";
+                            sigs += (nm ? nm : "?");
+                        }
+                        ++sig_count;
+                    }
+                }
+                if (sig_count > 4)
+                    sigs += fmt::format("\\n+{} more", sig_count - 4);
+                const char* ec = (in_deg[i] > 0 && in_deg[j] > 0) ? "red" : "black";
+                dot += fmt::format("  n{} -> n{} [label=\"{}\" color={}];\n", j, i, sigs, ec);
+            }
+        }
+        dot += "}\n";
+        {
+            std::ofstream f("cycle_debug.dot");
+            f << dot;
+        }
+        spdlog::critical("[Scheduler] Wrote cycle_debug.dot");
+        int rc = std::system("\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg cycle_debug.dot -o cycle_debug.svg");
+        if (rc == 0)
+            spdlog::critical("[Scheduler] Rendered cycle_debug.svg");
+        else
+            spdlog::critical("[Scheduler] dot failed (rc={}), SVG not generated", rc);
+    }
+
 private:
     bool resolved_ = false;
     bool unified_resolved_ = false;
@@ -770,49 +824,7 @@ private:
                     }
                 }
             }
-            // Dump full DAG as DOT -> SVG. Stuck nodes in red.
-            {
-                std::string dot = "digraph dag {\n  rankdir=LR;\n  node [shape=box fontname=\"Consolas\" fontsize=10];\n  edge [fontname=\"Consolas\" fontsize=8];\n";
-                for (int i = 0; i < n; ++i) {
-                    const char* color = (in_deg[i] > 0) ? "red" : "black";
-                    dot += fmt::format("  n{} [label=\"{}\" color={} fontcolor={}];\n",
-                                       i, active_evals[i]->name(), color, color);
-                }
-                for (int i = 0; i < n; ++i) {
-                    for (int j = 0; j < n; ++j) {
-                        if (!depends[i][j]) continue;
-                        std::string sigs;
-                        int sig_count = 0;
-                        for (int s = 1; s < SignalPool::count; ++s) {
-                            int sw = s / 64;
-                            uint64_t bit = uint64_t(1) << (s % 64);
-                            if ((eff_out[j][sw] & bit) && (eff_in[i][sw] & bit)) {
-                                const char* nm = SignalPool::names[s];
-                                if (sig_count < 4) {
-                                    if (!sigs.empty()) sigs += "\\n";
-                                    sigs += (nm ? nm : "?");
-                                }
-                                ++sig_count;
-                            }
-                        }
-                        if (sig_count > 4)
-                            sigs += fmt::format("\\n+{} more", sig_count - 4);
-                        const char* ec = (in_deg[i] > 0 && in_deg[j] > 0) ? "red" : "black";
-                        dot += fmt::format("  n{} -> n{} [label=\"{}\" color={}];\n", j, i, sigs, ec);
-                    }
-                }
-                dot += "}\n";
-                {
-                    std::ofstream f("cycle_debug.dot");
-                    f << dot;
-                }
-                spdlog::critical("[Scheduler] Wrote cycle_debug.dot");
-                int rc = std::system("\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg cycle_debug.dot -o cycle_debug.svg");
-                if (rc == 0)
-                    spdlog::critical("[Scheduler] Rendered cycle_debug.svg");
-                else
-                    spdlog::critical("[Scheduler] dot failed (rc={}), SVG not generated", rc);
-            }
+            dump_cycle_dot(active_evals.data(), n, depends, in_deg, eff_out, eff_in);
             std::_Exit(1);
         }
 
