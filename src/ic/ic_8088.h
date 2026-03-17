@@ -288,10 +288,10 @@ private:
     Level nmi_prev_ = Level::HiZ;
 
     // Halted flag -- set when CPU reaches HLT or CS:IP = 0:0
-    std::atomic<bool> halted_{false};
+    bool halted_ = false;
 public:
-    bool halted() const { return halted_.load(std::memory_order_acquire); }
-    void clear_halt() { halted_.store(false, std::memory_order_release); }
+    bool halted() const { return halted_; }
+    void clear_halt() { halted_ = false; }
 private:
 
     // Start address (set via constructor, applied in cpu_reset)

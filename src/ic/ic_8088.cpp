@@ -146,7 +146,7 @@ void IC_8088::run() {
     for (;;) {
         if (pin_vcc_.level() != Level::High) break;
         check_nmi();  // process NMI
-        if (halted_.load(std::memory_order_acquire)) {
+        if (halted_) {
             yield();
             continue;
         }
@@ -463,7 +463,7 @@ void IC_8088::cpu_reset() {
     nmi_pending_ = false;
     prefetch_len_ = 0;
     prefetch_base_ = 0;
-    halted_.store(false, std::memory_order_release);
+    halted_ = false;
     bus_t_ = BusT::T1;
 }
 
@@ -523,7 +523,7 @@ int IC_8088::AAA_AAS(int which_operation) {
 
 void IC_8088::execute() {
     uint32_t cs_ip = 16u * regs16()[REG_CS] + reg_ip_;
-    if (cs_ip == 0) { halted_.store(true, std::memory_order_release); return; }
+    if (cs_ip == 0) { halted_ = true; return; }
 
     // Reset prefetch
     prefetch_base_ = cs_ip;
@@ -1191,7 +1191,7 @@ void IC_8088::execute() {
     case 48: // 0F xx (emulator-specific, not used on real hardware)
         break;
     case 53: // HLT
-        halted_.store(true, std::memory_order_release);
+        halted_ = true;
         return;
 
     case 3: // PUSH regs16

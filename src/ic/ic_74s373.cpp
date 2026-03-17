@@ -35,7 +35,7 @@ void IC_74S373::install(Socket& socket) {
         if (async_d_) declare_async_input(p); else declare_input(p);
     }
     declare_input(le_); declare_input(oe_);
-    for (int i = 0; i < 8; ++i) { declare_input(Pin{q_.base + i}); declare_output(Pin{q_.base + i}); }
+    for (int i = 0; i < 8; ++i) declare_output(Pin{q_.base + i});
 
     // Q outputs are only driven when ~OE=Low.
     // When ~OE=High, outputs are tri-stated (HiZ) -- no DAG dependency.

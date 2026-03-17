@@ -14,7 +14,7 @@
 #include <vector>
 #include <spdlog/spdlog.h>
 
-// #define WAVE_DEBUGS
+#define WAVE_DEBUGS
 
 namespace bench {
 

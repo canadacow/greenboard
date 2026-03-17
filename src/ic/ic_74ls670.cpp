@@ -49,7 +49,7 @@ void IC_74LS670::install(Socket& socket) {
         for (auto& p : pin_d_) declare_async_input(p);
     else
         for (auto& p : pin_d_) declare_input(p);
-    for (auto& p : pin_q_) { declare_input(p); declare_output(p); }
+    for (auto& p : pin_q_) declare_output(p);
     declare_input(pin_ra_); declare_input(pin_rb_);
     declare_input(pin_wa_); declare_input(pin_wb_);
     declare_input(pin_re_); declare_input(pin_we_);

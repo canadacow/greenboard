@@ -1,4 +1,5 @@
 #include "ic/ic_74ls02.h"
+#include <spdlog/spdlog.h>
 
 namespace bench {
 
@@ -62,9 +63,13 @@ void IC_74LS02::on_signal_change(Fiber /*caller*/) {
 }
 
 void IC_74LS02::update_outputs() {
-    for (auto& g : gates_) {
+    for (int i = 0; i < 4; ++i) {
+        auto& g = gates_[i];
         bool any = g.a.level() == Level::High || g.b.level() == Level::High;
-        g.y.drive(any ? Level::Low : Level::High);
+        Level out = any ? Level::Low : Level::High;
+        spdlog::trace("[{}] gate{}: A={} B={} -> Y={}", name(), i+1,
+                      int(g.a.level()), int(g.b.level()), int(out));
+        g.y.drive(out);
     }
 }
 

@@ -69,17 +69,22 @@ void IC_74S158::on_signal_change(Fiber /*caller*/) {
 void IC_74S158::update_outputs() {
     // ~STROBE High -> all outputs High (disabled)
     if (pin_strobe_.level() == Level::High) {
+        spdlog::trace("[{}] ~STROBE=High, all Y=High", name());
         for (auto& m : muxes_)
             m.y.drive(Level::High);
         return;
     }
 
     bool sel = pin_select_.level() == Level::High;
-    for (auto& m : muxes_) {
+    uint8_t out = 0;
+    for (int i = 0; i < 4; ++i) {
+        auto& m = muxes_[i];
         Level chosen = sel ? m.i1.level() : m.i0.level();
-        // Inverted output: Y = ~(selected input)
-        m.y.drive(chosen == Level::High ? Level::Low : Level::High);
+        Level y = chosen == Level::High ? Level::Low : Level::High;
+        m.y.drive(y);
+        if (y == Level::High) out |= (1 << i);
     }
+    spdlog::trace("[{}] sel={} out=0x{:X}", name(), sel, out);
 }
 
 } // namespace bench

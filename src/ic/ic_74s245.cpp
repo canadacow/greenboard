@@ -55,6 +55,7 @@ void IC_74S245::install(Socket& socket) {
 
 void IC_74S245::on_signal_change(Fiber /*caller*/) {
     if (g_.level() != Level::Low) {
+        spdlog::trace("[{}] ~G={} -> disabled, releasing", name(), int(g_.level()));
         release_outputs();
         return;
     }
@@ -64,13 +65,21 @@ void IC_74S245::on_signal_change(Fiber /*caller*/) {
 void IC_74S245::update_outputs() {
     if (dir_.level() == Level::High) {
         // A -> B: drive B from A
-        for (int i = 0; i < 8; ++i)
+        uint8_t val = 0;
+        for (int i = 0; i < 8; ++i) {
             b_[i].drive(a_[i].level());
+            if (a_[i].level() == Level::High) val |= (1 << i);
+        }
+        spdlog::trace("[{}] A->B: 0x{:02X} (~G={} DIR={})", name(), val, int(g_.level()), int(dir_.level()));
         driving_ = Driving::B;
     } else {
         // B -> A: drive A from B
-        for (int i = 0; i < 8; ++i)
+        uint8_t val = 0;
+        for (int i = 0; i < 8; ++i) {
             a_[i].drive(b_[i].level());
+            if (b_[i].level() == Level::High) val |= (1 << i);
+        }
+        spdlog::trace("[{}] B->A: 0x{:02X} (~G={} DIR={})", name(), val, int(g_.level()), int(dir_.level()));
         driving_ = Driving::A;
     }
 }

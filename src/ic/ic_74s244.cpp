@@ -39,8 +39,8 @@ void IC_74S244::install(Socket& socket) {
     // Pin directions
     declare_input(pin_g1_);
     declare_input(pin_g2_);
-    for (auto& b : grp1_) { declare_input(b.a); declare_input(b.y); declare_output(b.y); }
-    for (auto& b : grp2_) { declare_input(b.a); declare_input(b.y); declare_output(b.y); }
+    for (auto& b : grp1_) { declare_input(b.a); declare_output(b.y); }
+    for (auto& b : grp2_) { declare_input(b.a); declare_output(b.y); }
 
     // Outputs are tri-stated when ~G is High -- no DAG dependency.
     declare_bidir_block({grp1_[0].y, grp1_[1].y, grp1_[2].y, grp1_[3].y},
@@ -68,6 +68,7 @@ void IC_74S244::update_outputs() {
     bool g1_en = pin_g1_.level() == Level::Low;
     bool g2_en = pin_g2_.level() == Level::Low;
 
+    spdlog::trace("[{}] ~1G={} ~2G={}", name(), int(pin_g1_.level()), int(pin_g2_.level()));
     for (auto& b : grp1_) {
         if (g1_en)
             b.y.drive(b.a.level() == Level::High ? Level::High : Level::Low);

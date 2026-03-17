@@ -108,6 +108,7 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         for (int i = 0; i < 4; ++i) {
             if (banks_[i].ras.level() == Level::Low && banks_[i].ras_prev != Level::Low) {
                 b = i;
+                spdlog::trace("[DRAM] ~RAS{} falling edge", i);
                 break;
             }
         }
@@ -154,6 +155,8 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         } else {
             // Read: drive DOUT pins from RAM
             uint8_t data = ram_[addr];
+            spdlog::trace("[DRAM] READ bank{} row=0x{:02X} col=0x{:02X} addr=0x{:05X} data=0x{:02X}",
+                          b, bank.row_addr, col_addr, addr, data);
             for (int i = 0; i < 8; ++i) {
                 bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
             }

@@ -64,6 +64,7 @@ DMA can be re-enabled for testing DMA transfers (e.g. floppy, ISA DMA devices).
 ## Non-IC Components
 
 - J1-J5: ISA slots (62p each, wired in test bench -- direct to XA/D/cmd, no buffer ICs)
+  - J1: ISA_TestCard (generic I/O 0x80-0xFF, test IRQ trigger 0xF0/0xF1)
 - J6: Cassette port, J7: Keyboard port, J8: +RUN jumper
 - SW1, SW2: DIP switch banks (config: RAM size, display, FPU)
 
@@ -71,4 +72,4 @@ DMA can be re-enabled for testing DMA transfers (e.g. floppy, ISA DMA devices).
 
 Half-cycle evaluation has been removed -- the scheduler evaluates all components once per full CLK cycle.
 The 8288 drops ALE and asserts command strobes (~MEMR/~MEMW/~IOR/~IOW/~INTA) and ~DEN at the T1->T2 transition.
-BusGlue reads latched address (XA) and drives/reads data based on T-state progression.
+ISA_TestCard in J1 decodes ports 0x80-0xFF and drives/reads SD0-7 on ~IOR/~IOW edges.
