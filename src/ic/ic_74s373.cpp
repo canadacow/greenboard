@@ -76,6 +76,28 @@ void IC_74S373::on_signal_change(Fiber /*caller*/) {
     // Transparent mode: Q tracks D continuously.
     if (le == Level::High) {
         d_.read(latch_);
+        spdlog::trace("[{}] LE=High (transparent) D={:02X} d.base={} q.base={}", name(),
+                      uint8_t((int(latch_[7])&1)<<7 | (int(latch_[6])&1)<<6 |
+                              (int(latch_[5])&1)<<5 | (int(latch_[4])&1)<<4 |
+                              (int(latch_[3])&1)<<3 | (int(latch_[2])&1)<<2 |
+                              (int(latch_[1])&1)<<1 | (int(latch_[0])&1)),
+                      d_.base, q_.base);
+        spdlog::trace("[{}]   D raw: {}={} {}={} {}={} {}={} {}={} {}={} {}={} {}={}",
+                      name(),
+                      d_.base+0, int(SignalPool::levels[d_.base+0]),
+                      d_.base+1, int(SignalPool::levels[d_.base+1]),
+                      d_.base+2, int(SignalPool::levels[d_.base+2]),
+                      d_.base+3, int(SignalPool::levels[d_.base+3]),
+                      d_.base+4, int(SignalPool::levels[d_.base+4]),
+                      d_.base+5, int(SignalPool::levels[d_.base+5]),
+                      d_.base+6, int(SignalPool::levels[d_.base+6]),
+                      d_.base+7, int(SignalPool::levels[d_.base+7]));
+    } else {
+        spdlog::trace("[{}] LE=Low (latched) Q={:02X}", name(),
+                      uint8_t((int(latch_[7])&1)<<7 | (int(latch_[6])&1)<<6 |
+                              (int(latch_[5])&1)<<5 | (int(latch_[4])&1)<<4 |
+                              (int(latch_[3])&1)<<3 | (int(latch_[2])&1)<<2 |
+                              (int(latch_[1])&1)<<1 | (int(latch_[0])&1)));
     }
 
     update_outputs();

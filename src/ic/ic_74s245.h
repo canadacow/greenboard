@@ -31,7 +31,10 @@ namespace bench {
 // Threading: InlineComponent -- combinational, no thread.
 class IC_74S245 : public CallbackComponent {
 public:
-    IC_74S245();
+    /// @param async_controls  When true, ~G and DIR are async inputs
+    ///   (breaks DAG cycles for ISA bus buffers U13, U14).
+    ///   CPU-local buffers (U8, U12) must use false for proper ordering.
+    explicit IC_74S245(bool async_controls = false);
 
     void install(Socket& socket);
 
@@ -50,6 +53,7 @@ private:
     enum class Driving { None, A, B } driving_ = Driving::None;
     Pin g_;    // Pin  1: ~G (enable)
     Pin dir_;  // Pin 19: DIR
+    bool async_controls_ = false;
 };
 
 } // namespace bench

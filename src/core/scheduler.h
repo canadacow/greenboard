@@ -168,7 +168,7 @@ public:
     // For N bidir blocks across all components, builds 2^N DAGs. At runtime,
     // evaluate_no_wake() checks each block's lambda to select the correct plan.
     void dump_unified_waves() {
-        // Collect ALL evaluable components (fibers included for DAG, excluded from exec).
+        // Collect ALL evaluable components (fibers + callbacks both participate in DAG and exec).
         std::vector<Component*> evals;
         for (auto* fc : fibers_)    evals.push_back(fc);
         for (auto* cc : callbacks_) evals.push_back(cc);

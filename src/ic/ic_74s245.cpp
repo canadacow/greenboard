@@ -3,7 +3,8 @@
 
 namespace bench {
 
-IC_74S245::IC_74S245() : CallbackComponent("74S245") { set_description("Bus Transceiver"); }
+IC_74S245::IC_74S245(bool async_controls)
+    : CallbackComponent("74S245"), async_controls_(async_controls) { set_description("Bus Transceiver"); }
 
 void IC_74S245::on_power_on() {
     driving_ = Driving::None;
@@ -34,9 +35,14 @@ void IC_74S245::install(Socket& socket) {
     Signal* vcc = socket.pin_signal(20);
     if (vcc) vcc->connect(this);
 
-    // ~G and DIR feed the bidir lambda (sampled at permutation time, not
-    // during wave execution), so they are async -- no DAG dependency.
-    declare_async_input(g_); declare_async_input(dir_);
+    // ~G and DIR feed the bidir lambda (sampled at permutation time).
+    // Async mode breaks DAG cycles for ISA bus buffers (U13, U14).
+    // CPU-local buffers (U8, U12) need sync for proper ordering.
+    if (async_controls_) {
+        declare_async_input(g_); declare_async_input(dir_);
+    } else {
+        declare_input(g_); declare_input(dir_);
+    }
     for (int i = 0; i < 8; ++i) { declare_input(a_[i]); declare_output(a_[i]); }
     for (int i = 0; i < 8; ++i) { declare_input(b_[i]); declare_output(b_[i]); }
 
@@ -74,7 +80,7 @@ void IC_74S245::update_outputs() {
             b_[i].drive(a_[i].level());
             if (a_[i].level() == Level::High) val |= (1 << i);
         }
-        spdlog::trace("[{}] A->B: 0x{:02X} (~G={} DIR={})", name(), val, int(g_.level()), int(dir_.level()));
+        spdlog::trace("[{}] A->B: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
         driving_ = Driving::B;
     } else {
         // B -> A: drive A from B
@@ -83,7 +89,7 @@ void IC_74S245::update_outputs() {
             a_[i].drive(b_[i].level());
             if (b_[i].level() == Level::High) val |= (1 << i);
         }
-        spdlog::trace("[{}] B->A: 0x{:02X} (~G={} DIR={})", name(), val, int(g_.level()), int(dir_.level()));
+        spdlog::trace("[{}] B->A: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
         driving_ = Driving::A;
     }
 }

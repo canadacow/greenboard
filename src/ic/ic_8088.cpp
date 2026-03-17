@@ -172,6 +172,9 @@ void IC_8088::drive_address(uint32_t address) {
         pin_ad_[i].drive((address >> i) & 1 ? Level::High : Level::Low);
     for (int i = 0; i < 12; ++i)
         pin_a_upper_[i].drive((address >> (i + 8)) & 1 ? Level::High : Level::Low);
+    spdlog::trace("[8088] drive_address 0x{:05X} AD=0x{:02X} A8-15=0x{:02X} A16-19=0x{:01X} ad[0].idx={} a[0].idx={} a[7].idx={} a[11].idx={}",
+                  address, address & 0xFF, (address >> 8) & 0xFF, (address >> 16) & 0xF,
+                  pin_ad_[0].idx, pin_a_upper_[0].idx, pin_a_upper_[7].idx, pin_a_upper_[11].idx);
 }
 
 void IC_8088::drive_data(uint8_t value) {
@@ -186,6 +189,7 @@ uint8_t IC_8088::read_data() {
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i].level() == Level::High)
             val |= (1 << i);
+    spdlog::trace("[8088] read_data 0x{:02X}", val);
     return val;
 }
 

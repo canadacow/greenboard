@@ -482,7 +482,7 @@ struct TestBoard {
         xcvr13_socket.wire(18, xd0);             // B1 = XD0
         xcvr13_socket.wire(19, n_000290);        // DIR = N-000290 (U27 gate 1)
         xcvr13_socket.wire(20, vcc);
-        xcvr13_ic = xcvr13_socket.emplace<IC_74S245>();
+        xcvr13_ic = xcvr13_socket.emplace<IC_74S245>(true);
 
         // U14: 74S245 Command Strobe Transceiver
         // BRD: pin 1=~DMA_AEN (DIR on real chip), pin 19=GND (~OE on real chip).
@@ -502,7 +502,7 @@ struct TestBoard {
         xcvr14_socket.wire(18, xior);            // B1 = ~XIOR
         xcvr14_socket.wire(19, dma_aen_bar);     // DIR = ~DMA_AEN
         xcvr14_socket.wire(20, vcc);
-        xcvr14_ic = xcvr14_socket.emplace<IC_74S245>();
+        xcvr14_ic = xcvr14_socket.emplace<IC_74S245>(true);
 
         // U10: 74S373 Address Latch (low byte: AD0-AD7 -> XA0-XA7)
         // BRD: pin 1 (~OE) = AEN_BRD.  During normal CPU ops AEN_BRD is Low

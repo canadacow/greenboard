@@ -6,11 +6,11 @@ Emulate the motherboard at the **interconnect level**. ICs are behaviorally emul
 
 ## Execution Model: Fibers + One Thread
 
-The simulation runs on a single OS thread. The 8284A clock generator owns that thread (via `std::jthread`) and acts as the crystal oscillator -- its spin loop IS the clock. All other ICs run as **Windows Fibers** on the 8284A's thread, cooperatively scheduled by the `Scheduler`.
+The simulation runs on a single OS thread. The 8284A clock generator owns that thread (via `std::jthread`) and acts as the crystal oscillator -- its spin loop IS the clock. All other ICs are evaluated on the 8284A's thread, cooperatively scheduled by the `Scheduler`. Most ICs are **CallbackComponents** (direct function calls). The 8088 CPU is the sole **FiberComponent** (resumed via context switch each cycle).
 
 - The 8284A drives PCLK/READY/RESET each cycle, then calls `scheduler->evaluate(self)`.
 - `evaluate()` resolves the current DAG permutation (based on bidirectional pin state), then calls `on_signal_change()` on each component in topological wave order.
-- FiberComponents are resumed via context switch; CallbackComponents are invoked directly.
+- Both FiberComponents and CallbackComponents participate in the same DAG wave plan. CallbackComponents are invoked via direct function call; FiberComponents (8088) are resumed via fiber context switch. Both go through `on_signal_change()` in wave order.
 - Completely deterministic, single-threaded, zero synchronization overhead.
 
 ### Fiber Abstraction (`src/host_platform/fiber.h`)
@@ -116,7 +116,7 @@ All motherboard wiring is sourced at runtime from the KiCad legacy BRD file (`as
 ## Signal/Wire Abstraction
 
 Implemented in `src/core/signal.h`:
-- `Signal` class: named wire with tri-state logic (Low, High, Hi-Z). `connect(Component*)` adds the component to the signal's subscriber list.
+- `Signal` class: named wire with tri-state logic (Low, High, Hi-Z). `connect(Component*)` registers the component for pin declaration tracking (used by the DAG solver, not for push notification).
 - `Bus` class: bundle of N signal lines (e.g., address bus = 20 signals).
 - `Pin` struct: lightweight index-based handle into the SignalPool. `drive()`/`level()` use static array base + index.
 - `PinBlock<N>` struct: contiguous block of N pool slots for bulk read/write via memcpy.

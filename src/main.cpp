@@ -62,8 +62,8 @@ int main() {
     mb.u10.emplace<bench::IC_74S373>();
     mb.u8.emplace<bench::IC_74S245>();
     mb.u12.emplace<bench::IC_74S245>();
-    mb.u13.emplace<bench::IC_74S245>();
-    mb.u14.emplace<bench::IC_74S245>();
+    mb.u13.emplace<bench::IC_74S245>(true);
+    mb.u14.emplace<bench::IC_74S245>(true);
     mb.u15.emplace<bench::IC_74S244>();
     mb.u16.emplace<bench::IC_74S244>();
     mb.u17.emplace<bench::IC_74S244>();
