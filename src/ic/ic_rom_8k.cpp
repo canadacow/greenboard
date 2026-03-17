@@ -45,8 +45,9 @@ void IC_ROM_8K::install(Socket& socket) {
 
     // Pin directions for wiring visualization.
     for (int i = 0; i < 13; ++i) declare_input(pin_a_[i]);
-    declare_input(pin_cs_);
-    for (int i = 0; i < 8; ++i) declare_output(pin_d_[i]);
+    // ~CS feeds bidir lambda (sampled at permutation time), async.
+    declare_async_input(pin_cs_);
+    for (int i = 0; i < 8; ++i) { declare_input(pin_d_[i]); declare_output(pin_d_[i]); }
 
     // Data outputs are tri-stated when ~CS is High -- no DAG dependency.
     declare_bidir_block({pin_d_[0], pin_d_[1], pin_d_[2], pin_d_[3],

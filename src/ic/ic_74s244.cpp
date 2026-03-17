@@ -36,13 +36,13 @@ void IC_74S244::install(Socket& socket) {
     Signal* vcc = socket.pin_signal(20);
     if (vcc) vcc->connect(this);
 
-    // Pin directions
-    declare_input(pin_g1_);
-    declare_input(pin_g2_);
-    for (auto& b : grp1_) { declare_input(b.a); declare_output(b.y); }
-    for (auto& b : grp2_) { declare_input(b.a); declare_output(b.y); }
+    // ~G1 and ~G2 feed bidir lambdas (sampled at permutation time), async.
+    declare_async_input(pin_g1_);
+    declare_async_input(pin_g2_);
+    for (auto& b : grp1_) { declare_input(b.a); declare_input(b.y); declare_output(b.y); }
+    for (auto& b : grp2_) { declare_input(b.a); declare_input(b.y); declare_output(b.y); }
 
-    // Outputs are tri-stated when ~G is High -- no DAG dependency.
+    // Outputs are tri-stated when ~G is High
     declare_bidir_block({grp1_[0].y, grp1_[1].y, grp1_[2].y, grp1_[3].y},
                         BidirDir::HiZ | BidirDir::Output,
                         [this]() { return pin_g1_.level() == Level::Low ? BidirDir::Output : BidirDir::HiZ; });

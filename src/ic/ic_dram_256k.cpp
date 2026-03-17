@@ -71,7 +71,11 @@ void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank
     declare_bidir_block(
         std::initializer_list<Pin>(md_pins.data(), md_pins.data() + md_pins.size()),
         BidirDir::Input | BidirDir::Output,
-        [this]() { return pin_we_.level() == Level::Low ? BidirDir::Input : BidirDir::Output; });
+        [this]() {
+            auto wv = pin_we_.level();
+            spdlog::trace("[DRAM] bidir lambda: ~WE={}", int(wv));
+            return wv == Level::Low ? BidirDir::Input : BidirDir::Output;
+        });
 }
 
 void IC_DRAM_256K::on_power_on() {

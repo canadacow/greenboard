@@ -34,8 +34,9 @@ void IC_74S245::install(Socket& socket) {
     Signal* vcc = socket.pin_signal(20);
     if (vcc) vcc->connect(this);
 
-    // Pin directions for wiring visualization.
-    declare_input(g_); declare_input(dir_);
+    // ~G and DIR feed the bidir lambda (sampled at permutation time, not
+    // during wave execution), so they are async -- no DAG dependency.
+    declare_async_input(g_); declare_async_input(dir_);
     for (int i = 0; i < 8; ++i) { declare_input(a_[i]); declare_output(a_[i]); }
     for (int i = 0; i < 8; ++i) { declare_input(b_[i]); declare_output(b_[i]); }
 
@@ -48,8 +49,11 @@ void IC_74S245::install(Socket& socket) {
         {b_[0], b_[1], b_[2], b_[3], b_[4], b_[5], b_[6], b_[7]},   // in_pins  (B drives when DIR=High)
         BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
         [this]() -> BidirDir {
-            if (g_.level() != Level::Low) return BidirDir::HiZ;
-            return dir_.level() == Level::Low ? BidirDir::Output : BidirDir::Input;
+            auto gv = g_.level();
+            auto dv = dir_.level();
+            spdlog::trace("[{}] bidir lambda: ~G={} DIR={}", name(), int(gv), int(dv));
+            if (gv != Level::Low) return BidirDir::HiZ;
+            return dv == Level::Low ? BidirDir::Output : BidirDir::Input;
         });
 }
 

@@ -4,6 +4,7 @@
 #include "core/fiber_component.h"
 #include <array>
 #include <cassert>
+#include <cinttypes>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -185,44 +186,6 @@ public:
 
         const int num_bidir = static_cast<int>(bidir_refs_.size());
 
-        // BidirDir bit flags: HiZ=1, Input=2, Output=4.
-        // Each block's state occupies one base-3 digit in the permutation index,
-        // mapping: digit 0 -> HiZ, digit 1 -> Input, digit 2 -> Output.
-        // Total index space is 3^N, but we only build plans for valid
-        // combinations (each block's digit must be in its `possible` mask).
-        using BidirDir = Component::BidirDir;
-        static constexpr BidirDir digit_to_dir[3] = {
-            BidirDir::HiZ, BidirDir::Input, BidirDir::Output
-        };
-
-        int num_slots = 1;  // 3^N index space
-        for (int i = 0; i < num_bidir; ++i) num_slots *= 3;
-
-        auto perm_dir = [](int perm, int b) -> BidirDir {
-            for (int i = 0; i < b; ++i) perm /= 3;
-            return digit_to_dir[perm % 3];
-        };
-
-        // Check if a permutation is valid (all blocks in their possible set).
-        auto perm_valid = [&](int perm) -> bool {
-            for (int b = 0; b < num_bidir; ++b)
-                if (!(bidir_refs_[b].block->possible & perm_dir(perm, b)))
-                    return false;
-            return true;
-        };
-
-        int num_valid = 0;
-        for (int p = 0; p < num_slots; ++p)
-            if (perm_valid(p)) ++num_valid;
-
-        #if defined(WAKE_DEBUGS)
-        spdlog::info("[Scheduler] {} bidir blocks -> {} valid permutations (of {} slots)",
-                     num_bidir, num_valid, num_slots);
-        for (int i = 0; i < num_bidir; ++i)
-            spdlog::info("[Scheduler]   block {}: {} (possible=0x{:x})", i,
-                         bidir_refs_[i].comp->name(), uint8_t(bidir_refs_[i].block->possible));
-        #endif
-
         // Which component index owns each bidir block?
         bidir_comp_idx_.resize(num_bidir);
         for (int b = 0; b < num_bidir; ++b) {
@@ -268,7 +231,7 @@ public:
         static constexpr BidirDir digit_to_dir[3] = {
             BidirDir::HiZ, BidirDir::Input, BidirDir::Output
         };
-        auto perm_dir = [](int perm, int b) -> BidirDir {
+        auto perm_dir = [](uint64_t perm, int b) -> BidirDir {
             for (int i = 0; i < b; ++i) perm /= 3;
             return digit_to_dir[perm % 3];
         };
@@ -282,7 +245,7 @@ public:
         };
 
         // Build a bidir label string for a permutation.
-        auto perm_label = [&](int perm) -> std::string {
+        auto perm_label = [&](uint64_t perm) -> std::string {
             std::string s;
             for (int b = 0; b < static_cast<int>(bidir_refs_.size()); ++b) {
                 if (!s.empty()) s += ", ";
@@ -404,10 +367,10 @@ public:
                     switch (dir) {
                         case BidirDir::Output:
                             eff_out[ci][w2] |= om;  eff_in[ci][w2] &= ~om;
-                            eff_out[ci][w2] &= ~im;
+                            eff_out[ci][w2] &= ~im; eff_in[ci][w2] |= im;
                             break;
                         case BidirDir::Input:
-                            eff_out[ci][w2] &= ~om;
+                            eff_out[ci][w2] &= ~om; eff_in[ci][w2] |= om;
                             eff_out[ci][w2] |= im;  eff_in[ci][w2] &= ~im;
                             break;
                         case BidirDir::HiZ:
@@ -482,7 +445,7 @@ public:
 
             // Title: perm number on first line, bidir states wrapped on second.
             std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"title\" text-anchor=\"middle\">"
-                            "perm %d</text>\n", svg_w / 2, PAD + 4, perm);
+                            "perm %" PRIu64 "</text>\n", svg_w / 2, PAD + 4, perm);
             std::string plabel = perm_label(perm);
             std::fprintf(f, "<text x=\"%d\" y=\"%d\" text-anchor=\"middle\" "
                             "font-size=\"9\" font-family=\"Consolas\" fill=\"#555\">%s</text>\n",
@@ -605,8 +568,8 @@ public:
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::end_component();
 #endif
-        static constexpr int dir_to_digit[] = {-1, 0, 1, -1, 2};  // indexed by uint8_t(BidirDir)
-        int perm = 0, mul = 1;
+        static constexpr uint64_t dir_to_digit[] = {0, 0, 1, 0, 2};  // indexed by uint8_t(BidirDir)
+        uint64_t perm = 0, mul = 1;
         for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
             perm += dir_to_digit[uint8_t(bidir_refs_[i].block->direction())] * mul;
             mul *= 3;
@@ -614,10 +577,10 @@ public:
 
         // Fold group active/inactive state into permutation key.
         // Group bits sit above the bidir base-3 digits.
-        int group_bits = 0;
+        uint64_t group_bits = 0;
         for (int g = 0; g < MAX_GROUPS; ++g)
             if (groups_[g].is_active())
-                group_bits |= (1 << g);
+                group_bits |= (uint64_t(1) << g);
         perm += group_bits * mul;
 
         auto it = wave_plans_.find(perm);
@@ -655,7 +618,7 @@ private:
     struct WavePlan {
         std::vector<std::vector<Component*>> waves;
     };
-    std::unordered_map<int, WavePlan> wave_plans_;
+    std::unordered_map<uint64_t, WavePlan> wave_plans_;
 
     // Bidir block references for runtime DAG selection.
     struct BidirRef {
@@ -666,21 +629,21 @@ private:
     std::vector<Component*> evals_;
     std::vector<int> bidir_comp_idx_;
 
-    WavePlan solve_perm(int perm) {
+    WavePlan solve_perm(uint64_t perm) {
         constexpr int W = Component::SLOT_WORDS;
         using BidirDir = Component::BidirDir;
         static constexpr BidirDir digit_to_dir[3] = {
             BidirDir::HiZ, BidirDir::Input, BidirDir::Output
         };
-        auto perm_dir = [](int p, int b) -> BidirDir {
+        auto perm_dir = [](uint64_t p, int b) -> BidirDir {
             for (int i = 0; i < b; ++i) p /= 3;
             return digit_to_dir[p % 3];
         };
 
         // Extract group bits from the top of the permutation key.
-        int bidir_space = 1;
+        uint64_t bidir_space = 1;
         for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) bidir_space *= 3;
-        int group_bits = (bidir_space > 0) ? perm / bidir_space : 0;
+        uint64_t group_bits = (bidir_space > 0) ? perm / bidir_space : 0;
 
         // Filter out components belonging to inactive groups.
         std::vector<Component*> active_evals;
@@ -713,16 +676,20 @@ private:
             int ci = bidir_active_idx[b];
             if (ci < 0) continue;  // bidir block's component excluded
             BidirDir dir = perm_dir(perm, b);
+            spdlog::info("[Scheduler] perm {} bidir[{}] comp={} dir={} ci={}",
+                         perm, b, bidir_refs_[b].comp->name(), int(dir), ci);
             for (int w = 0; w < W; ++w) {
                 uint64_t om = bidir_refs_[b].block->out_mask[w];
                 uint64_t im = bidir_refs_[b].block->in_mask[w];
+                if (om || im)
+                    spdlog::info("[Scheduler]   w={} om=0x{:016X} im=0x{:016X}", w, om, im);
                 switch (dir) {
                     case BidirDir::Output:
                         eff_out[ci][w] |= om;  eff_in[ci][w] &= ~om;
-                        eff_out[ci][w] &= ~im;
+                        eff_out[ci][w] &= ~im; eff_in[ci][w] |= im;
                         break;
                     case BidirDir::Input:
-                        eff_out[ci][w] &= ~om;
+                        eff_out[ci][w] &= ~om; eff_in[ci][w] |= om;
                         eff_out[ci][w] |= im;  eff_in[ci][w] &= ~im;
                         break;
                     case BidirDir::HiZ:
