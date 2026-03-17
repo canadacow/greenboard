@@ -106,4 +106,26 @@ void IC_74S245::release_outputs() {
     driving_ = Driving::None;
 }
 
+void IC_74S245::transfer(bool a_to_b) {
+    if (a_to_b) {
+        // A -> B: drive B from A
+        uint8_t val = 0;
+        for (int i = 0; i < 8; ++i) {
+            b_[i].drive(a_[i].level());
+            if (a_[i].level() == Level::High) val |= (1 << i);
+        }
+        spdlog::trace("[{}] transfer A->B: 0x{:02X}", name(), val);
+        driving_ = Driving::B;
+    } else {
+        // B -> A: drive A from B
+        uint8_t val = 0;
+        for (int i = 0; i < 8; ++i) {
+            a_[i].drive(b_[i].level());
+            if (b_[i].level() == Level::High) val |= (1 << i);
+        }
+        spdlog::trace("[{}] transfer B->A: 0x{:02X}", name(), val);
+        driving_ = Driving::A;
+    }
+}
+
 } // namespace bench

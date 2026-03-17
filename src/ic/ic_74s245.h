@@ -39,6 +39,13 @@ public:
     // transceiver's timing into its own wave, e.g. 8288 folding U8).
     void evaluate_now() { on_signal_change(nullptr); }
 
+    // Force a transfer in a specific direction, bypassing the DIR pin.
+    // Used when the DIR pin hasn't propagated yet (e.g. U13's DIR comes
+    // from U27 in wave 7, but the 8288 nudges U13 from wave 2).
+    //   a_to_b=true  -> drive B from A (write direction)
+    //   a_to_b=false -> drive A from B (read direction)
+    void transfer(bool a_to_b);
+
 protected:
     void on_power_on() override;
     void on_signal_change(Fiber caller) override;

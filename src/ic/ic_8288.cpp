@@ -94,8 +94,21 @@ void IC_8288::set_xcvr(IC_74S245* u8, IC_74S245* u13) {
 }
 
 void IC_8288::nudge_xcvr() {
-    if (xcvr_) xcvr_->evaluate_now();
-    if (xcvr_x_) xcvr_x_->evaluate_now();
+    // The 8288 knows the bus direction from DT/~R which it just drove.
+    // U8's DIR pin IS DT/~R, so evaluate_now() works fine for U8.
+    // U13's DIR pin comes from U27 (wave 7) which hasn't run yet, so we
+    // use transfer() to force the correct direction based on our knowledge.
+    //
+    // Order matters: for writes (DT/~R=High) data flows AD->U8->D->U13->XD.
+    // For reads (DT/~R=Low) data flows XD->U13->D->U8->AD.
+    bool is_write = (pin_dtr_.level() == Level::High);
+    if (is_write) {
+        if (xcvr_) xcvr_->evaluate_now();       // U8: AD->D (DIR=High, A->B)
+        if (xcvr_x_) xcvr_x_->transfer(true);   // U13: D->XD (A->B)
+    } else {
+        if (xcvr_x_) xcvr_x_->transfer(false);  // U13: XD->D (B->A)
+        if (xcvr_) xcvr_->evaluate_now();        // U8: D->AD (DIR=Low, B->A)
+    }
 }
 
 void IC_8288::release_command() {
@@ -174,8 +187,10 @@ void IC_8288::on_clk_rising() {
         }
 
         case State::T2:
-            // T3: Commands stay active. Nothing changes.
+            // T3: Commands stay active. Re-nudge transceivers so reads
+            // pick up data that peripherals drove onto XD in the previous eval.
             state_ = State::T3;
+            nudge_xcvr();
             spdlog::trace("[{}] T2->T3 cycle={}", name(), cyc_name(cycle_));
             break;
 

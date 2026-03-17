@@ -65,13 +65,19 @@ void IC_74LS02::on_signal_change(Fiber /*caller*/) {
 }
 
 void IC_74LS02::update_outputs() {
-    for (int i = 0; i < 4; ++i) {
-        auto& g = gates_[i];
-        bool any = g.a.level() == Level::High || g.b.level() == Level::High;
-        Level out = any ? Level::Low : Level::High;
-        spdlog::trace("[{}] gate{}: A={} B={} -> Y={}", name(), i+1,
-                      int(g.a.level()), int(g.b.level()), int(out));
-        g.y.drive(out);
+    // Two passes: gate outputs may feed other gates within the same IC
+    // (e.g. U27: gate 4 output -> gate 1 input). First pass settles
+    // inter-gate dependencies, second pass produces final values.
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int i = 0; i < 4; ++i) {
+            auto& g = gates_[i];
+            bool any = g.a.level() == Level::High || g.b.level() == Level::High;
+            Level out = any ? Level::Low : Level::High;
+            if (pass == 1)
+                spdlog::trace("[{}] gate{}: A={} B={} -> Y={}", name(), i+1,
+                              int(g.a.level()), int(g.b.level()), int(out));
+            g.y.drive(out);
+        }
     }
 }
 
