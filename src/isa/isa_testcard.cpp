@@ -142,9 +142,7 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     tc_prev_ = tc_cur;
 
     // --- CPU I/O ---
-    // ~IOW rising edge: CPU write completes -- latch data now.
-    // IOW falls at T2, data propagates through xcvrs at T3, IOW rises at T4.
-    // Sample at the rising edge to guarantee data is valid on the bus.
+    // No idea what the fuck the AI was doing.
     if (iow_.level() == Level::Low) {
         uint16_t port = static_cast<uint16_t>(read_address());
         uint8_t val = read_sd();

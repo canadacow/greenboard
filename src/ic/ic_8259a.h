@@ -100,6 +100,7 @@ private:
     Level cs_prev_ = Level::HiZ;
     Level rd_prev_ = Level::HiZ;
     Level inta_prev_ = Level::HiZ;
+    bool write_latched_ = false;
 };
 
 } // namespace bench

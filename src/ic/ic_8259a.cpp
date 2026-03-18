@@ -42,8 +42,22 @@ void IC_8259A::install(Socket& socket) {
     declare_input(cs_); declare_input(wr_); declare_input(rd_);
     declare_input(inta_); declare_input(a0_);
     for (int i = 0; i < 8; ++i) declare_input(ir_[i]);
-    for (int i = 0; i < 8; ++i) { declare_input(d_[i]); declare_output(d_[i]); }
     declare_output(int_);
+
+    // Data bus is bidirectional: Output during bus reads (~RD+~CS) and INTA,
+    // Input during bus writes (~WR+~CS), HiZ otherwise.
+    declare_bidir_block(
+        {d_[0], d_[1], d_[2], d_[3], d_[4], d_[5], d_[6], d_[7]},
+        BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
+        [this]() -> BidirDir {
+            if (rd_.level() == Level::Low && cs_.level() == Level::Low)
+                return BidirDir::Output;
+            if (inta_.level() == Level::Low)
+                return BidirDir::Output;
+            if (wr_.level() == Level::Low && cs_.level() == Level::Low)
+                return BidirDir::Input;
+            return BidirDir::HiZ;
+        });
 }
 
 void IC_8259A::on_power_on() {
@@ -75,12 +89,20 @@ void IC_8259A::on_signal_change(Fiber /*caller*/) {
     Level rd_cur   = rd_.level();
     Level inta_cur = inta_.level();
 
-    // Bus write: ~WR falling while ~CS active
-    if (wr_cur == Level::Low && wr_prev_ != Level::Low && cs_cur == Level::Low)
+    // Bus write: ~WR and ~CS both active, but deferred one eval.
+    // ~WR falls at T2 but data propagates through xcvrs at T3.
+    // Fire on the second eval where both are low (wr_prev_ already Low).
+    spdlog::trace("[{}] sig: ~WR={} ~RD={} ~CS={} wr_prev={} write_latched={}",
+                  name(), int(wr_cur), int(rd_cur), int(cs_cur), int(wr_prev_), write_latched_);
+
+    if (wr_cur == Level::Low && cs_cur == Level::Low &&
+        wr_prev_ == Level::Low && !write_latched_) {
         on_bus_write();
-    // Bus write: ~CS falling while ~WR active
-    if (cs_cur == Level::Low && cs_prev_ != Level::Low && wr_cur == Level::Low)
-        on_bus_write();
+        write_latched_ = true;
+    }
+
+    if (wr_cur != Level::Low || cs_cur != Level::Low)
+        write_latched_ = false;
 
     // Bus read: continuously drive data while ~RD and ~CS both active.
     // Edge-only driving fails when another driver (U8 nudge) overwrites AD
@@ -132,6 +154,8 @@ void IC_8259A::on_signal_change(Fiber /*caller*/) {
 void IC_8259A::on_bus_write() {
     uint8_t data = read_data();
     bool a0 = a0_.level() == Level::High;
+    spdlog::debug("[{}] bus_write: data=0x{:02X} a0={} init={} state={}",
+                  name(), data, a0, initialized_, int(init_state_));
 
     if (!a0 && (data & 0x10)) {
         // ICW1: A0=0, D4=1
@@ -239,10 +263,10 @@ void IC_8259A::on_bus_read() {
     if (!initialized_) return;
     bool a0 = a0_.level() == Level::High;
 
-    if (a0)
-        drive_data(imr_);
-    else
-        drive_data(read_isr_ ? isr_ : irr_);
+    uint8_t val = a0 ? imr_ : (read_isr_ ? isr_ : irr_);
+    spdlog::debug("[{}] bus_read: a0={} val=0x{:02X} imr=0x{:02X} irr=0x{:02X} isr=0x{:02X}",
+                  name(), a0, val, imr_, irr_, isr_);
+    drive_data(val);
 }
 
 void IC_8259A::on_inta_falling() {
