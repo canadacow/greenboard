@@ -67,29 +67,30 @@ void IC_8237A::install(Socket& socket) {
         [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::HiZ; });
 
     // Address pins: input during CPU I/O (register select), output only during
-    // DMA transfer.  Declaring as bidir avoids a DAG cycle (8237A -> XA -> U66
-    // -> ~DMA_CS -> 8237A).  Direction starts as Input since DMA is idle.
-    for (int i = 0; i < 8; ++i) declare_input(pin_a_[i]);
+    // DMA transfer.  No declare_input -- the bidir block handles Input direction.
+    // A separate declare_input would create persistent DAG edges that cause
+    // cycles when the bidir switches to Output during DMA.
     declare_bidir_block({pin_a_[0], pin_a_[1], pin_a_[2], pin_a_[3],
                          pin_a_[4], pin_a_[5], pin_a_[6], pin_a_[7]},
         BidirDir::Input | BidirDir::Output,
         [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::Input; });
 
     // Data bus: output during CPU reads of DMA registers (~CS+~IOR active),
-    // input otherwise.  Bidir avoids cycle through 8237A -> D -> U8/U12 -> D -> 8237A.
+    // or S1 (upper addr on DB).  During DMA S2-S4 the 8237A reads device data
+    // from DB but this is not combinational (data set up in prior phase), so
+    // use HiZ to avoid DAG cycle (U35 -> ~DACK -> device -> XD -> U35).
     declare_bidir_block({pin_db_[0], pin_db_[1], pin_db_[2], pin_db_[3],
                          pin_db_[4], pin_db_[5], pin_db_[6], pin_db_[7]},
-        BidirDir::Input | BidirDir::Output,
+        BidirDir::Input | BidirDir::Output | BidirDir::HiZ,
         [this]() {
-            // Output when: CPU reading DMA regs, or S1 (upper addr on DB)
             if (state_ == State::S1) return BidirDir::Output;
+            if (is_dma_active()) return BidirDir::HiZ;  // async read during DMA
             return (pin_cs_.level() == Level::Low && pin_ior_.level() == Level::Low)
                 ? BidirDir::Output : BidirDir::Input;
         });
 
     // ~MEMR/~MEMW: output during DMA transfers, HiZ otherwise.
-    // HiZ in CPU mode removes false DAG edges U14->U35 via command strobes.
-    declare_input(pin_memr_); declare_input(pin_memw_);
+    // No declare_input -- 8237A never reads these, only drives during DMA.
     declare_bidir_block({pin_memr_, pin_memw_},
         BidirDir::HiZ | BidirDir::Output,
         [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::HiZ; });
