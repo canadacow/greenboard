@@ -57,7 +57,6 @@ void IC_ROM_8K::install(Socket& socket) {
 }
 
 void IC_ROM_8K::on_power_on() {
-    read_pending_ = false;
     driving_ = false;
     update_outputs();
 }
@@ -87,18 +86,15 @@ uint16_t IC_ROM_8K::read_address() const {
 void IC_ROM_8K::update_outputs() {
     bool selected = pin_cs_.level() == Level::Low;
 
-    if (read_pending_) {
+    if (selected && !driving_) {
         uint16_t addr = read_address();
         uint8_t data = rom_[addr & 0x1FFF];
         for (int i = 0; i < 8; ++i) {
             pin_d_[i].drive((data >> i) & 1 ? Level::High : Level::Low);
         }
         spdlog::trace("[{}] ~CS Low, addr=0x{:04X} data=0x{:02X}", name(), addr, data);
-        driving_ = true;
-        read_pending_ = false;
-    } else if (selected && !driving_) {
-        read_pending_ = true;
-    } else if (!selected && driving_) {
+        driving_ = true;        
+    } else if (driving_) {
         for (int i = 0; i < 8; ++i) {
             pin_d_[i].release();
         }

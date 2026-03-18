@@ -51,7 +51,6 @@ private:
     Pin pin_cs_;     // Pin 20: ~CS
     Pin pin_vcc_;    // Pin 24: VCC
     bool    driving_   = false;    // true when outputs are being driven
-    bool    read_pending_ = false;
 };
 
 } // namespace bench
