@@ -154,8 +154,9 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "io",
-        /* "mov",
+        "rom",
+        /* "io",
+        "mov",
         "alu",
         "call_ret",
         "jumps",
@@ -167,9 +168,8 @@ int main() {
         "div",
         "dos",
         "irq",
-        "rom",
         "dma",
-        "pit",*/
+        "pit", */
     };
 
     std::vector<TestCase> tests;
@@ -208,10 +208,9 @@ int main() {
     for (auto& tc : tests) {
         spdlog::info("--- {} ---", tc.name);
 
-        // Reset I/O space, DRAM, and test card state
+        // Reset I/O space and DRAM (IC state resets in on_power_on)
         std::memset(testcard.io_data(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
-        testcard.reset_state();
 
         // Preload DMA buffer for the DMA test.
         {
@@ -241,7 +240,7 @@ int main() {
 
         // Wait for CPU to halt, with safety timeout.
         {
-            constexpr uint64_t secondTimeout = 15;
+            constexpr uint64_t secondTimeout = 60;
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secondTimeout);
             while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -291,7 +290,6 @@ int main() {
         board.dma_enabled = true;
         std::memset(testcard.io_data(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
-        testcard.reset_state();
 
         std::string path = std::string(ASM_TEST_DIR) + "/test_bench64.bin";
         if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) {

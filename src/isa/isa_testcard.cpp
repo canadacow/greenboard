@@ -89,13 +89,15 @@ void ISA_TestCard::install(IsaSlot& slot) {
         });
 }
 
-void ISA_TestCard::reset_state() {
+void ISA_TestCard::on_power_on() {
     ior_prev_ = Level::HiZ;
     iow_prev_ = Level::HiZ;
     dack1_prev_ = Level::HiZ;
     tc_prev_ = Level::HiZ;
     data_driven_ = false;
     read_byte_ = 0;
+    write_pending_ = false;
+    read_pending_ = false;
     dma_ptr_ = 0;
     dma_active_ = false;
 }
@@ -142,39 +144,40 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     tc_prev_ = tc_cur;
 
     // --- CPU I/O ---
-    // No idea what the fuck the AI was doing.
-    if (iow_prev_ == Level::Low) {
+    // Pending system: detect ~IOW/~IOR going low, handle on next call,
+    // so we don't fire twice (once with valid data, once with cleared bus).
+    if (write_pending_) {
         uint16_t port = static_cast<uint16_t>(read_address());
         uint8_t val = read_sd();
-        spdlog::trace("[{}] IOW: port=0x{:04X} val=0x{:02X} my={} sa7={}(idx={}) sa5={}(idx={}) sa0={}(idx={})",
-                      name(), port, val, my_port(port),
-                      int(sa_[7].level()), sa_[7].idx,
-                      int(sa_[5].level()), sa_[5].idx,
-                      int(sa_[0].level()), sa_[0].idx);
+        spdlog::trace("[{}] IOW: port=0x{:04X} val=0x{:02X} my={}",
+                      name(), port, val, my_port(port));
         if (my_port(port)) {
             io_write(port, val);
         }
+        write_pending_ = false;
+    } else if (iow_cur == Level::Low && iow_prev_ != Level::Low) {
+        write_pending_ = true;
     }
     iow_prev_ = iow_cur;
 
-    // ~IOR: level-sensitive data drive (same pattern as PIT).
-    // Drive data while ~IOR is low, release when it goes high.
-    // Skip during DMA (~DACK1 active) -- DMA data drive handled above.
-    if (dack1_cur != Level::Low) {
-        if (ior_cur == Level::Low) {
-            if (!data_driven_) {
-                // First cycle: latch address and look up I/O value.
-                uint16_t port = static_cast<uint16_t>(read_address());
-                if (my_port(port)) {
-                    read_byte_ = io_read(port);
-                    spdlog::trace("[{}] READ port=0x{:04X} -> 0x{:02X}", name(), port, read_byte_);
-                    drive_sd(read_byte_);
-                }
-            } else {
-                // Re-drive same value (bus hold).
+    // Read pending: same pattern -- defer one call so bidir has declared Output.
+    if (read_pending_) {
+        if (dack1_cur != Level::Low) {
+            uint16_t port = static_cast<uint16_t>(read_address());
+            if (my_port(port)) {
+                read_byte_ = io_read(port);
+                spdlog::trace("[{}] READ port=0x{:04X} -> 0x{:02X}", name(), port, read_byte_);
                 drive_sd(read_byte_);
             }
-        } else if (data_driven_) {
+        }
+        read_pending_ = false;
+    } else if (ior_cur == Level::Low && ior_prev_ != Level::Low) {
+        read_pending_ = true;
+    } else if (dack1_cur != Level::Low) {
+        // Re-drive or release based on current ~IOR level.
+        if (ior_cur == Level::Low && data_driven_) {
+            drive_sd(read_byte_);
+        } else if (ior_cur != Level::Low && data_driven_) {
             release_sd();
         }
     }

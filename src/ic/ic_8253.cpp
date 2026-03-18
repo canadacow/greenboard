@@ -5,6 +5,14 @@ namespace bench {
 
 IC_8253::IC_8253() : CallbackComponent("8253") { set_description("PIT"); }
 
+void IC_8253::on_power_on() {
+    for (int i = 0; i < 3; ++i)
+        channels_[i] = Channel{};
+    data_bus_driven_ = false;
+    write_pending_ = false;
+    read_pending_ = false;
+}
+
 void IC_8253::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {
         Signal* s = socket.pin_signal(p);

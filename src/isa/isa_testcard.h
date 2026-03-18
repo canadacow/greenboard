@@ -35,9 +35,8 @@ public:
     static constexpr int DMA_BUF_SIZE = 256;
     uint8_t* dma_buf() { return dma_buf_; }
 
-    void reset_state();
-
 protected:
+    void on_power_on() override;
     void on_signal_change(Fiber caller) override;
 
 private:
@@ -75,6 +74,8 @@ private:
     Level iow_prev_ = Level::HiZ;
     bool data_driven_ = false;
     uint8_t read_byte_ = 0;
+    bool write_pending_ = false;
+    bool read_pending_ = false;
 
     // Bus helpers
     uint32_t read_address();
