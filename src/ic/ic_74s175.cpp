@@ -20,20 +20,23 @@ void IC_74S175::install(Socket& socket) {
     pin_clk_ = connect_pin(9);
     pin_vcc_ = connect_pin(16);
 
+    // D inputs: D0=pin4, D1=pin5, D2=pin12, D3=pin13
     pin_d_[0] = connect_pin(4);
     pin_d_[1] = connect_pin(5);
     pin_d_[2] = connect_pin(12);
-    pin_d_[3] = connect_pin(15);
+    pin_d_[3] = connect_pin(13);
 
+    // Q outputs: Q0=pin2, Q1=pin7, Q2=pin10, Q3=pin15
     pin_q_[0] = pin(2);
     pin_q_[1] = pin(7);
     pin_q_[2] = pin(10);
-    pin_q_[3] = pin(14);
+    pin_q_[3] = pin(15);
 
+    // ~Q outputs: ~Q0=pin3, ~Q1=pin6, ~Q2=pin11, ~Q3=pin14
     pin_nq_[0] = pin(3);
     pin_nq_[1] = pin(6);
     pin_nq_[2] = pin(11);
-    pin_nq_[3] = pin(13);
+    pin_nq_[3] = pin(14);
 
     // Pin directions for DAG ordering.
     // D pins use connect_pin (for signal-change notification) but

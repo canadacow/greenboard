@@ -19,12 +19,12 @@ namespace bench {
 //   Pin  7: 2Q    (output)
 //   Pin  8: GND
 //   Pin  9: CLK   (input, clock -- rising edge triggered)
-//   Pin 10: 3Q    (output)
-//   Pin 11: ~3Q   (output, complement)
-//   Pin 12: 3D    (input)
-//   Pin 13: ~4Q   (output, complement)
-//   Pin 14: 4Q    (output)
-//   Pin 15: 4D    (input)
+//   Pin 10: Q2    (output)
+//   Pin 11: ~Q2   (output, complement)
+//   Pin 12: D2    (input)
+//   Pin 13: D3    (input)
+//   Pin 14: ~Q3   (output, complement)
+//   Pin 15: Q3    (output)
 //   Pin 16: VCC
 //
 // U26 on the 5150:
@@ -54,13 +54,13 @@ private:
     Pin pin_clk_;    // Pin 9: CLK
     Pin pin_vcc_;    // Pin 16: VCC
 
-    // D inputs: 1D=pin4, 2D=pin5, 3D=pin12, 4D=pin15
+    // D inputs: D0=pin4, D1=pin5, D2=pin12, D3=pin13
     Pin pin_d_[4];
 
-    // Q outputs: 1Q=pin2, 2Q=pin7, 3Q=pin10, 4Q=pin14
+    // Q outputs: Q0=pin2, Q1=pin7, Q2=pin10, Q3=pin15
     Pin pin_q_[4];
 
-    // ~Q outputs: ~1Q=pin3, ~2Q=pin6, ~3Q=pin11, ~4Q=pin13
+    // ~Q outputs: ~Q0=pin3, ~Q1=pin6, ~Q2=pin11, ~Q3=pin14
     Pin pin_nq_[4];
 
     // Internal state
