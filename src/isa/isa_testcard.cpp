@@ -126,6 +126,9 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     dack1_prev_ = dack1_cur;
 
     // T/C rising edge: DMA transfer complete. Deassert DRQ1, fire IRQ.
+    if (dma_active_)
+        spdlog::debug("[{}] T/C check: tc_cur={} tc_prev={} dma_active={} tc_.idx={}",
+                      name(), int(tc_cur), int(tc_prev_), dma_active_, tc_.idx);
     if (tc_cur == Level::High && tc_prev_ != Level::High && dma_active_) {
         spdlog::debug("[{}] DMA T/C: transfer complete, {} bytes sent, firing IRQ{}",
                       name(), dma_ptr_, dma_irq_);
