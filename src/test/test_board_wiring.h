@@ -131,6 +131,13 @@ struct TestBoard {
     Signal dack1{"~DACK1"}, dack2{"~DACK2"}, dack3{"~DACK3"};
     Signal eop{"~EOP"};                 // End of process / terminal count
 
+    // DMA address intermediate nets (8237A A4-A7 outputs -> U17 Group 2 inputs)
+    // Separate from la[4]-la[7] because U17 buffers these onto the A bus.
+    Signal dma_a4{"N-000285"};          // 8237A pin 37 -> U17 pin 11
+    Signal dma_a5{"N-000282"};          // 8237A pin 38 -> U17 pin 13
+    Signal dma_a6{"N-000284"};          // 8237A pin 39 -> U17 pin 15
+    Signal dma_a7{"N-000283"};          // 8237A pin 40 -> U17 pin 17
+
     // DMA bus grant handshake signals
     Signal aen_brd{"AEN_BRD"};          // U98 FF1 Q: Low=CPU, High=DMA owns bus
     Signal nclk88{"N-000247"};          // ~CLK88 from U99 inverter 4
@@ -147,12 +154,14 @@ struct TestBoard {
     // ~DMA_AEN: from U50 gate 1 = NOR(N-000246, N-000246) = ~N-000246.
     // Separate signal from ~AEN (U98 ~1Q) -- they track differently during transitions.
     Signal dma_aen_bar{"~DMA_AEN"};
+    Signal dma_wait_bar{"~DMA_WAIT"};   // U98 ~2Q (pin 6)
+    Signal rdy_wait_bar{"~RDY~/WAIT"};  // U82 -> U98 3D (pin 12) -> U11
 
     // Glue logic intermediate signals (U84, U97, U27, U101)
     Signal u97_y2_nc{"U97_Y2", u97_block_ + 1};          // U97 gate 2 unused
     Signal rdy_to_dma{"RDY_TO_DMA", u97_block_ + 2};     // U97 gate 3 output -> DMA pin 6
-    Signal n_000244{"N-000244"};      // U98 ~3Q -> U97 gate 3 input
-    Signal n_000245{"N-000245"};      // U98 3Q -> U97 gate 4 input
+    Signal n_000244{"N-000244"};      // U98 3Q (pin 11) -> U97 gate 3 input
+    Signal n_000245{"N-000245"};      // U98 2Q (pin 7) -> U97 gate 4 input
     Signal n_000246{"N-000246", u97_block_ + 3};          // U97 gate 4 output
     Signal n_000235{"N-000235"};      // U84 gate 3 output -> U97 gate 1 input
     Signal n_000225{"N-000225"};      // Parity check stub -> U97 gate 1 B input (PSU NMI)
@@ -899,10 +908,10 @@ struct TestBoard {
         dma_socket.wire(34, xa[2]);        // XA2
         dma_socket.wire(35, xa[3]);        // XA3
         dma_socket.wire(36, eop);          // ~EOP (N-000281 aliased)
-        dma_socket.wire(37, la[4]);        // A4 (N-000285 -> U17 group 2 input)
-        dma_socket.wire(38, la[5]);        // A5 (N-000282)
-        dma_socket.wire(39, la[6]);        // A6 (N-000284)
-        dma_socket.wire(40, la[7]);        // A7 (N-000283)
+        dma_socket.wire(37, dma_a4);       // A4 (N-000285 -> U17 pin 11)
+        dma_socket.wire(38, dma_a5);       // A5 (N-000282 -> U17 pin 13)
+        dma_socket.wire(39, dma_a6);       // A6 (N-000284 -> U17 pin 15)
+        dma_socket.wire(40, dma_a7);       // A7 (N-000283 -> U17 pin 17)
         dma_ic = dma_socket.emplace<IC_8237A>();
 
         // --- DMA Bus Grant Handshake ---
@@ -975,24 +984,26 @@ struct TestBoard {
         nand5_ic = nand5_socket.emplace<IC_74LS30>();
 
         // U98: 74S175 Quad D Flip-Flop (AEN_BRD generation)
-        // BRD: CLK=CLK, ~MR=~RESET_DRV
+        // BRD: CLK=CLK(9), ~MR=~RESET_DRV(1)
         // FF1: D=HOLDA(4) -> Q=AEN_BRD(2), ~Q=~AEN(3)
-        // FF4: D=N-000238(13) -> Q=N-000231(15)
-        // FF2: D=AEN_BRD(5) -> ~Q=~DMA_WAIT(6)
-        // FF3: D=N-000245(10) -> ~Q=N-000244(11) (not used, tie D to GND)
-        ff98_socket.wire(1, reset_drv_bar);    // ~MR = ~RESET_DRV
+        // FF2: D=AEN_BRD(5) -> Q=N-000245(7), ~Q=~DMA_WAIT(6)
+        // FF3: D=~RDY~/WAIT(12) -> Q=N-000244(11), ~Q=nc(10)
+        // FF4: D=N-000238(13) -> Q=N-000231(15), ~Q=nc(14)
+        ff98_socket.wire(1, reset_drv_bar);    // ~CLR = ~RESET_DRV
         ff98_socket.wire(2, aen_brd);          // 1Q = AEN_BRD
         ff98_socket.wire(3, aen_bar);          // ~1Q = ~AEN (drives U6.15, U66.6)
         ff98_socket.wire(4, holda);            // 1D = HOLDA
         ff98_socket.wire(5, aen_brd);          // 2D = AEN_BRD (latches AEN_BRD again)
+        ff98_socket.wire(6, dma_wait_bar);     // ~2Q = ~DMA_WAIT
+        ff98_socket.wire(7, n_000245);         // 2Q = N-000245 -> U97 gate 4
         ff98_socket.wire(8, gnd);              // GND
         ff98_socket.wire(9, clk);              // CLK
-        ff98_socket.wire(10, n_000245);        // 3Q = N-000245 -> U97 gate 4
-        ff98_socket.wire(11, n_000244);        // ~3Q = N-000244 -> U97 gate 3
-        ff98_socket.wire(12, gnd);             // 3D = tied low (unused)
-        // Pin 13 = ~4Q (complement output, unused)
-        ff98_socket.wire(14, n_000231);        // 4Q = N-000231 -> U67 FF1 D
-        ff98_socket.wire(15, n_000238);        // 4D = N-000238 (bus idle grant from U83)
+        // Pin 10 (~3Q) unconnected per BRD
+        ff98_socket.wire(11, n_000244);        // 3Q = N-000244 -> U97 gate 3
+        ff98_socket.wire(12, rdy_wait_bar);    // 3D = ~RDY~/WAIT (from U82)
+        ff98_socket.wire(13, n_000238);        // 4D = N-000238 (bus idle grant from U83)
+        // Pin 14 (~4Q) unconnected per BRD
+        ff98_socket.wire(15, n_000231);        // 4Q = N-000231 -> U67 FF1 D
         ff98_socket.wire(16, vcc);             // VCC
         ff98_ic = ff98_socket.emplace<IC_74S175>();
 
@@ -1092,29 +1103,29 @@ struct TestBoard {
             dma_page_reg.insert(std::move(ic));
         }
 
-        // U17: 74S244 Address Buffer (low nibble: LA0-LA3 -> XA0-XA3, DMA A4-A7 -> XA4-XA7)
-        // BRD: Group 1 (~1G=~DMA_AEN): LA0-LA3 (from latches) -> XA0-XA3
-        //       Group 2 (~2G=~DMA_AEN): DMA A4-A7 -> XA4-XA7
-        // During CPU mode (~DMA_AEN=High), both groups tri-stated -- U16 drives XA0-XA7.
-        // During DMA mode (~DMA_AEN=Low), both groups enabled -- DMA drives lower addr.
+        // U17: 74S244 DMA Address Buffer (XA0-XA3 -> A0-A3, DMA A4-A7 -> A4-A7)
+        // BRD: Group 1 (~1G=~DMA_AEN): XA0-XA3 (from 8237A) -> A0-A3 (system addr bus)
+        //       Group 2 (~2G=~DMA_AEN): N-000285/282/284/283 (DMA A4-A7) -> A4-A7
+        // During CPU mode (~DMA_AEN=High), both groups tri-stated -- U16 drives XA.
+        // During DMA mode (~DMA_AEN=Low), both groups enabled -- buffers DMA addr to A bus.
         buf17_socket.wire(1, dma_aen_bar);       // ~1G = ~DMA_AEN
-        buf17_socket.wire(2, la[0]);             // 1A1 = LA0 (latch output)
-        buf17_socket.wire(3, xa[7]);             // 2Y4 = XA7 (output)
-        buf17_socket.wire(4, la[1]);             // 1A2 = LA1
-        buf17_socket.wire(5, xa[6]);             // 2Y3 = XA6
-        buf17_socket.wire(6, la[2]);             // 1A3 = LA2
-        buf17_socket.wire(7, xa[5]);             // 2Y2 = XA5
-        buf17_socket.wire(8, la[3]);             // 1A4 = LA3
-        buf17_socket.wire(9, xa[4]);             // 2Y1 = XA4
+        buf17_socket.wire(2, xa[0]);             // 1A1 = XA0 (from 8237A pin 32)
+        buf17_socket.wire(3, la[7]);             // 2Y4 = A7 (output to system addr bus)
+        buf17_socket.wire(4, xa[1]);             // 1A2 = XA1
+        buf17_socket.wire(5, la[6]);             // 2Y3 = A6
+        buf17_socket.wire(6, xa[2]);             // 1A3 = XA2
+        buf17_socket.wire(7, la[5]);             // 2Y2 = A5
+        buf17_socket.wire(8, xa[3]);             // 1A4 = XA3
+        buf17_socket.wire(9, la[4]);             // 2Y1 = A4
         buf17_socket.wire(10, gnd);
-        buf17_socket.wire(11, la[4]);            // 2A1 = N-000285 (DMA A4, aliased to LA4)
-        buf17_socket.wire(12, xa[3]);            // 1Y4 = XA3 (output)
-        buf17_socket.wire(13, la[5]);            // 2A2 = N-000282 (DMA A5, aliased to LA5)
-        buf17_socket.wire(14, xa[2]);            // 1Y3 = XA2
-        buf17_socket.wire(15, la[6]);            // 2A3 = N-000284 (DMA A6, aliased to LA6)
-        buf17_socket.wire(16, xa[1]);            // 1Y2 = XA1
-        buf17_socket.wire(17, la[7]);            // 2A4 = N-000283 (DMA A7, aliased to LA7)
-        buf17_socket.wire(18, xa[0]);            // 1Y1 = XA0
+        buf17_socket.wire(11, dma_a4);            // 2A1 = N-000285 (DMA A4)
+        buf17_socket.wire(12, la[3]);            // 1Y4 = A3 (output to system addr bus)
+        buf17_socket.wire(13, dma_a5);            // 2A2 = N-000282 (DMA A5)
+        buf17_socket.wire(14, la[2]);            // 1Y3 = A2
+        buf17_socket.wire(15, dma_a6);            // 2A3 = N-000284 (DMA A6)
+        buf17_socket.wire(16, la[1]);            // 1Y2 = A1
+        buf17_socket.wire(17, dma_a7);            // 2A4 = N-000283 (DMA A7)
+        buf17_socket.wire(18, la[0]);            // 1Y1 = A0
         buf17_socket.wire(19, dma_aen_bar);      // ~2G = ~DMA_AEN
         buf17_socket.wire(20, vcc);
         buf17_ic = buf17_socket.emplace<IC_74S244>();

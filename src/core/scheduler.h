@@ -466,6 +466,65 @@ public:
             std::fprintf(f, "</svg>\n");
             std::fclose(f);
             spdlog::info("[Scheduler] wrote {}", svg_path);
+
+            // Write machine-readable JSON for AI/tooling consumption.
+            std::string json_path = "unified_waves_perm" + std::to_string(perm) + ".json";
+            FILE* jf = std::fopen(json_path.c_str(), "w");
+            if (jf) {
+                std::fprintf(jf, "{\n");
+                std::fprintf(jf, "  \"permutation\": %" PRIu64 ",\n", perm);
+
+                // Bidir block states.
+                std::fprintf(jf, "  \"bidir_states\": [");
+                for (int b = 0; b < num_bidir; ++b) {
+                    BidirDir bd = perm_dir(perm, b);
+                    const char* ds = (bd == BidirDir::HiZ) ? "HiZ"
+                                   : (bd == BidirDir::Input) ? "IN" : "OUT";
+                    std::fprintf(jf, "%s{\"component\": \"%s\", \"direction\": \"%s\"}",
+                                 b ? ", " : "", bidir_refs_[b].comp->name().c_str(), ds);
+                }
+                std::fprintf(jf, "],\n");
+
+                // Waves -- ordered list of component name lists.
+                std::fprintf(jf, "  \"waves\": [\n");
+                for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
+                    std::fprintf(jf, "    [");
+                    for (int ci = 0; ci < static_cast<int>(plan.waves[w].size()); ++ci) {
+                        std::fprintf(jf, "%s\"%s\"", ci ? ", " : "",
+                                     plan.waves[w][ci]->name().c_str());
+                    }
+                    std::fprintf(jf, "]%s\n",
+                                 w + 1 < static_cast<int>(plan.waves.size()) ? "," : "");
+                }
+                std::fprintf(jf, "  ],\n");
+
+                // Edges with signal names.
+                std::fprintf(jf, "  \"edges\": [\n");
+                bool first_edge = true;
+                for (auto& [key, info] : edges) {
+                    int src = key.first, dst = key.second;
+                    std::fprintf(jf, "%s    {\"from\": \"%s\", \"to\": \"%s\", \"signals\": [",
+                                 first_edge ? "" : ",\n",
+                                 all[src]->name().c_str(), all[dst]->name().c_str());
+                    bool first_sig = true;
+                    for (auto& sn : info.sync_names) {
+                        std::fprintf(jf, "%s\"%s\"", first_sig ? "" : ", ", sn.c_str());
+                        first_sig = false;
+                    }
+                    std::fprintf(jf, "], \"async_signals\": [");
+                    first_sig = true;
+                    for (auto& an : info.async_names) {
+                        std::fprintf(jf, "%s\"%s\"", first_sig ? "" : ", ", an.c_str());
+                        first_sig = false;
+                    }
+                    std::fprintf(jf, "]}");
+                    first_edge = false;
+                }
+                std::fprintf(jf, "\n  ]\n");
+                std::fprintf(jf, "}\n");
+                std::fclose(jf);
+                spdlog::info("[Scheduler] wrote {}", json_path);
+            }
         }
     }
 
