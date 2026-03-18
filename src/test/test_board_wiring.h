@@ -783,7 +783,7 @@ struct TestBoard {
         ram_range.wire(3, la[18]);             // C = A18 (pre-buffer)
         ram_range.wire(4, gnd);                // ~G2A = GND (always enabled)
         ram_range.wire(5, la[19]);             // ~G2B = A19 (Low for < 512K)
-        ram_range.wire(6, vcc);                // G1 = VCC (~DACK_0_BRD, no DMA)
+        ram_range.wire(6, dack0_brd);           // G1 = ~DACK_0_BRD (disables during DRAM refresh)
         ram_range.wire(8, gnd);
         ram_range.wire(15, ram_addr_sel);      // ~Y0 = ~RAM_ADDR_SEL
         ram_range.wire(16, vcc);

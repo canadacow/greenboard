@@ -59,9 +59,12 @@ void IC_8237A::install(Socket& socket) {
     declare_output(pin_adstb_); declare_output(pin_aen_);
 
     // DMA-only outputs: HiZ in CPU mode, Output during DMA.
-    // Removes false DAG edges in CPU-mode perms.
+    // Removes false DAG edges in CPU-mode perms (HRQ->...->HOLDA->8237A cycle).
     // ~EOP excluded: its pulse must persist across the SI transition
     // (eop_pending_ deasserts it next cycle).
+    // DACKs included: bidir HiZ removes DAG edges in CPU mode, but
+    // on_signal_change re-drives them High so downstream enables (U48 G1)
+    // see a stable High rather than floating HiZ.
     declare_bidir_block({pin_hrq_, pin_dack_[0], pin_dack_[1],
                          pin_dack_[2], pin_dack_[3], pin_adstb_, pin_aen_},
         BidirDir::HiZ | BidirDir::Output,
@@ -135,6 +138,14 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
         (clk_cur == clk_prev_))
         on_clk_falling();
 
+    // Re-drive DACKs after bidir HiZ release so they don't float.
+    // The bidir block removes DAG edges in CPU mode (HiZ), but downstream
+    // enables (e.g. U48 G1 = ~DACK_0_BRD) need a stable High.
+    if (!is_dma_active()) {
+        for (int i = 0; i < 4; ++i)
+            pin_dack_[i].drive(Level::High);
+    }
+
     reset_prev_ = reset_cur;
     iow_prev_ = iow_cur;
     cs_prev_ = cs_cur;
@@ -162,6 +173,7 @@ void IC_8237A::on_reset() {
 
     // Deassert outputs
     pin_hrq_.drive(Level::Low);
+    pin_eop_.drive(Level::High);          // ~EOP inactive (active low)
     for (int i = 0; i < 4; ++i)
         pin_dack_[i].drive(Level::High);  // active low
     pin_aen_.drive(Level::Low);
