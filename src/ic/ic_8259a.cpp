@@ -92,8 +92,10 @@ void IC_8259A::on_signal_change(Fiber /*caller*/) {
     // Bus write: ~WR and ~CS both active, but deferred one eval.
     // ~WR falls at T2 but data propagates through xcvrs at T3.
     // Fire on the second eval where both are low (wr_prev_ already Low).
-    spdlog::trace("[{}] sig: ~WR={} ~RD={} ~CS={} wr_prev={} write_latched={}",
-                  name(), int(wr_cur), int(rd_cur), int(cs_cur), int(wr_prev_), write_latched_);
+    spdlog::trace("[{}] sig: ~WR={} ~RD={} ~CS={} ~INTA={} wr_prev={} inta_prev={} write_latched={} irr=0x{:02X} imr=0x{:02X} isr=0x{:02X} inta_count={} inta_level={} initialized={}",
+                  name(), int(wr_cur), int(rd_cur), int(cs_cur), int(inta_cur),
+                  int(wr_prev_), int(inta_prev_), write_latched_,
+                  irr_, imr_, isr_, inta_count_, inta_level_, initialized_);
 
     if (wr_cur == Level::Low && cs_cur == Level::Low &&
         wr_prev_ == Level::Low && !write_latched_) {

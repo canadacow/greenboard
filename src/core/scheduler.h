@@ -13,6 +13,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#include <filesystem>
 #include <fstream>
 #include <spdlog/spdlog.h>
 
@@ -81,7 +82,13 @@ public:
     // Build per-permutation wave plans for all bidirectional pin configurations.
     // For N bidir blocks across all components, builds 2^N DAGs. At runtime,
     // evaluate_no_wake() checks each block's lambda to select the correct plan.
+    static constexpr const char* WAVE_OUTPUT_DIR = "wave_output";
+
     void dump_unified_waves() {
+        // Clean and recreate wave output directory.
+        std::filesystem::remove_all(WAVE_OUTPUT_DIR);
+        std::filesystem::create_directories(WAVE_OUTPUT_DIR);
+
         // Collect ALL evaluable components (fibers + callbacks both participate in DAG and exec).
         std::vector<Component*> evals;
         for (auto* fc : fibers_)    evals.push_back(fc);
@@ -118,413 +125,127 @@ public:
         //dump_permutation_dots(evals, n);
     }
 
-    // Dump one DOT/SVG per DAG permutation, showing wave clustering and edges.
+    // Dump one DOT/SVG per DAG permutation, same style as dump_cycle_dot.
     void dump_permutation_dots(const std::vector<Component*>& evals, int n) {
         constexpr int W = Component::SLOT_WORDS;
-
-        // Gather visuals + evals into one flat list for node indexing.
-        std::vector<Component*> all;
-        for (auto* v : visuals_) all.push_back(v);
-        for (auto* c : evals) all.push_back(c);
-        int total = static_cast<int>(all.size());
-        int eval_start = static_cast<int>(visuals_.size());
-
-        // Wave colors.
-        const char* wave_colors[] = {
-            "#e8f4f8", "#e8f8e8", "#f8f4e8", "#f8e8e8",
-            "#e8e8f8", "#f4e8f8", "#e8f8f4", "#f8f8e8",
-        };
-
-        auto idx_of = [&](Component* c) -> int {
-            for (int i = 0; i < total; ++i)
-                if (all[i] == c) return i;
-            return -1;
-        };
 
         using BidirDir = Component::BidirDir;
         static constexpr BidirDir digit_to_dir[3] = {
             BidirDir::HiZ, BidirDir::Input, BidirDir::Output
         };
-        auto perm_dir = [](uint64_t perm, int b) -> BidirDir {
-            for (int i = 0; i < b; ++i) perm /= 3;
-            return digit_to_dir[perm % 3];
-        };
-        auto dir_str = [](BidirDir d) -> const char* {
-            switch (d) {
-                case BidirDir::HiZ:    return "=HiZ";
-                case BidirDir::Input:  return "=IN";
-                case BidirDir::Output: return "=OUT";
-            }
-            return "=?";
+        auto perm_dir = [](uint64_t p, int b) -> BidirDir {
+            for (int i = 0; i < b; ++i) p /= 3;
+            return digit_to_dir[p % 3];
         };
 
-        // Build a bidir label string for a permutation.
-        auto perm_label = [&](uint64_t perm) -> std::string {
-            std::string s;
-            for (int b = 0; b < static_cast<int>(bidir_refs_.size()); ++b) {
-                if (!s.empty()) s += ", ";
-                s += bidir_refs_[b].comp->name();
-                s += dir_str(perm_dir(perm, b));
-            }
-            return s;
-        };
-
-        // Which 'all' index owns each bidir block?
         const int num_bidir = static_cast<int>(bidir_refs_.size());
-        std::vector<int> bidir_all_idx(num_bidir);
-        for (int b = 0; b < num_bidir; ++b)
-            bidir_all_idx[b] = idx_of(bidir_refs_[b].comp);
 
         for (auto& [perm, plan] : wave_plans_) {
-            std::string svg_path = "unified_waves_perm" + std::to_string(perm) + ".svg";
-            FILE* f = std::fopen(svg_path.c_str(), "w");
-            if (!f) continue;
+            // Build flat active component list (same as solve_perm).
+            uint64_t bidir_space = 1;
+            for (int i = 0; i < num_bidir; ++i) bidir_space *= 3;
+            uint64_t group_bits = (bidir_space > 0) ? perm / bidir_space : 0;
 
-            // Layout constants.
-            constexpr int BOX_W = 130, BOX_H = 40, PAD = 30, GAP_X = 20, GAP_Y = 80;
-            constexpr int WAVE_PAD = 12, TITLE_H = 30;
-
-            // Assign each component a (wave, slot) position.
-            struct NodePos { int x, y, w, h; int wave; };
-            std::vector<NodePos> pos(total);
-            std::vector<bool> in_wave_flag(total, false);
-            for (auto& wave : plan.waves)
-                for (auto* wc : wave)
-                    in_wave_flag[idx_of(wc)] = true;
-
-            // Separate non-wave components into visuals (active, threaded)
-            // and truly inactive (group-excluded).
-            std::vector<int> non_wave;      // inactive group members
-            std::vector<int> visual_idx;    // visuals (active but not in waves)
-            for (int i = 0; i < total; ++i) {
-                if (in_wave_flag[i]) continue;
-                if (all[i]->group_id_ >= 0)
-                    non_wave.push_back(i);   // group-excluded
-                else
-                    visual_idx.push_back(i); // visual/threaded
+            std::vector<Component*> active;
+            for (auto* c : evals_) {
+                int gid = c->group_id_;
+                if (gid >= 0 && !(group_bits & (1 << gid))) continue;
+                active.push_back(c);
             }
+            const int nn = static_cast<int>(active.size());
 
-            // Max wave row width (inactive components excluded).
-            int max_cols = static_cast<int>(visual_idx.size());
-            for (auto& wave : plan.waves)
-                max_cols = std::max(max_cols, static_cast<int>(wave.size()));
-
-            int wave_area_w = PAD * 2 + max_cols * (BOX_W + GAP_X) - GAP_X + WAVE_PAD * 2;
-            if (wave_area_w < 600) wave_area_w = 600;
-            int cur_y = PAD + TITLE_H;
-
-            // Position visual/threaded components above wave 0.
-            if (!visual_idx.empty()) {
-                int row_w = static_cast<int>(visual_idx.size()) * (BOX_W + GAP_X) - GAP_X;
-                int x0 = (wave_area_w - row_w) / 2;
-                for (int i = 0; i < static_cast<int>(visual_idx.size()); ++i)
-                    pos[visual_idx[i]] = {x0 + i * (BOX_W + GAP_X), cur_y, BOX_W, BOX_H, -1};
-                cur_y += BOX_H + GAP_Y;
-            }
-
-            // Position wave rows.
-            struct WaveRect { int x, y, w, h; };
-            std::vector<WaveRect> wave_rects;
-            for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
-                int nc = static_cast<int>(plan.waves[w].size());
-                int row_w = nc * (BOX_W + GAP_X) - GAP_X;
-                int wave_w = row_w + WAVE_PAD * 2;
-                int x0 = (wave_area_w - wave_w) / 2;
-                int wave_h = BOX_H + WAVE_PAD * 2 + 16;
-                wave_rects.push_back({x0, cur_y, wave_w, wave_h});
-                int bx = x0 + WAVE_PAD;
-                for (int i = 0; i < nc; ++i) {
-                    int idx = idx_of(plan.waves[w][i]);
-                    pos[idx] = {bx + i * (BOX_W + GAP_X), cur_y + WAVE_PAD + 16, BOX_W, BOX_H, w};
+            // Compute effective masks.
+            std::vector<std::array<uint64_t, W>> eff_out(nn), eff_in(nn);
+            for (int i = 0; i < nn; ++i)
+                for (int w = 0; w < W; ++w) {
+                    uint64_t pwr = SignalPool::power_rails[w];
+                    eff_out[i][w] = active[i]->outputs()[w] & ~active[i]->inputs()[w] & ~pwr;
+                    eff_in[i][w]  = active[i]->inputs()[w] & ~active[i]->async_inputs()[w] & ~pwr;
                 }
-                cur_y += wave_h + GAP_Y;
-            }
-            int wave_area_h = cur_y + PAD;
-
-            // Position inactive components in a box to the lower right.
-            constexpr int INACT_COL_W = 140, INACT_ROW_H = 50, INACT_PAD = 12;
-            constexpr int INACT_COLS = 3;
-            int inact_rows = (static_cast<int>(non_wave.size()) + INACT_COLS - 1) / INACT_COLS;
-            int inact_box_w = INACT_COLS * INACT_COL_W + INACT_PAD * 2;
-            int inact_box_h = inact_rows * INACT_ROW_H + INACT_PAD * 2 + 16;
-            int inact_x0 = wave_area_w * 3 / 4;
-            int inact_y0 = wave_area_h - inact_box_h - PAD;
-            if (inact_y0 < PAD + TITLE_H) inact_y0 = PAD + TITLE_H;
-
-            for (int i = 0; i < static_cast<int>(non_wave.size()); ++i) {
-                int col = i % INACT_COLS, row = i / INACT_COLS;
-                int bx = inact_x0 + INACT_PAD + col * INACT_COL_W + (INACT_COL_W - BOX_W) / 2;
-                int by = inact_y0 + INACT_PAD + 16 + row * INACT_ROW_H;
-                pos[non_wave[i]] = {bx, by, BOX_W, BOX_H, -1};
-            }
-
-            int svg_w = non_wave.empty() ? wave_area_w : inact_x0 + inact_box_w + PAD;
-            int svg_h = std::max(wave_area_h, inact_y0 + inact_box_h + PAD);
-
-            // Compute effective outputs/inputs for this permutation.
-            std::vector<std::array<uint64_t, W>> eff_out(total), eff_in(total);
-            for (int i = 0; i < total; ++i) {
-                auto* c = all[i];
-                for (int w2 = 0; w2 < W; ++w2) {
-                    eff_out[i][w2] = c->outputs()[w2] & ~c->inputs()[w2];
-                    // Include async_inputs so CLK->CPU etc. appear as edges.
-                    eff_in[i][w2]  = c->inputs()[w2] | c->async_inputs()[w2];
-                }
-            }
             for (int b = 0; b < num_bidir; ++b) {
-                int ci = bidir_all_idx[b];
+                int ci = -1;
+                for (int i = 0; i < nn; ++i)
+                    if (active[i] == bidir_refs_[b].comp) { ci = i; break; }
                 if (ci < 0) continue;
                 BidirDir dir = perm_dir(perm, b);
-                for (int w2 = 0; w2 < W; ++w2) {
-                    uint64_t om = bidir_refs_[b].block->out_mask[w2];
-                    uint64_t im = bidir_refs_[b].block->in_mask[w2];
+                for (int w = 0; w < W; ++w) {
+                    uint64_t om = bidir_refs_[b].block->out_mask[w];
+                    uint64_t im = bidir_refs_[b].block->in_mask[w];
                     switch (dir) {
                         case BidirDir::Output:
-                            eff_out[ci][w2] |= om;  eff_in[ci][w2] &= ~om;
-                            eff_out[ci][w2] &= ~im; eff_in[ci][w2] |= im;
+                            eff_out[ci][w] |= om;  eff_in[ci][w] &= ~om;
+                            eff_out[ci][w] &= ~im; eff_in[ci][w] |= im;
                             break;
                         case BidirDir::Input:
-                            eff_out[ci][w2] &= ~om; eff_in[ci][w2] |= om;
-                            eff_out[ci][w2] |= im;  eff_in[ci][w2] &= ~im;
+                            eff_out[ci][w] &= ~om; eff_in[ci][w] |= om;
+                            eff_out[ci][w] |= im;  eff_in[ci][w] &= ~im;
                             break;
                         case BidirDir::HiZ:
-                            eff_out[ci][w2] &= ~om;  eff_in[ci][w2] &= ~om;
-                            eff_out[ci][w2] &= ~im;  eff_in[ci][w2] &= ~im;
+                            eff_out[ci][w] &= ~om; eff_in[ci][w] &= ~om;
+                            eff_out[ci][w] &= ~im; eff_in[ci][w] &= ~im;
                             break;
                     }
                 }
             }
 
-            // Collapse edges by (src, dst). Distinguish sync vs async signals.
-            struct EdgeInfo {
-                std::vector<std::string> sync_names;
-                std::vector<std::string> async_names;
-            };
-            // Build set of inactive component indices for edge filtering.
-            std::vector<bool> is_inactive(total, false);
-            for (int idx2 : non_wave) is_inactive[idx2] = true;
+            // Build depends + in_deg (same as solve_perm).
+            std::vector<std::vector<bool>> depends(nn, std::vector<bool>(nn, false));
+            std::vector<int> in_deg(nn, 0);
+            for (int a = 0; a < nn; ++a)
+                for (int b2 = 0; b2 < nn; ++b2) {
+                    if (a == b2) continue;
+                    for (int w = 0; w < W; ++w)
+                        if (eff_out[a][w] & eff_in[b2][w]) {
+                            depends[b2][a] = true;
+                            break;
+                        }
+                }
+            for (int b2 = 0; b2 < nn; ++b2)
+                for (int a = 0; a < nn; ++a)
+                    if (depends[b2][a]) ++in_deg[b2];
 
-            std::map<std::pair<int,int>, EdgeInfo> edges;
-            for (int a = 0; a < total; ++a) {
-                if (is_inactive[a]) continue;
-                for (int b2 = 0; b2 < total; ++b2) {
-                    if (a == b2 || is_inactive[b2]) continue;
+            // Reuse dump_cycle_dot with output path in wave_output/.
+            std::string dot = "digraph dag {\n  rankdir=LR;\n  node [shape=box fontname=\"Consolas\" fontsize=10];\n  edge [fontname=\"Consolas\" fontsize=8];\n";
+            dot += fmt::format("  labelloc=t;\n  label=\"perm {}\";\n", perm);
+            for (int i = 0; i < nn; ++i) {
+                dot += fmt::format("  n{} [label=\"{}\"];\n", i, active[i]->name());
+            }
+            for (int i = 0; i < nn; ++i) {
+                for (int j = 0; j < nn; ++j) {
+                    if (!depends[i][j]) continue;
+                    std::string sigs;
+                    int sig_count = 0;
                     for (int s = 1; s < SignalPool::count; ++s) {
-                        const char* nm = SignalPool::names[s];
-                        if (!nm) continue;
-                        int w2 = s / 64;
+                        int w = s / 64;
                         uint64_t bit = uint64_t(1) << (s % 64);
-                        if (!(eff_out[a][w2] & bit)) continue;
-                        bool b_sync  = (all[b2]->inputs()[w2] & bit) != 0;
-                        bool b_async = (all[b2]->async_inputs()[w2] & bit) != 0;
-                        if (b_sync)
-                            edges[{a, b2}].sync_names.push_back(nm);
-                        else if (b_async)
-                            edges[{a, b2}].async_names.push_back(nm);
+                        if ((eff_out[j][w] & bit) && (eff_in[i][w] & bit)) {
+                            const char* nm = SignalPool::names[s];
+                            if (sig_count < 4) {
+                                if (!sigs.empty()) sigs += "\\n";
+                                sigs += (nm ? nm : "?");
+                            }
+                            ++sig_count;
+                        }
                     }
+                    if (sig_count > 4)
+                        sigs += fmt::format("\\n+{} more", sig_count - 4);
+                    dot += fmt::format("  n{} -> n{} [label=\"{}\"];\n", j, i, sigs);
                 }
             }
+            dot += "}\n";
 
-            // Build compact label: count signals, abbreviate long lists.
-            auto compact_label = [](const std::vector<std::string>& names) -> std::string {
-                if (names.empty()) return "";
-                if (names.size() <= 3) {
-                    std::string s;
-                    for (auto& n : names) { if (!s.empty()) s += ", "; s += n; }
-                    return s;
-                }
-                return names.front() + " ... " + names.back()
-                     + " (" + std::to_string(names.size()) + ")";
-            };
-
-            // --- Emit SVG ---
-            std::fprintf(f, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-            std::fprintf(f, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" "
-                            "viewBox=\"0 0 %d %d\">\n", svg_w, svg_h, svg_w, svg_h);
-            // White background.
-            std::fprintf(f, "<rect width=\"100%%\" height=\"100%%\" fill=\"white\"/>\n");
-            std::fprintf(f, "<style>\n");
-            std::fprintf(f, "  text { font-family: Consolas, monospace; }\n");
-            std::fprintf(f, "  .title { font-size: 13px; font-weight: bold; fill: #222; }\n");
-            std::fprintf(f, "  .wave-label { font-size: 10px; fill: #666; }\n");
-            std::fprintf(f, "  .node-desc { font-size: 8px; fill: #666; text-anchor: middle; }\n");
-            std::fprintf(f, "  .node-name { font-size: 9px; font-weight: bold; text-anchor: middle; }\n");
-            std::fprintf(f, "  .edge-label { font-size: 7px; fill: #777; }\n");
-            std::fprintf(f, "</style>\n");
-            std::fprintf(f, "<defs>\n");
-            std::fprintf(f, "  <marker id=\"ah\" markerWidth=\"6\" markerHeight=\"4\" "
-                            "refX=\"6\" refY=\"2\" orient=\"auto\" markerUnits=\"strokeWidth\">"
-                            "<polygon points=\"0 0, 6 2, 0 4\" fill=\"context-stroke\"/></marker>\n");
-            std::fprintf(f, "</defs>\n");
-
-            // Title: perm number on first line, bidir states wrapped on second.
-            std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"title\" text-anchor=\"middle\">"
-                            "perm %" PRIu64 "</text>\n", svg_w / 2, PAD + 4, perm);
-            std::string plabel = perm_label(perm);
-            std::fprintf(f, "<text x=\"%d\" y=\"%d\" text-anchor=\"middle\" "
-                            "font-size=\"9\" font-family=\"Consolas\" fill=\"#555\">%s</text>\n",
-                         svg_w / 2, PAD + 18, plabel.c_str());
-
-            // Wave backgrounds.
-            for (int w = 0; w < static_cast<int>(wave_rects.size()); ++w) {
-                auto& r = wave_rects[w];
-                std::fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" "
-                                "rx=\"6\" fill=\"%s\" stroke=\"#bbb\"/>\n",
-                             r.x, r.y, r.w, r.h, wave_colors[w % 8]);
-                std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"wave-label\">wave %d</text>\n",
-                             r.x + 6, r.y + 12, w);
+            std::string dot_path = std::string(WAVE_OUTPUT_DIR) + "/perm_" + std::to_string(perm) + ".dot";
+            std::string svg_path = std::string(WAVE_OUTPUT_DIR) + "/perm_" + std::to_string(perm) + ".svg";
+            {
+                std::ofstream f(dot_path);
+                f << dot;
             }
-
-            // Inactive box.
-            if (!non_wave.empty()) {
-                std::fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" "
-                                "rx=\"6\" fill=\"#f5f5f5\" stroke=\"#ccc\" stroke-dasharray=\"4,3\"/>\n",
-                             inact_x0, inact_y0, inact_box_w, inact_box_h);
-                std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"wave-label\" fill=\"#999\">inactive</text>\n",
-                             inact_x0 + 6, inact_y0 + 12);
-            }
-
-            // Edges -- spread attachment points across bottom/top of boxes.
-            // For each node, count outgoing and incoming edge slots.
-            std::map<int, int> out_slot_count, in_slot_count;
-            std::map<int, int> out_slot_next, in_slot_next;
-            for (auto& [key, info] : edges) {
-                out_slot_count[key.first]++;
-                in_slot_count[key.second]++;
-            }
-            for (auto& [id, cnt] : out_slot_count) out_slot_next[id] = 0;
-            for (auto& [id, cnt] : in_slot_count)  in_slot_next[id] = 0;
-
-            // Color edges by wave gap: adjacent=light, skip=darker.
-            const char* gap_colors[] = {"#99bbdd", "#88aa66", "#cc9944", "#cc6666", "#9966aa", "#666666"};
-
-            for (auto& [key, info] : edges) {
-                int src = key.first, dst = key.second;
-                bool is_async = info.sync_names.empty();
-
-                // Spread x attachment across bottom/top of boxes.
-                int src_cnt = out_slot_count[src];
-                int src_idx = out_slot_next[src]++;
-                int dst_cnt = in_slot_count[dst];
-                int dst_idx = in_slot_next[dst]++;
-                int x1 = pos[src].x + (BOX_W * (src_idx + 1)) / (src_cnt + 1);
-                int y1 = pos[src].y + BOX_H;
-                int x2 = pos[dst].x + (BOX_W * (dst_idx + 1)) / (dst_cnt + 1);
-                int y2 = pos[dst].y;
-
-                // Color by wave distance (async always red).
-                int wave_gap = std::abs(pos[dst].wave - pos[src].wave);
-                if (pos[src].wave < 0 || pos[dst].wave < 0) wave_gap = 1;
-                const char* color = is_async ? "#cc4444"
-                    : gap_colors[std::min(wave_gap, 5)];
-                const char* dash = is_async ? " stroke-dasharray=\"4,3\"" : "";
-                const char* marker = "ah";
-
-                // Build full signal list for tooltip.
-                std::string tip;
-                for (auto& n : info.sync_names) { if (!tip.empty()) tip += ", "; tip += n; }
-                if (!info.async_names.empty()) {
-                    if (!tip.empty()) tip += " + ";
-                    for (auto& n : info.async_names) { if (!tip.empty()) tip += ", "; tip += n; }
-                }
-                int nsigs = static_cast<int>(info.sync_names.size() + info.async_names.size());
-
-                std::fprintf(f, "<line x1=\"%d\" y1=\"%d\" x2=\"%d\" y2=\"%d\" "
-                                "stroke=\"%s\" stroke-width=\"%.1f\" opacity=\"0.5\"%s "
-                                "marker-end=\"url(#%s)\">"
-                                "<title>%s</title></line>\n",
-                             x1, y1, x2, y2, color,
-                             nsigs > 4 ? 2.0 : 1.0,
-                             dash, marker, tip.c_str());
-
-                // Compact visible label -- only show for bundles with <= 3 signals.
-                if (nsigs <= 3) {
-                    std::string label = compact_label(
-                        info.sync_names.empty() ? info.async_names : info.sync_names);
-                    int mx = (x1 + x2) / 2 + 4, my = (y1 + y2) / 2 - 2;
-                    std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"edge-label\">%s</text>\n",
-                                 mx, my, label.c_str());
-                }
-            }
-
-            // Node boxes (drawn on top of edges).
-            for (int i = 0; i < total; ++i) {
-                auto* c = all[i];
-                auto& p = pos[i];
-                const char* fill = (p.wave >= 0) ? "white" : "#eee";
-                std::fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" "
-                                "rx=\"4\" fill=\"%s\" stroke=\"#444\" stroke-width=\"1\"/>\n",
-                             p.x, p.y, p.w, p.h, fill);
-                std::string desc = c->description();
-                if (!desc.empty())
-                    std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"node-desc\">%s</text>\n",
-                                 p.x + BOX_W / 2, p.y + 15, desc.c_str());
-                std::fprintf(f, "<text x=\"%d\" y=\"%d\" class=\"node-name\">%s</text>\n",
-                             p.x + BOX_W / 2, p.y + (desc.empty() ? 24 : 30), c->name().c_str());
-            }
-
-            std::fprintf(f, "</svg>\n");
-            std::fclose(f);
-            spdlog::info("[Scheduler] wrote {}", svg_path);
-
-            // Write machine-readable JSON for AI/tooling consumption.
-            std::string json_path = "unified_waves_perm" + std::to_string(perm) + ".json";
-            FILE* jf = std::fopen(json_path.c_str(), "w");
-            if (jf) {
-                std::fprintf(jf, "{\n");
-                std::fprintf(jf, "  \"permutation\": %" PRIu64 ",\n", perm);
-
-                // Bidir block states.
-                std::fprintf(jf, "  \"bidir_states\": [");
-                for (int b = 0; b < num_bidir; ++b) {
-                    BidirDir bd = perm_dir(perm, b);
-                    const char* ds = (bd == BidirDir::HiZ) ? "HiZ"
-                                   : (bd == BidirDir::Input) ? "IN" : "OUT";
-                    std::fprintf(jf, "%s{\"component\": \"%s\", \"direction\": \"%s\"}",
-                                 b ? ", " : "", bidir_refs_[b].comp->name().c_str(), ds);
-                }
-                std::fprintf(jf, "],\n");
-
-                // Waves -- ordered list of component name lists.
-                std::fprintf(jf, "  \"waves\": [\n");
-                for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
-                    std::fprintf(jf, "    [");
-                    for (int ci = 0; ci < static_cast<int>(plan.waves[w].size()); ++ci) {
-                        std::fprintf(jf, "%s\"%s\"", ci ? ", " : "",
-                                     plan.waves[w][ci]->name().c_str());
-                    }
-                    std::fprintf(jf, "]%s\n",
-                                 w + 1 < static_cast<int>(plan.waves.size()) ? "," : "");
-                }
-                std::fprintf(jf, "  ],\n");
-
-                // Edges with signal names.
-                std::fprintf(jf, "  \"edges\": [\n");
-                bool first_edge = true;
-                for (auto& [key, info] : edges) {
-                    int src = key.first, dst = key.second;
-                    std::fprintf(jf, "%s    {\"from\": \"%s\", \"to\": \"%s\", \"signals\": [",
-                                 first_edge ? "" : ",\n",
-                                 all[src]->name().c_str(), all[dst]->name().c_str());
-                    bool first_sig = true;
-                    for (auto& sn : info.sync_names) {
-                        std::fprintf(jf, "%s\"%s\"", first_sig ? "" : ", ", sn.c_str());
-                        first_sig = false;
-                    }
-                    std::fprintf(jf, "], \"async_signals\": [");
-                    first_sig = true;
-                    for (auto& an : info.async_names) {
-                        std::fprintf(jf, "%s\"%s\"", first_sig ? "" : ", ", an.c_str());
-                        first_sig = false;
-                    }
-                    std::fprintf(jf, "]}");
-                    first_edge = false;
-                }
-                std::fprintf(jf, "\n  ]\n");
-                std::fprintf(jf, "}\n");
-                std::fclose(jf);
-                spdlog::info("[Scheduler] wrote {}", json_path);
-            }
+            spdlog::info("[Scheduler] wrote {}", dot_path);
+            int rc = std::system(fmt::format("\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg {} -o {}", dot_path, svg_path).c_str());
+            if (rc == 0)
+                spdlog::info("[Scheduler] rendered {}", svg_path);
+            else
+                spdlog::warn("[Scheduler] dot failed (rc={}), SVG not generated for {}", rc, svg_path);
         }
     }
 
@@ -564,6 +285,8 @@ public:
         auto it = wave_plans_.find(perm);
         if (it == wave_plans_.end())
             it = wave_plans_.emplace(perm, solve_perm(perm)).first;
+
+        spdlog::trace("[Scheduler] using perm {} ({} waves)", perm, it->second.waves.size());
 
         for (auto& wave : it->second.waves) {
             for (auto* c : wave) {
@@ -615,14 +338,17 @@ public:
             }
         }
         dot += "}\n";
+        std::filesystem::create_directories(WAVE_OUTPUT_DIR);
+        std::string dot_path = std::string(WAVE_OUTPUT_DIR) + "/cycle_debug.dot";
+        std::string svg_path = std::string(WAVE_OUTPUT_DIR) + "/cycle_debug.svg";
         {
-            std::ofstream f("cycle_debug.dot");
+            std::ofstream f(dot_path);
             f << dot;
         }
-        spdlog::critical("[Scheduler] Wrote cycle_debug.dot");
-        int rc = std::system("\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg cycle_debug.dot -o cycle_debug.svg");
+        spdlog::critical("[Scheduler] Wrote {}", dot_path);
+        int rc = std::system(fmt::format("\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg {} -o {}", dot_path, svg_path).c_str());
         if (rc == 0)
-            spdlog::critical("[Scheduler] Rendered cycle_debug.svg");
+            spdlog::critical("[Scheduler] Rendered {}", svg_path);
         else
             spdlog::critical("[Scheduler] dot failed (rc={}), SVG not generated", rc);
     }
