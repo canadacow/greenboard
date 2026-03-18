@@ -43,20 +43,23 @@ void IC_74S245::install(Socket& socket) {
     //   DIR=High -> A->B (A is input, B is output)
     //   DIR=Low  -> B->A (A is output, B is input)
     // Paired as a single bidir block: is_output=true means A drives (DIR=Low).
+    // Bidir direction comes from driving_ (set by bus controller via
+    // set_driving()), NOT from the DIR pin.  This ensures the DAG is
+    // ordered correctly on the same eval cycle the controller acts.
     declare_bidir_pair(
-        {a_[0], a_[1], a_[2], a_[3], a_[4], a_[5], a_[6], a_[7]},   // out_pins (A drives when DIR=Low)
-        {b_[0], b_[1], b_[2], b_[3], b_[4], b_[5], b_[6], b_[7]},   // in_pins  (B drives when DIR=High)
+        {a_[0], a_[1], a_[2], a_[3], a_[4], a_[5], a_[6], a_[7]},   // out_pins (A drives when B->A)
+        {b_[0], b_[1], b_[2], b_[3], b_[4], b_[5], b_[6], b_[7]},   // in_pins  (B drives when A->B)
         BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
         [this]() -> BidirDir {
-            auto gv = g_.level();
-            auto dv = dir_.level();
-            BidirDir result = BidirDir::HiZ;
-            if (gv == Level::Low)
-                result = (dv == Level::Low) ? BidirDir::Output : BidirDir::Input;
-            spdlog::trace("[{}] bidir lambda: ~G={} DIR={} -> {} g.idx={} dir.idx={}",
-                          name(), int(gv), int(dv),
-                          result == BidirDir::HiZ ? "HiZ" : (result == BidirDir::Output ? "OUT(A->B)" : "IN(B->A)"),
-                          g_.idx, dir_.idx);
+            BidirDir result;
+            switch (driving_) {
+                case Driving::A: result = BidirDir::Output; break;  // B->A: A is output
+                case Driving::B: result = BidirDir::Input;  break;  // A->B: B is output
+                default:         result = BidirDir::HiZ;    break;
+            }
+            spdlog::trace("[{}] bidir lambda: driving={} -> {}",
+                          name(), int(driving_),
+                          result == BidirDir::HiZ ? "HiZ" : (result == BidirDir::Output ? "OUT(B->A)" : "IN(A->B)"));
             return result;
         });
 }
@@ -67,50 +70,41 @@ void IC_74S245::install(Socket& socket) {
 // Direction changes take effect one eval later via the bidir lambda, matching
 // real hardware timing (8288 sets DT/~R at T1, ~DEN at T2).
 
+void IC_74S245::set_driving(Driving driving) {
+    spdlog::trace("[{}] set_driving: {} -> {}", name(), int(driving_), int(driving));
+    driving_ = driving;
+}
+
 void IC_74S245::on_signal_change(Fiber /*caller*/) {
-    if (g_.level() != Level::Low) {
-        spdlog::trace("[{}] ~G={} -> disabled", name(), int(g_.level()));
-        driving_ = Driving::None;
-        return;
-    }
+    // driving_ is the sole authority (set by bus controller).
+    // No ~G or DIR pin checks -- the controller handles enable/direction.
     update_outputs();
 }
 
 void IC_74S245::update_outputs() {
 
-    uint8_t val = 0;
+    // Direction is always set externally by the bus controller (8288/8237A)
+    // via set_driving().  We never read the DIR pin -- the controller is the
+    // authority, and driving_ feeds the bidir lambda for correct DAG ordering.
 
     if (driving_ == Driving::A) {
-        for (int i = 0; i < 8; ++i) {
-            Level t = b_[i].level();
-            if (t != Level::HiZ) {
-                a_[i].drive(b_[i].level());    
-            }
-        }
-        spdlog::trace("[{}] B->A: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
+        for (int i = 0; i < 8; ++i)
+            a_[i].drive(b_[i].level());
+        spdlog::trace("[{}] B->A: [{},{},{},{},{},{},{},{}] (~G={} DIR={}) a[0].idx={} b[0].idx={}",
+                      name(),
+                      int(b_[0].level()), int(b_[1].level()), int(b_[2].level()), int(b_[3].level()),
+                      int(b_[4].level()), int(b_[5].level()), int(b_[6].level()), int(b_[7].level()),
+                      int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
     }
 
     if (driving_ == Driving::B) {
-        for (int i = 0; i < 8; ++i) {
-            Level t = a_[i].level();
-            if (t != Level::HiZ) {
-                b_[i].drive(a_[i].level());    
-            }
-        }
-        spdlog::trace("[{}] A->B: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);        
-    }
-
-    switch(dir_.level())
-    {
-        case Level::High:
-            driving_ = Driving::B;
-            break;
-        case Level::Low:
-            driving_ = Driving::A;
-            break;
-        default:
-            driving_ = Driving::None;
-            break;
+        for (int i = 0; i < 8; ++i)
+            b_[i].drive(a_[i].level());
+        spdlog::trace("[{}] A->B: [{},{},{},{},{},{},{},{}] (~G={} DIR={}) a[0].idx={} b[0].idx={}",
+                      name(),
+                      int(a_[0].level()), int(a_[1].level()), int(a_[2].level()), int(a_[3].level()),
+                      int(a_[4].level()), int(a_[5].level()), int(a_[6].level()), int(a_[7].level()),
+                      int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
     }
 }
 

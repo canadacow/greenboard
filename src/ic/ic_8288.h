@@ -60,10 +60,11 @@ public:
 
     void install(Socket& socket);
 
-    // Fold U8 (AD<->D transceiver) and optionally U13 (D<->XD transceiver)
-    // into the 8288 so their data transfers happen synchronously with
-    // ~DEN/DT/~R assertion -- no one-cycle DAG lag.
-    void set_xcvr(IC_74S245* u8, IC_74S245* u13 = nullptr);
+    // Pre-set transceiver directions so they copy on the correct eval,
+    // before the bidir lambda catches up.
+    // U8 (AD<->D), U13 (D<->XD), U12 (D<->MD), U14 (cmd strobes).
+    void set_xcvr(IC_74S245* u8, IC_74S245* u13 = nullptr,
+                  IC_74S245* u12 = nullptr, IC_74S245* u14 = nullptr);
 
 protected:
     void on_power_on() override;
@@ -102,11 +103,14 @@ private:
     State state_ = State::Idle;
     BusCycle cycle_ = BusCycle::Passive;
 
-    // Folded-in transceivers: nudged after ~DEN/DT/~R changes.
-    IC_74S245* xcvr_ = nullptr;   // U8: AD <-> D
-    IC_74S245* xcvr_x_ = nullptr; // U13: D <-> XD
+    // Transceivers: direction pre-set after DT/~R changes.
+    IC_74S245* xcvr_ = nullptr;    // U8: AD <-> D
+    IC_74S245* xcvr_x_ = nullptr;  // U13: D <-> XD
+    IC_74S245* xcvr_m_ = nullptr;  // U12: D <-> MD
+    IC_74S245* xcvr_c_ = nullptr;  // U14: cmd strobes
 
     void nudge_xcvr();
+    void disable_xcvr();
 };
 
 } // namespace bench

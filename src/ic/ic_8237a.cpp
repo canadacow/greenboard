@@ -1,9 +1,12 @@
 #include "ic/ic_8237a.h"
+#include "ic/ic_74s245.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
 
 IC_8237A::IC_8237A() : CallbackComponent("8237A") { set_description("DMA"); }
+
+void IC_8237A::set_cmd_xcvr(IC_74S245* u14) { cmd_xcvr_ = u14; }
 
 void IC_8237A::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {
@@ -426,6 +429,10 @@ void IC_8237A::on_clk_falling() {
             pin_memr_.drive(Level::Low);   // memory read -> IO
         }
         // verify (00): no strobes, address still generated
+
+        // U14 routes DMA's ~XMEMW/~XMEMR to system side (B->A during DMA).
+        if (cmd_xcvr_)
+            cmd_xcvr_->set_driving(IC_74S245::Driving::A);
 
         spdlog::debug("[8237A] S2 ch{}: ~MEMW={} ~MEMR={} addr={:#06x}",
                       active_ch_,

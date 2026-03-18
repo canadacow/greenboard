@@ -499,10 +499,6 @@ struct TestBoard {
         xcvr13_socket.wire(20, vcc);
         xcvr13_ic = xcvr13_socket.emplace<IC_74S245>();
 
-        // Fold U8 and U13 into the 8288 so AD<->D<->XD transfers happen
-        // synchronously with ~DEN/DT/~R assertion (no one-cycle DAG lag).
-        bc->set_xcvr(xcvr, xcvr13_ic);
-
         // U14: 74S245 Command Strobe Transceiver
         // BRD: pin 1=~DMA_AEN (DIR on real chip), pin 19=GND (~OE on real chip).
         // Our IC_74S245 swaps: pin 1=~G, pin 19=DIR.
@@ -525,6 +521,10 @@ struct TestBoard {
         // ~DMA_AEN feeds back through DMA chain (U14->~XMEMR->...->U50->~DMA_AEN->U14).
         // Break the DAG cycle by marking DIR as async -- it only changes between bus cycles.
         //xcvr14_ic->declare_async_input(xcvr14_socket.pin_signal(19)->pin());
+
+        // Fold all four transceivers into the 8288 so transfers happen
+        // synchronously with ~DEN/DT/~R assertion (no one-cycle DAG lag).
+        bc->set_xcvr(xcvr, xcvr13_ic, mem_xcvr, xcvr14_ic);
 
         // U10: 74S373 Address Latch (low byte: AD0-AD7 -> XA0-XA7)
         // BRD: pin 1 (~OE) = AEN_BRD.  During normal CPU ops AEN_BRD is Low
@@ -913,6 +913,7 @@ struct TestBoard {
         dma_socket.wire(39, dma_a6);       // A6 (N-000284 -> U17 pin 15)
         dma_socket.wire(40, dma_a7);       // A7 (N-000283 -> U17 pin 17)
         dma_ic = dma_socket.emplace<IC_8237A>();
+        dma_ic->set_cmd_xcvr(xcvr14_ic);
 
         // --- DMA Bus Grant Handshake ---
         // Path: HRQ -> U99(inv) -> U52(NAND) -> U5(8-NAND) -> U83(inv)

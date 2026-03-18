@@ -10,6 +10,9 @@ void IC_8288::on_power_on() {
     state_ = State::Idle;
     cycle_ = BusCycle::Passive;
     release_command();
+    // U14 always copies CPU -> X-bus in CPU mode (A->B).
+    // Prime it at power-on so command signals propagate from the first cycle.
+    if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::B);
 }
 
 void IC_8288::install(Socket& socket) {
@@ -88,29 +91,37 @@ IC_8288::BusCycle IC_8288::decode_status() const {
         default: return BusCycle::Passive; // none active
     }
 }
-void IC_8288::set_xcvr(IC_74S245* u8, IC_74S245* u13) {
+void IC_8288::set_xcvr(IC_74S245* u8, IC_74S245* u13, IC_74S245* u12, IC_74S245* u14) {
     xcvr_ = u8;
     xcvr_x_ = u13;
+    xcvr_m_ = u12;
+    xcvr_c_ = u14;
+}
+
+void IC_8288::disable_xcvr() {
+    if (xcvr_)   xcvr_->set_driving(IC_74S245::Driving::None);
+    if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::None);
+    if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::None);
+    // U14 (cmd xcvr) stays enabled -- CPU always drives command bus.
 }
 
 void IC_8288::nudge_xcvr() {
-#if 0
-    // The 8288 knows the bus direction from DT/~R which it just drove.
-    // U8's DIR pin IS DT/~R, so evaluate_now() works fine for U8.
-    // U13's DIR pin comes from U27 (wave 7) which hasn't run yet, so we
-    // use transfer() to force the correct direction based on our knowledge.
-    //
-    // Order matters: for writes (DT/~R=High) data flows AD->U8->D->U13->XD.
-    // For reads (DT/~R=Low) data flows XD->U13->D->U8->AD.
+    // Pre-set transceiver directions so they copy on the correct eval,
+    // before the bidir lambda catches up.
     bool is_write = (pin_dtr_.level() == Level::High);
-    if (is_write) {
-        if (xcvr_) xcvr_->evaluate_now();       // U8: AD->D (DIR=High, A->B)
-        if (xcvr_x_) xcvr_x_->transfer(true);   // U13: D->XD (A->B)
-    } else {
-        if (xcvr_x_) xcvr_x_->transfer(false);  // U13: XD->D (B->A)
-        if (xcvr_) xcvr_->evaluate_now();        // U8: D->AD (DIR=Low, B->A)
-    }
-#endif
+    auto dir = is_write ? IC_74S245::Driving::B : IC_74S245::Driving::A;
+    if (xcvr_)   xcvr_->set_driving(dir);
+    if (xcvr_x_) xcvr_x_->set_driving(dir);
+    // U12: DIR=~XMEMR.  Memory read -> ~XMEMR=Low -> DIR=Low -> B->A (MD->D).
+    // Memory write -> ~XMEMR=High -> DIR=High -> A->B (D->MD).
+    // Only nudge for memory cycles.
+    if (xcvr_m_ && (cycle_ == BusCycle::Fetch || cycle_ == BusCycle::MemR))
+        xcvr_m_->set_driving(IC_74S245::Driving::A);  // B->A (MD->D)
+    else if (xcvr_m_ && cycle_ == BusCycle::MemW)
+        xcvr_m_->set_driving(IC_74S245::Driving::B);  // A->B (D->MD)
+    // U14: CPU mode -> A->B (8288 commands to X-side)
+    if (xcvr_c_)
+        xcvr_c_->set_driving(IC_74S245::Driving::B);
 }
 
 void IC_8288::release_command() {
@@ -129,6 +140,7 @@ void IC_8288::on_clk_rising() {
             release_command();
             pin_ale_.drive_immediate(Level::Low);
             pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
+            disable_xcvr();
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
         }
@@ -200,7 +212,7 @@ void IC_8288::on_clk_rising() {
             // T4: Deassert commands, deassert ~DEN, back to idle.
             release_command();
             pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
-            nudge_xcvr();
+            disable_xcvr();
             spdlog::trace("[{}] T3->T4(Idle) cycle={} cmds released", name(), cyc_name(cycle_));
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;

@@ -35,9 +35,16 @@ public:
 
     void install(Socket& socket);
 
+    // Track which side we're currently driving (only release what we drove)
+    enum class Driving { None, A, B };
+
     // Force re-evaluation (used when a driving component folds this
     // transceiver's timing into its own wave, e.g. 8288 folding U8).
     void evaluate_now() { on_signal_change(nullptr); }
+
+    // Set direction from bus controller (8288/8237A).
+    // This is the sole authority on direction -- the DIR pin is not read.
+    void set_driving(Driving driving);
 
     // Force a transfer in a specific direction, bypassing the DIR pin.
     // Used when the DIR pin hasn't propagated yet (e.g. U13's DIR comes
@@ -57,10 +64,7 @@ private:
     Pin a_[8];   // A1=pin2 .. A8=pin9
     Pin b_[8];   // B1=pin18 .. B8=pin11
 
-    // Track which side we're currently driving (only release what we drove)
-    enum class Driving { None, A, B };
-    
-    enum class Driving driving_ = Driving::None; 
+    enum class Driving driving_ = Driving::None;
 
     Pin g_;    // Pin  1: ~G (enable)
     Pin dir_;  // Pin 19: DIR

@@ -4,6 +4,8 @@
 
 namespace bench {
 
+class IC_74S245;
+
 // Intel 8237A-5 DMA Controller.
 //
 // 40-pin DIP. 4-channel DMA controller with auto-initialize, single/block/
@@ -51,6 +53,10 @@ public:
     IC_8237A();
 
     void install(Socket& socket);
+
+    // U14 command strobe transceiver: during DMA, direction flips to B->A
+    // so DMA's ~XMEMW/~XMEMR reach the system side.
+    void set_cmd_xcvr(IC_74S245* u14);
 
 protected:
     void on_signal_change(Fiber caller) override;
@@ -130,6 +136,7 @@ private:
     bool db_driving_ = false;   // true when we're actively driving data bus
     bool a_driving_ = false;    // true when we're driving address pins A0-A7
     bool eop_pending_ = false;  // EOP asserted this cycle, deassert next cycle
+    IC_74S245* cmd_xcvr_ = nullptr;  // U14: cmd strobe transceiver
     bool mem2mem_write_ = false; // true during write phase of mem-to-mem transfer
     uint8_t prev_upper_addr_ = 0; // last A8-A15 latched, for S1 skip optimization
 
