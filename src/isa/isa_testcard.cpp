@@ -142,11 +142,13 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     tc_prev_ = tc_cur;
 
     // --- CPU I/O ---
-    // ~IOW falling edge: CPU writes to I/O port.
-    if (iow_cur == Level::Low && iow_prev_ != Level::Low) {
+    // ~IOW rising edge: CPU write completes -- latch data now.
+    // Real hardware samples data at the rising edge of ~IOW (deassert),
+    // guaranteeing setup time for data on the bus.
+    if (iow_cur != Level::Low && iow_prev_ == Level::Low) {
         uint16_t port = static_cast<uint16_t>(read_address());
         uint8_t val = read_sd();
-        spdlog::trace("[{}] IOW edge: port=0x{:04X} val=0x{:02X} my={} sa7={}(idx={}) sa5={}(idx={}) sa0={}(idx={})",
+        spdlog::trace("[{}] IOW rise: port=0x{:04X} val=0x{:02X} my={} sa7={}(idx={}) sa5={}(idx={}) sa0={}(idx={})",
                       name(), port, val, my_port(port),
                       int(sa_[7].level()), sa_[7].idx,
                       int(sa_[5].level()), sa_[5].idx,

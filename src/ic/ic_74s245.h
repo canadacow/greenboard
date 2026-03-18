@@ -64,7 +64,8 @@ private:
     Pin a_[8];   // A1=pin2 .. A8=pin9
     Pin b_[8];   // B1=pin18 .. B8=pin11
 
-    enum class Driving driving_ = Driving::None;
+    enum class Driving driving_ = Driving::None;       // active (read by on_signal_change)
+    enum class Driving pending_driving_ = Driving::None; // staged (committed by bidir lambda)
 
     Pin g_;    // Pin  1: ~G (enable)
     Pin dir_;  // Pin 19: DIR

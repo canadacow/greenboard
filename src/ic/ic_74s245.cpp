@@ -8,6 +8,7 @@ IC_74S245::IC_74S245()
 
 void IC_74S245::on_power_on() {
     driving_ = Driving::None;
+    pending_driving_ = Driving::None;
 }
 
 void IC_74S245::install(Socket& socket) {
@@ -51,6 +52,8 @@ void IC_74S245::install(Socket& socket) {
         {b_[0], b_[1], b_[2], b_[3], b_[4], b_[5], b_[6], b_[7]},   // in_pins  (B drives when A->B)
         BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
         [this]() -> BidirDir {
+            // Commit pending direction from bus controller.
+            driving_ = pending_driving_;
             BidirDir result;
             switch (driving_) {
                 case Driving::A: result = BidirDir::Output; break;  // B->A: A is output
@@ -71,8 +74,8 @@ void IC_74S245::install(Socket& socket) {
 // real hardware timing (8288 sets DT/~R at T1, ~DEN at T2).
 
 void IC_74S245::set_driving(Driving driving) {
-    spdlog::trace("[{}] set_driving: {} -> {}", name(), int(driving_), int(driving));
-    driving_ = driving;
+    spdlog::trace("[{}] set_driving: {} -> {}", name(), int(pending_driving_), int(driving));
+    pending_driving_ = driving;
 }
 
 void IC_74S245::on_signal_change(Fiber /*caller*/) {
@@ -109,7 +112,7 @@ void IC_74S245::update_outputs() {
 }
 
 void IC_74S245::release_outputs() {
-    driving_ = Driving::None;
+    pending_driving_ = Driving::None;
 }
 
 void IC_74S245::transfer(bool a_to_b) {

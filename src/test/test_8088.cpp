@@ -154,10 +154,22 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov",
-        //"alu", "call_ret", "jumps", "int", "string", "pit",
-        //"mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
-        //"dma",
+        "io",
+        /* "mov",
+        "alu", 
+        "call_ret",
+        "jumps",
+        "int",
+        "string", 
+        "pit",
+        "mul", 
+        "bcd", 
+        "farcall", 
+        "div",
+        "dos",
+        "irq",
+        "rom",
+        "dma", */
     };
 
     std::vector<TestCase> tests;
