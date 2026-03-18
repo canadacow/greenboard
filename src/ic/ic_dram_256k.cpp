@@ -128,6 +128,7 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         bank.row_addr = read_address();
         bank.row_latched = true;
         active_bank_ = b;
+        spdlog::debug("[DRAM] ~RAS{} fall: row=0x{:02X} ~WE={}", b, bank.row_addr, int(pin_we_.level()));
     }
 
     // ~RAS rising edge: end of cycle, release outputs
@@ -142,6 +143,12 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
     }
 
     // ~CAS falling edge: latch column address, perform read or write
+    if (cas_cur == Level::Low && bank.cas_prev != Level::Low) {
+        if (!bank.row_latched) {
+            spdlog::warn("[DRAM] ~CAS{} fall WITHOUT row latched! col=0x{:02X} ~WE={}",
+                         b, read_address(), int(pin_we_.level()));
+        }
+    }
     if (cas_cur == Level::Low && bank.cas_prev != Level::Low && bank.row_latched) {
         uint8_t col_addr = read_address();
         uint32_t addr = (static_cast<uint32_t>(b) << 16)

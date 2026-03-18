@@ -398,6 +398,13 @@ void IC_8237A::on_clk_falling() {
         // ADSTB high -- will fall at S2 entry, latching upper address
         pin_adstb_.drive(Level::High);
 
+        spdlog::debug("[8237A] S1 ch{}: addr={:#06x} upper={:#04x} A0-7=[{}{}{}{}{}{}{}{}]",
+                      active_ch_, ch.current_address, upper,
+                      int(pin_a_[7].level()), int(pin_a_[6].level()),
+                      int(pin_a_[5].level()), int(pin_a_[4].level()),
+                      int(pin_a_[3].level()), int(pin_a_[2].level()),
+                      int(pin_a_[1].level()), int(pin_a_[0].level()));
+
         state_ = State::S2;
         break;
     }
@@ -419,6 +426,11 @@ void IC_8237A::on_clk_falling() {
             pin_memr_.drive(Level::Low);   // memory read -> IO
         }
         // verify (00): no strobes, address still generated
+
+        spdlog::debug("[8237A] S2 ch{}: ~MEMW={} ~MEMR={} addr={:#06x}",
+                      active_ch_,
+                      int(pin_memw_.level()), int(pin_memr_.level()),
+                      ch.current_address);
 
         // Compressed timing: skip S3 (command register bit 0)
         bool compressed = (command_ & 0x01) != 0;

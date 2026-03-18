@@ -81,15 +81,25 @@ void IC_74S00_U81::on_signal_change(Fiber /*caller*/) {
         spdlog::trace("[{}] gate2: NAND(~XMEMR={}, ~XMEMW={}) -> RAS={}", name(), int(a), int(b), int(y));
     }
 
-    // Gate 3: virtual TD1 -- use delayed RAS, not pin inputs
+    // Gate 3: virtual TD1 -- use delayed RAS, not pin inputs.
+    // Skip the update when gate 2 inputs are HiZ -- that indicates a
+    // spurious re-evaluation from a bidir release-and-re-drive glitch,
+    // not a real memory command.  Advancing td1_pending_ in that case
+    // would collapse the row/column split into a single eval.
     {
         Level ras_now = gates_[1].y.level();
-        if (addr_sel_pin_.idx != 0)
-            addr_sel_pin_.drive(td1_pending_);
-        Level out = (td1_pending_ == Level::High) ? Level::Low : Level::High;
-        gates_[2].y.drive(out);
-        spdlog::trace("[{}] gate3(TD1): td1_pending={} -> ~CAS={} (ras_now={})", name(), int(td1_pending_), int(out), int(ras_now));
-        td1_pending_ = ras_now;
+        Level g2a = gates_[1].a.level();
+        Level g2b = gates_[1].b.level();
+        if (g2a != Level::HiZ && g2b != Level::HiZ) {
+            if (addr_sel_pin_.idx != 0)
+                addr_sel_pin_.drive(td1_pending_);
+            Level out = (td1_pending_ == Level::High) ? Level::Low : Level::High;
+            gates_[2].y.drive(out);
+            spdlog::trace("[{}] gate3(TD1): td1_pending={} -> ~CAS={} (ras_now={})", name(), int(td1_pending_), int(out), int(ras_now));
+            td1_pending_ = ras_now;
+        } else {
+            spdlog::trace("[{}] gate3(TD1): SKIP (g2a={} g2b={} HiZ)", name(), int(g2a), int(g2b));
+        }
     }
 
     // Gates 1 and 4
