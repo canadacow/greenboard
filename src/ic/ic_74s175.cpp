@@ -20,10 +20,10 @@ void IC_74S175::install(Socket& socket) {
     pin_clk_ = connect_pin(9);
     pin_vcc_ = connect_pin(16);
 
-    pin_d_[0] = pin(4);
-    pin_d_[1] = pin(5);
-    pin_d_[2] = pin(12);
-    pin_d_[3] = pin(15);
+    pin_d_[0] = connect_pin(4);
+    pin_d_[1] = connect_pin(5);
+    pin_d_[2] = connect_pin(12);
+    pin_d_[3] = connect_pin(15);
 
     pin_q_[0] = pin(2);
     pin_q_[1] = pin(7);
@@ -36,8 +36,9 @@ void IC_74S175::install(Socket& socket) {
     pin_nq_[3] = pin(13);
 
     // Pin directions for DAG ordering.
-    // D pins are async: sampled on CLK edge only, value read this cycle
-    // was driven in a previous cycle -- no combinational DAG dependency.
+    // D pins use connect_pin (for signal-change notification) but
+    // declare_async_input (no DAG edge) to avoid feedback cycles
+    // through the output chain (e.g. U98: AEN_BRD -> ... -> N-000238 -> 4D).
     declare_input(pin_clr_); declare_input(pin_clk_);
     for (int i = 0; i < 4; ++i) declare_async_input(pin_d_[i]);
     for (int i = 0; i < 4; ++i) { declare_output(pin_q_[i]); declare_output(pin_nq_[i]); }

@@ -126,8 +126,11 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     // DREQ changes -- check for new DMA requests
     evaluate_dreq();
 
-    // CLK falling edge -- advance DMA state machine
-    if (clk_cur == Level::Low && clk_prev_ == Level::High)
+    // CLK falling edge -- advance DMA state machine.
+    // Also advance on implicit tick (CLK steady) since the 8284A never
+    // drives CLK and DCLK is constant Low in this architecture.
+    if ((clk_cur == Level::Low && clk_prev_ == Level::High) ||
+        (clk_cur == clk_prev_))
         on_clk_falling();
 
     reset_prev_ = reset_cur;
