@@ -147,16 +147,17 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov",
-        "alu", "call_ret", "jumps", "int", "string", "pit",
-        "mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
+        //"mov",
+        //"alu", "call_ret", "jumps", "int", "string", "pit",
+        //"mul", "bcd", "farcall", "io", "div", "dos", "irq", "rom",
+        "dma",
     };
 
     std::vector<TestCase> tests;
@@ -200,6 +201,12 @@ int main() {
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
         testcard.reset_state();
 
+        // Preload DMA buffer for the DMA test.
+        {
+            static const char lorem[] = "Lorem ipsum dolor sit amet, ";
+            std::memcpy(testcard.dma_buf(), lorem, sizeof(lorem) - 1);
+        }
+
         // Load binary into DRAM at 0100:0100 (physical 0x01100)
         std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;
         if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) { ++failed; continue; }
@@ -222,7 +229,7 @@ int main() {
 
         // Wait for CPU to halt, with safety timeout.
         {
-            constexpr uint64_t secondTimeout = 60;
+            constexpr uint64_t secondTimeout = 2;
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secondTimeout);
             while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));

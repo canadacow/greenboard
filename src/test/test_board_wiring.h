@@ -987,11 +987,12 @@ struct TestBoard {
         ff98_socket.wire(5, aen_brd);          // 2D = AEN_BRD (latches AEN_BRD again)
         ff98_socket.wire(8, gnd);              // GND
         ff98_socket.wire(9, clk);              // CLK
-        ff98_socket.wire(10, gnd);             // 3D = tied low (unused)
+        ff98_socket.wire(10, n_000245);        // 3Q = N-000245 -> U97 gate 4
         ff98_socket.wire(11, n_000244);        // ~3Q = N-000244 -> U97 gate 3
-        ff98_socket.wire(12, n_000245);        // 3Q = N-000245 -> U97 gate 4
-        ff98_socket.wire(13, n_000238);        // 4D = N-000238 (bus idle grant)
-        ff98_socket.wire(15, n_000231);        // 4Q = N-000231 -> U67 FF1 D
+        ff98_socket.wire(12, gnd);             // 3D = tied low (unused)
+        // Pin 13 = ~4Q (complement output, unused)
+        ff98_socket.wire(14, n_000231);        // 4Q = N-000231 -> U67 FF1 D
+        ff98_socket.wire(15, n_000238);        // 4D = N-000238 (bus idle grant from U83)
         ff98_socket.wire(16, vcc);             // VCC
         ff98_ic = ff98_socket.emplace<IC_74S175>();
 
@@ -1215,7 +1216,7 @@ struct TestBoard {
             slot.wire_pin(50, &dack0_brd); // ~DACK0 (B19)
             slot.wire_pin(57, &dack2);     // ~DACK2 (B26)
             slot.wire_pin(37, &drq2);      // DRQ2 (B6)
-            slot.wire_pin(58, &eop);       // T/C (B27)
+            slot.wire_pin(58, &tc);        // T/C (B27) = inverted ~EOP from U99
 
             // Power rails
             slot.wire_pin(32, &gnd);       // GND (B1)

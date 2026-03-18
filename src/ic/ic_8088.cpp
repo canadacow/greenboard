@@ -221,6 +221,7 @@ void IC_8088::drive_status_passive() {
     pin_s0_.drive(Level::High);
     pin_s1_.drive(Level::High);
     pin_s2_.drive(Level::High);
+    pin_lock_.drive(Level::High);  // ~LOCK: active-low, deasserted during normal operation
 }
 
 void IC_8088::full_wait_clk() {

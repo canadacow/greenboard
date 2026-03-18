@@ -71,34 +71,44 @@ void IC_74S74::update_ff(int i) {
     bool clr = f.clr.level() == Level::Low;
     bool pre = f.pre.level() == Level::Low;
 
+    bool old_q = f.q_state;
+
     if (clr && pre) {
         // Both asserted: Q=H, ~Q=H (indeterminate)
         f.q_state = true;
         f.q.drive(Level::High);
         f.nq.drive(Level::High);
         f.clk_prev = f.clk.level();
-        return;
-    }
-    if (clr) {
+    } else if (clr) {
         f.q_state = false;
         drive_ff(i);
         f.clk_prev = f.clk.level();
-        return;
-    }
-    if (pre) {
+    } else if (pre) {
         f.q_state = true;
         drive_ff(i);
         f.clk_prev = f.clk.level();
-        return;
+    } else {
+        // Latch D when CLK is High.
+        // The real 74S74 is edge-triggered, but in this architecture CLK
+        // is never driven by the 8284A (each evaluate() = one implicit tick).
+        // Signals derived from CLK (e.g. nclk88) are held constant, so edge
+        // detection never fires.  Transparent-latch on CLK High matches the
+        // 74S175 approach used elsewhere.
+        Level clk_now = f.clk.level();
+        if (clk_now == Level::High) {
+            f.q_state = f.d.level() == Level::High;
+        }
+        f.clk_prev = clk_now;
+        drive_ff(i);
     }
 
-    // Normal: latch D on rising CLK edge
-    Level clk_now = f.clk.level();
-    if (f.clk_prev != Level::High && clk_now == Level::High) {
-        f.q_state = f.d.level() == Level::High;
+    if (f.q_state != old_q) {
+        spdlog::debug("[{}] FF{}: D={} CLK={} ~CLR={} ~PRE={} -> Q={} (was {})",
+                      name(), i + 1,
+                      int(f.d.level()), int(f.clk.level()),
+                      int(f.clr.level()), int(f.pre.level()),
+                      f.q_state ? 1 : 0, old_q ? 1 : 0);
     }
-    f.clk_prev = clk_now;
-    drive_ff(i);
 }
 
 void IC_74S74::drive_ff(int i) {

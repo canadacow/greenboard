@@ -46,7 +46,6 @@ protected:
     void on_signal_change(Fiber caller) override;
 
 private:
-    void on_clk_rising();
     void clear_all();
     void drive_outputs();
 
@@ -67,6 +66,7 @@ private:
     // Internal state
     bool q_[4] = {};
     Level clr_prev_ = Level::HiZ;
+    Level clk_prev_ = Level::HiZ;
 };
 
 } // namespace bench

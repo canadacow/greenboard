@@ -59,17 +59,12 @@ void IC_74S175::on_signal_change(Fiber /*caller*/) {
         clear_all();
     clr_prev_ = cur;
 
-    // Latch D inputs on rising edge.
-    if (pin_clr_.level() != Level::Low)
-        on_clk_rising();
-}
-
-void IC_74S175::on_clk_rising() {
-    // Sample all D inputs and update Q state.
-    for (int i = 0; i < 4; ++i) {
-        q_[i] = pin_d_[i].level() == Level::High;
+    // Latch D inputs every evaluate cycle (CLK is implicit -- one evaluate = one tick).
+    if (pin_clr_.level() != Level::Low) {
+        for (int i = 0; i < 4; ++i)
+            q_[i] = pin_d_[i].level() == Level::High;
+        drive_outputs();
     }
-    drive_outputs();
 }
 
 void IC_74S175::clear_all() {
