@@ -42,7 +42,7 @@ void thread_pin_to_pcores() {
     }
 
     if (max_class == 0) {
-        spdlog::info("[thread_util] no hybrid topology detected, skipping affinity");
+        spdlog::debug("[thread_util] no hybrid topology detected, skipping affinity");
         return;
     }
 
@@ -63,13 +63,13 @@ void thread_pin_to_pcores() {
         ptr += info->Size;
     }
 
-    spdlog::info("[thread_util] detected {} P-core and {} E-core logical processors",
+    spdlog::debug("[thread_util] detected {} P-core and {} E-core logical processors",
                  pcore_count, ecore_count);
 
     if (SetThreadAffinityMask(GetCurrentThread(), mask))
-        spdlog::info("[thread_util] pinned to P-cores, mask=0x{:X}", mask);
+        spdlog::debug("[thread_util] pinned to P-cores, mask=0x{:X}", mask);
     else
-        spdlog::warn("[thread_util] SetThreadAffinityMask failed: {}", GetLastError());
+        spdlog::debug("[thread_util] SetThreadAffinityMask failed: {}", GetLastError());
 }
 
 } // namespace bench

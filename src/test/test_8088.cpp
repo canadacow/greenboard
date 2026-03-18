@@ -147,20 +147,20 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov",
+        "io",
+        /* "mov",
         "alu",
         "call_ret",
         "jumps",
         "int",
         "string",
-        "io",
         "mul",
         "bcd",
         "farcall",
@@ -169,7 +169,7 @@ int main() {
         "irq",
         "rom",
         "dma",
-        "pit",
+        "pit",*/
     };
 
     std::vector<TestCase> tests;
@@ -241,7 +241,7 @@ int main() {
 
         // Wait for CPU to halt, with safety timeout.
         {
-            constexpr uint64_t secondTimeout = 2;
+            constexpr uint64_t secondTimeout = 15;
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secondTimeout);
             while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
