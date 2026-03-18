@@ -143,10 +143,10 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
 
     // --- CPU I/O ---
     // No idea what the fuck the AI was doing.
-    if (iow_.level() == Level::Low) {
+    if (iow_prev_ == Level::Low) {
         uint16_t port = static_cast<uint16_t>(read_address());
         uint8_t val = read_sd();
-        spdlog::trace("[{}] IOW rise: port=0x{:04X} val=0x{:02X} my={} sa7={}(idx={}) sa5={}(idx={}) sa0={}(idx={})",
+        spdlog::trace("[{}] IOW: port=0x{:04X} val=0x{:02X} my={} sa7={}(idx={}) sa5={}(idx={}) sa0={}(idx={})",
                       name(), port, val, my_port(port),
                       int(sa_[7].level()), sa_[7].idx,
                       int(sa_[5].level()), sa_[5].idx,

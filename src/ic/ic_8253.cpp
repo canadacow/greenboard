@@ -76,15 +76,27 @@ void IC_8253::on_signal_change(Fiber /*caller*/) {
     bool wr_low = pin_wr_.level() == Level::Low;
     bool rd_low = pin_rd_.level() == Level::Low;
 
-    // Bus write: bidir says Input, data is on the bus.
-    if (cs_low && wr_low)
-        handle_write();
+    if (read_pending_ || write_pending_)
+    {
+        if (read_pending_) {
+            handle_read();
+            read_pending_ = false;
+        }
 
-    // Bus read: bidir says Output, drive data bus.
-    if (cs_low && rd_low)
-        handle_read();
-    else if (data_bus_driven_)
+        if (write_pending_) {
+            handle_write();
+            write_pending_ = false;
+        }
+    } else if (rd_low || wr_low) {
+        if (rd_low) {
+            read_pending_ = true;
+        }
+        if (wr_low) {
+            write_pending_ = true;
+        }
+    } else if (data_bus_driven_) {
         release_data_bus();
+    }
 
     // Gate levels -- sample once per cycle.
     for (int i = 0; i < 3; ++i)

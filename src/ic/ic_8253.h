@@ -77,6 +77,8 @@ private:
     Pin pin_vcc_;
 
     bool data_bus_driven_ = false;
+    bool write_pending_ = false;
+    bool read_pending_ = false;
 };
 
 } // namespace bench
