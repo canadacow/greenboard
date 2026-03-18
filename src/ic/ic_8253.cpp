@@ -67,72 +67,39 @@ void IC_8253::install(Socket& socket) {
 }
 
 // =========================================================================
-// Main signal change handler -- called by scheduler in wave order
+// One call = one full PIT clock cycle.
+// Bidir lambda already set the bus direction before we get here.
 // =========================================================================
 
 void IC_8253::on_signal_change(Fiber /*caller*/) {
-    // CLK falling edge: decrement each channel on its own CLK transition.
-    for (int i = 0; i < 3; ++i) {
-        Level cur = pin_clk_[i].level();
-        if (cur == Level::Low && clk_prev_[i] == Level::High)
-            on_clk_falling(i);
-        clk_prev_[i] = cur;
-    }
+    bool cs_low = pin_cs_.level() == Level::Low;
+    bool wr_low = pin_wr_.level() == Level::Low;
+    bool rd_low = pin_rd_.level() == Level::Low;
 
-    // GATE level changes.
-    for (int i = 0; i < 3; ++i) {
-        Level cur = pin_gate_[i].level();
-        if (cur != gate_prev_[i])
-            on_gate_change(i, cur == Level::High);
-        gate_prev_[i] = cur;
-    }
+    // Bus write: bidir says Input, data is on the bus.
+    if (cs_low && wr_low)
+        handle_write();
 
-    // ~WR falling edge: CPU writes to PIT.
-    {
-        Level cur = pin_wr_.level();
-        if (cur == Level::Low && wr_prev_ != Level::Low)
-            on_write_falling();
-        wr_prev_ = cur;
-    }
+    // Bus read: bidir says Output, drive data bus.
+    if (cs_low && rd_low)
+        handle_read();
+    else if (data_bus_driven_)
+        release_data_bus();
 
-    // ~RD: drive data bus while active, release when inactive.
-    // Level-sensitive (not just edge): re-drive every cycle that ~CS+~RD
-    // are both low, so the data bus stays valid across the full read window.
-    {
-        Level cur = pin_rd_.level();
-        bool cs_low = pin_cs_.level() == Level::Low;
+    // Gate levels -- sample once per cycle.
+    for (int i = 0; i < 3; ++i)
+        channels_[i].gate = pin_gate_[i].level() == Level::High;
 
-        if (cur == Level::Low && cs_low) {
-            // Active read -- drive (or re-drive) data bus.
-            if (!data_bus_driven_) {
-                // First cycle: detect address and latch the read value.
-                bool a0 = pin_a0_.level() == Level::High;
-                bool a1 = pin_a1_.level() == Level::High;
-                int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
-                if (addr < 3) {
-                    read_byte_ = read_counter(addr);
-                    drive_data_bus(read_byte_);
-                }
-            } else {
-                // Subsequent cycles: re-drive same value (bus hold).
-                drive_data_bus(read_byte_);
-            }
-        } else if (data_bus_driven_) {
-            // ~RD or ~CS went inactive: release bus.
-            release_data_bus();
-        }
-
-        rd_prev_ = cur;
-    }
+    // Tick all channels.
+    for (int i = 0; i < 3; ++i)
+        tick(i);
 }
 
 // =========================================================================
-// Bus operations
+// Bus write
 // =========================================================================
 
-void IC_8253::on_write_falling() {
-    if (pin_cs_.level() != Level::Low) return;
-
+void IC_8253::handle_write() {
     uint8_t data = 0;
     for (int i = 0; i < 8; ++i) {
         if (pin_data_[i].level() == Level::High)
@@ -143,24 +110,26 @@ void IC_8253::on_write_falling() {
     bool a1 = pin_a1_.level() == Level::High;
     int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
-    if (addr == 3) {
+    spdlog::debug("[{}] write: addr={} data=0x{:02X}", name(), addr, data);
+
+    if (addr == 3)
         write_control(data);
-    } else {
+    else
         write_counter(addr, data);
-    }
 }
 
-void IC_8253::drive_data_bus(uint8_t value) {
-    for (int i = 0; i < 8; ++i)
-        pin_data_[i].drive((value & (1 << i)) ? Level::High : Level::Low);
-    data_bus_driven_ = true;
-}
+// =========================================================================
+// Bus read
+// =========================================================================
 
-void IC_8253::release_data_bus() {
-    if (data_bus_driven_) {
-        for (int i = 0; i < 8; ++i)
-            pin_data_[i].release();
-        data_bus_driven_ = false;
+void IC_8253::handle_read() {
+    bool a0 = pin_a0_.level() == Level::High;
+    bool a1 = pin_a1_.level() == Level::High;
+    int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
+
+    if (addr < 3) {
+        uint8_t val = read_counter(addr);
+        drive_data_bus(val);
     }
 }
 
@@ -170,15 +139,11 @@ void IC_8253::release_data_bus() {
 
 void IC_8253::write_control(uint8_t value) {
     int ch = (value >> 6) & 3;
-    if (ch == 3) {
-        // Read-back command (8254 only, not on 8253). Ignore.
-        return;
-    }
+    if (ch == 3) return;  // Read-back (8254 only)
 
     int rw = (value >> 4) & 3;
     if (rw == 0) {
-        // Counter latch command: snapshot current count for reading.
-        // Per datasheet: if already latched, the command is ignored.
+        // Counter latch command.
         if (!channels_[ch].latched) {
             channels_[ch].latch = channels_[ch].count;
             channels_[ch].latched = true;
@@ -189,7 +154,7 @@ void IC_8253::write_control(uint8_t value) {
 
     Channel& c = channels_[ch];
     c.mode = (value >> 1) & 7;
-    if (c.mode > 5) c.mode &= 3;  // Modes 6,7 map to 2,3.
+    if (c.mode > 5) c.mode &= 3;
     c.bcd = (value & 1) != 0;
     c.rw_mode = rw;
     c.programmed = true;
@@ -200,23 +165,22 @@ void IC_8253::write_control(uint8_t value) {
     c.read_msb_next = false;
     c.latched = false;
 
-    // Mode-specific OUT initialization per datasheet.
     switch (c.mode) {
-        case 0: c.out = false; break;  // OUT goes low immediately
-        case 1: c.out = true;  break;  // OUT high until gate trigger
-        case 2: c.out = true;  break;  // OUT starts high
-        case 3: c.out = true;  break;  // OUT starts high
-        case 4: c.out = true;  break;  // OUT high, low at TC
-        case 5: c.out = true;  break;  // OUT high until gate trigger
+        case 0: c.out = false; break;
+        case 1: c.out = true;  break;
+        case 2: c.out = true;  break;
+        case 3: c.out = true;  break;
+        case 4: c.out = true;  break;
+        case 5: c.out = true;  break;
     }
     update_out(ch);
 
-    spdlog::debug("[8253] ch{} programmed: mode={}, rw={}, bcd={}",
-                  ch, c.mode, c.rw_mode, c.bcd);
+    spdlog::debug("[{}] ch{} programmed: mode={} rw={} bcd={}",
+                  name(), ch, c.mode, c.rw_mode, c.bcd);
 }
 
 // =========================================================================
-// Counter read/write
+// Counter load
 // =========================================================================
 
 void IC_8253::write_counter(int ch, uint8_t value) {
@@ -224,19 +188,19 @@ void IC_8253::write_counter(int ch, uint8_t value) {
     if (!c.programmed) return;
 
     switch (c.rw_mode) {
-        case 1:  // LSB only
+        case 1:
             c.reload = value;
             c.loaded = true;
             c.null_count = true;
             c.counting = true;
             break;
-        case 2:  // MSB only
+        case 2:
             c.reload = static_cast<uint16_t>(value) << 8;
             c.loaded = true;
             c.null_count = true;
             c.counting = true;
             break;
-        case 3:  // LSB then MSB
+        case 3:
             if (!c.load_lsb_pending) {
                 c.load_lsb_value = value;
                 c.load_lsb_pending = true;
@@ -251,28 +215,32 @@ void IC_8253::write_counter(int ch, uint8_t value) {
     }
 }
 
+// =========================================================================
+// Counter read
+// =========================================================================
+
 uint8_t IC_8253::read_counter(int ch) {
     Channel& c = channels_[ch];
     uint16_t val = c.latched ? c.latch : c.count;
 
     uint8_t result = 0;
     switch (c.rw_mode) {
-        case 1:  // LSB only
+        case 1:
             result = val & 0xFF;
-            if (c.latched) c.latched = false;
+            c.latched = false;
             break;
-        case 2:  // MSB only
+        case 2:
             result = (val >> 8) & 0xFF;
-            if (c.latched) c.latched = false;
+            c.latched = false;
             break;
-        case 3:  // LSB then MSB
+        case 3:
             if (!c.read_msb_next) {
                 result = val & 0xFF;
                 c.read_msb_next = true;
             } else {
                 result = (val >> 8) & 0xFF;
                 c.read_msb_next = false;
-                if (c.latched) c.latched = false;
+                c.latched = false;
             }
             break;
     }
@@ -280,14 +248,118 @@ uint8_t IC_8253::read_counter(int ch) {
 }
 
 // =========================================================================
-// Counter decrement helper
+// Tick -- one PIT clock cycle per channel
+// =========================================================================
+
+void IC_8253::tick(int ch) {
+    Channel& c = channels_[ch];
+    if (!c.programmed || !c.loaded) return;
+
+    // Transfer reload -> count on first tick after load.
+    if (c.null_count) {
+        c.count = c.reload;
+        c.null_count = false;
+    }
+
+    if (!c.counting) return;
+
+    switch (c.mode) {
+        case 0:
+            // Interrupt on terminal count.
+            // GATE low suspends counting.
+            if (!c.gate) return;
+            c.count = decrement(c.count, c.bcd);
+            if (c.count == 0) {
+                c.out = true;
+                update_out(ch);
+            }
+            break;
+
+        case 1:
+            // Hardware retriggerable one-shot.
+            // GATE rising edge reloads (handled in gate sampling).
+            // Counts regardless of GATE level.
+            c.count = decrement(c.count, c.bcd);
+            if (c.count == 0) {
+                c.out = true;
+                c.counting = false;
+                update_out(ch);
+            }
+            break;
+
+        case 2:
+            // Rate generator.
+            // GATE low suspends counting, forces OUT high.
+            if (!c.gate) {
+                if (!c.out) { c.out = true; update_out(ch); }
+                return;
+            }
+            c.count = decrement(c.count, c.bcd);
+            if (c.count == 1) {
+                c.out = false;
+                update_out(ch);
+            } else if (c.count == 0) {
+                c.out = true;
+                c.count = c.reload;
+                update_out(ch);
+            }
+            break;
+
+        case 3:
+            // Square wave generator.
+            // GATE low suspends counting, forces OUT high.
+            if (!c.gate) {
+                if (!c.out) { c.out = true; update_out(ch); }
+                return;
+            }
+            // Decrements by 2 each tick. Toggles OUT when count expires.
+            if (c.count <= 2) {
+                c.out = !c.out;
+                c.count = c.reload;
+                update_out(ch);
+            } else {
+                c.count -= 2;
+            }
+            break;
+
+        case 4:
+            // Software triggered strobe.
+            // GATE low suspends counting.
+            if (!c.gate) return;
+            c.count = decrement(c.count, c.bcd);
+            if (c.count == 0) {
+                c.out = false;
+                update_out(ch);
+            } else if (!c.out) {
+                c.out = true;
+                c.counting = false;
+                update_out(ch);
+            }
+            break;
+
+        case 5:
+            // Hardware triggered strobe.
+            // Counts regardless of GATE level.
+            c.count = decrement(c.count, c.bcd);
+            if (c.count == 0) {
+                c.out = false;
+                update_out(ch);
+            } else if (!c.out) {
+                c.out = true;
+                c.counting = false;
+                update_out(ch);
+            }
+            break;
+    }
+}
+
+// =========================================================================
+// Helpers
 // =========================================================================
 
 uint16_t IC_8253::decrement(uint16_t val, bool bcd) {
-    if (!bcd) {
-        return val - 1;  // Wraps 0 -> 0xFFFF naturally.
-    }
-    // BCD: 0000 -> 9999
+    if (!bcd)
+        return val - 1;
     if (val == 0) return 0x9999;
     uint16_t result = 0;
     int borrow = 1;
@@ -301,165 +373,22 @@ uint16_t IC_8253::decrement(uint16_t val, bool bcd) {
     return result;
 }
 
-// =========================================================================
-// GATE change
-// =========================================================================
-
-void IC_8253::on_gate_change(int ch, bool new_gate) {
-    Channel& c = channels_[ch];
-    bool old_gate = c.gate;
-    c.gate = new_gate;
-
-    if (!c.programmed || !c.loaded) return;
-
-    bool rising = !old_gate && new_gate;
-
-    switch (c.mode) {
-        case 0:
-            // GATE low suspends counting, high resumes.
-            break;
-        case 1:
-            if (rising) {
-                c.count = c.reload;
-                c.null_count = false;
-                c.out = false;
-                c.counting = true;
-                update_out(ch);
-            }
-            break;
-        case 2:
-            if (rising) {
-                c.count = c.reload;
-                c.null_count = false;
-                c.counting = true;
-            }
-            if (!new_gate) {
-                c.out = true;
-                update_out(ch);
-            }
-            break;
-        case 3:
-            if (rising) {
-                c.count = c.reload;
-                c.null_count = false;
-                c.counting = true;
-            }
-            if (!new_gate) {
-                c.out = true;
-                update_out(ch);
-            }
-            break;
-        case 4:
-            // GATE low suspends counting.
-            break;
-        case 5:
-            if (rising) {
-                c.count = c.reload;
-                c.null_count = false;
-                c.counting = true;
-            }
-            break;
-    }
-}
-
-// =========================================================================
-// CLK falling edge -- the main counter tick
-// =========================================================================
-
-void IC_8253::on_clk_falling(int ch) {
-    Channel& c = channels_[ch];
-    if (!c.programmed || !c.loaded) return;
-
-    // Transfer reload value to counting element on first tick after load.
-    if (c.null_count) {
-        c.count = c.reload;
-        c.null_count = false;
-    }
-
-    if (!c.counting) return;
-
-    // GATE must be high for counting in modes 0, 2, 3, 4.
-    if (!c.gate && (c.mode == 0 || c.mode == 2 || c.mode == 3 || c.mode == 4))
-        return;
-
-    switch (c.mode) {
-        case 0: {
-            c.count = decrement(c.count, c.bcd);
-            if (c.count == 0) {
-                c.out = true;
-                update_out(ch);
-            }
-            break;
-        }
-
-        case 1: {
-            c.count = decrement(c.count, c.bcd);
-            if (c.count == 0) {
-                c.out = true;
-                c.counting = false;
-                update_out(ch);
-            }
-            break;
-        }
-
-        case 2: {
-            c.count = decrement(c.count, c.bcd);
-            if (c.count == 1) {
-                c.out = false;
-                update_out(ch);
-            } else if (c.count == 0) {
-                c.out = true;
-                c.count = c.reload;
-                update_out(ch);
-            }
-            break;
-        }
-
-        case 3: {
-            if (c.count <= 2) {
-                c.out = !c.out;
-                c.count = c.reload;
-                update_out(ch);
-            } else {
-                c.count -= 2;
-            }
-            break;
-        }
-
-        case 4: {
-            c.count = decrement(c.count, c.bcd);
-            if (c.count == 0) {
-                c.out = false;
-                update_out(ch);
-            } else if (!c.out) {
-                c.out = true;
-                c.counting = false;
-                update_out(ch);
-            }
-            break;
-        }
-
-        case 5: {
-            c.count = decrement(c.count, c.bcd);
-            if (c.count == 0) {
-                c.out = false;
-                update_out(ch);
-            } else if (!c.out) {
-                c.out = true;
-                c.counting = false;
-                update_out(ch);
-            }
-            break;
-        }
-    }
-}
-
-// =========================================================================
-// Drive the OUT pin to match internal state
-// =========================================================================
-
 void IC_8253::update_out(int ch) {
     pin_out_[ch].drive(channels_[ch].out ? Level::High : Level::Low);
+}
+
+void IC_8253::drive_data_bus(uint8_t value) {
+    for (int i = 0; i < 8; ++i)
+        pin_data_[i].drive((value & (1 << i)) ? Level::High : Level::Low);
+    data_bus_driven_ = true;
+}
+
+void IC_8253::release_data_bus() {
+    if (data_bus_driven_) {
+        for (int i = 0; i < 8; ++i)
+            pin_data_[i].release();
+        data_bus_driven_ = false;
+    }
 }
 
 } // namespace bench
