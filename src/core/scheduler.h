@@ -533,14 +533,14 @@ private:
         }
 
         #if defined(WAVE_DEBUGS)
-        spdlog::info("[Scheduler] solved perm {} ({} waves):", perm, plan.waves.size());
+        spdlog::debug("[Scheduler] solved perm {} ({} waves):", perm, plan.waves.size());
         for (int w = 0; w < static_cast<int>(plan.waves.size()); ++w) {
             std::string names;
             for (auto* c : plan.waves[w]) {
                 if (!names.empty()) names += ", ";
                 names += c->name();
             }
-            spdlog::info("[Scheduler]   wave {}: {}", w, names);
+            spdlog::debug("[Scheduler]   wave {}: {}", w, names);
         }
         #endif
 
