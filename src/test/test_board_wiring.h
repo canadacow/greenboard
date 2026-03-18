@@ -599,10 +599,10 @@ struct TestBoard {
         pic_socket.wire(1, intr_cs);
         pic_socket.wire(2, xiow);
         pic_socket.wire(3, xior);
-        pic_socket.wire(4, ad[7]);  pic_socket.wire(5, ad[6]);
-        pic_socket.wire(6, ad[5]);  pic_socket.wire(7, ad[4]);
-        pic_socket.wire(8, ad[3]);  pic_socket.wire(9, ad[2]);
-        pic_socket.wire(10, ad[1]); pic_socket.wire(11, ad[0]);
+        pic_socket.wire(4, xd7);  pic_socket.wire(5, xd6);
+        pic_socket.wire(6, xd5);  pic_socket.wire(7, xd4);
+        pic_socket.wire(8, xd3);  pic_socket.wire(9, xd2);
+        pic_socket.wire(10, xd1); pic_socket.wire(11, xd0);
         pic_socket.wire(14, gnd);
         pic_socket.wire(16, vcc);         // ~SP/~EN = VCC (master mode)
         pic_socket.wire(17, intr);        // INT -> CPU INTR
