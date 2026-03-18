@@ -193,6 +193,8 @@ void IC_8088::drive_data(uint8_t value) {
     bus_t_ = BusT::T2_Write;
     for (int i = 0; i < 8; ++i)
         pin_ad_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
+
+    spdlog::trace("[8088] drive_data 0x{:02X}", value);        
 }
 
 uint8_t IC_8088::read_data() {

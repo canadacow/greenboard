@@ -155,7 +155,7 @@ int main() {
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
         "io",
-        /* "mov",
+        /*"mov",
         "alu", 
         "call_ret",
         "jumps",
