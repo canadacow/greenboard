@@ -61,88 +61,66 @@ void IC_74S245::install(Socket& socket) {
         });
 }
 
+// Never call release() -- single-driver signal pool means release clobbers
+// other components actively driving the same signal.  The bidir DAG ordering
+// ensures upstream drivers have already written correct values before we read.
+// Direction changes take effect one eval later via the bidir lambda, matching
+// real hardware timing (8288 sets DT/~R at T1, ~DEN at T2).
+
 void IC_74S245::on_signal_change(Fiber /*caller*/) {
     if (g_.level() != Level::Low) {
-        spdlog::trace("[{}] ~G={} -> disabled, releasing", name(), int(g_.level()));
-        release_outputs();
+        spdlog::trace("[{}] ~G={} -> disabled", name(), int(g_.level()));
+        driving_ = Driving::None;
         return;
     }
     update_outputs();
 }
 
 void IC_74S245::update_outputs() {
-    if (dir_.level() == Level::High) {
-        // A -> B: release old A-side drive before sampling A (avoid reading our own output).
-        if (driving_ == Driving::A) {
-            for (int i = 0; i < 8; ++i) a_[i].release();
-            driving_ = Driving::None;
-        }
-        uint8_t val = 0;
-        bool all_hiz = true;
+
+    uint8_t val = 0;
+
+    if (driving_ == Driving::A) {
         for (int i = 0; i < 8; ++i) {
-            Level lv = a_[i].level();
-            if (lv != Level::HiZ) all_hiz = false;
-            if (lv == Level::High) val |= (1 << i);
+            Level t = b_[i].level();
+            if (t != Level::HiZ) {
+                a_[i].drive(b_[i].level());    
+            }
         }
-        if (all_hiz) {
-            if (driving_ == Driving::B)
-                for (int i = 0; i < 8; ++i) b_[i].release();
-            spdlog::trace("[{}] A->B: HiZ (source floating)", name());
-            driving_ = Driving::None;
-        } else {
-            for (int i = 0; i < 8; ++i)
-                b_[i].drive(a_[i].level());
-            spdlog::trace("[{}] A->B: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
+        spdlog::trace("[{}] B->A: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
+    }
+
+    if (driving_ == Driving::B) {
+        for (int i = 0; i < 8; ++i) {
+            Level t = a_[i].level();
+            if (t != Level::HiZ) {
+                b_[i].drive(a_[i].level());    
+            }
+        }
+        spdlog::trace("[{}] A->B: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);        
+    }
+
+    switch(dir_.level())
+    {
+        case Level::High:
             driving_ = Driving::B;
-        }
-    } else {
-        // B -> A: release old B-side drive before sampling B (avoid reading our own output).
-        if (driving_ == Driving::B) {
-            for (int i = 0; i < 8; ++i) b_[i].release();
-            driving_ = Driving::None;
-        }
-        uint8_t val = 0;
-        bool all_hiz = true;
-        for (int i = 0; i < 8; ++i) {
-            Level lv = b_[i].level();
-            if (lv != Level::HiZ) all_hiz = false;
-            if (lv == Level::High) val |= (1 << i);
-        }
-        if (all_hiz) {
-            if (driving_ == Driving::A)
-                for (int i = 0; i < 8; ++i) a_[i].release();
-            spdlog::trace("[{}] B->A: HiZ (source floating)", name());
-            driving_ = Driving::None;
-        } else {
-            for (int i = 0; i < 8; ++i)
-                a_[i].drive(b_[i].level());
-            spdlog::trace("[{}] B->A: 0x{:02X} (~G={} DIR={}) a[0].idx={} b[0].idx={}", name(), val, int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
+            break;
+        case Level::Low:
             driving_ = Driving::A;
-        }
+            break;
+        default:
+            driving_ = Driving::None;
+            break;
     }
 }
 
 void IC_74S245::release_outputs() {
-    switch (driving_) {
-        case Driving::A:
-            for (int i = 0; i < 8; ++i) a_[i].release();
-            break;
-        case Driving::B:
-            for (int i = 0; i < 8; ++i) b_[i].release();
-            break;
-        case Driving::None:
-            break;
-    }
     driving_ = Driving::None;
 }
 
 void IC_74S245::transfer(bool a_to_b) {
     if (a_to_b) {
-        // A -> B: release old A-side drive before sampling A.
-        if (driving_ == Driving::A) {
-            for (int i = 0; i < 8; ++i) a_[i].release();
-            driving_ = Driving::None;
-        }
+        driving_ = Driving::None;
         uint8_t val = 0;
         bool all_hiz = true;
         for (int i = 0; i < 8; ++i) {
@@ -151,10 +129,7 @@ void IC_74S245::transfer(bool a_to_b) {
             if (lv == Level::High) val |= (1 << i);
         }
         if (all_hiz) {
-            if (driving_ == Driving::B)
-                for (int i = 0; i < 8; ++i) b_[i].release();
             spdlog::trace("[{}] transfer A->B: HiZ (source floating)", name());
-            driving_ = Driving::None;
         } else {
             for (int i = 0; i < 8; ++i)
                 b_[i].drive(a_[i].level());
@@ -162,11 +137,7 @@ void IC_74S245::transfer(bool a_to_b) {
             driving_ = Driving::B;
         }
     } else {
-        // B -> A: release old B-side drive before sampling B.
-        if (driving_ == Driving::B) {
-            for (int i = 0; i < 8; ++i) b_[i].release();
-            driving_ = Driving::None;
-        }
+        driving_ = Driving::None;
         uint8_t val = 0;
         bool all_hiz = true;
         for (int i = 0; i < 8; ++i) {
@@ -175,10 +146,7 @@ void IC_74S245::transfer(bool a_to_b) {
             if (lv == Level::High) val |= (1 << i);
         }
         if (all_hiz) {
-            if (driving_ == Driving::A)
-                for (int i = 0; i < 8; ++i) a_[i].release();
             spdlog::trace("[{}] transfer B->A: HiZ (source floating)", name());
-            driving_ = Driving::None;
         } else {
             for (int i = 0; i < 8; ++i)
                 a_[i].drive(b_[i].level());

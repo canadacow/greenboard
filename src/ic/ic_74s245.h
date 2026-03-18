@@ -58,7 +58,10 @@ private:
     Pin b_[8];   // B1=pin18 .. B8=pin11
 
     // Track which side we're currently driving (only release what we drove)
-    enum class Driving { None, A, B } driving_ = Driving::None;
+    enum class Driving { None, A, B };
+    
+    enum class Driving driving_ = Driving::None; 
+
     Pin g_;    // Pin  1: ~G (enable)
     Pin dir_;  // Pin 19: DIR
 };

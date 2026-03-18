@@ -94,6 +94,7 @@ void IC_8288::set_xcvr(IC_74S245* u8, IC_74S245* u13) {
 }
 
 void IC_8288::nudge_xcvr() {
+#if 0
     // The 8288 knows the bus direction from DT/~R which it just drove.
     // U8's DIR pin IS DT/~R, so evaluate_now() works fine for U8.
     // U13's DIR pin comes from U27 (wave 7) which hasn't run yet, so we
@@ -109,6 +110,7 @@ void IC_8288::nudge_xcvr() {
         if (xcvr_x_) xcvr_x_->transfer(false);  // U13: XD->D (B->A)
         if (xcvr_) xcvr_->evaluate_now();        // U8: D->AD (DIR=Low, B->A)
     }
+#endif
 }
 
 void IC_8288::release_command() {

@@ -131,12 +131,12 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     // DREQ changes -- check for new DMA requests
     evaluate_dreq();
 
-    // CLK falling edge -- advance DMA state machine.
-    // Also advance on implicit tick (CLK steady) since the 8284A never
-    // drives CLK and DCLK is constant Low in this architecture.
-    if ((clk_cur == Level::Low && clk_prev_ == Level::High) ||
-        (clk_cur == clk_prev_))
-        on_clk_falling();
+    // Advance state machine. Each call to on_signal_change is one full cycle, always
+    spdlog::debug("[8237A] CLK tick: state={} clk={}/{} ~MEMW={} ~MEMR={}", int(state_), int(clk_cur), int(clk_prev_),
+                  int(pin_memw_.level()), int(pin_memr_.level()));
+    on_clk_falling();
+    spdlog::debug("[8237A] CLK post: state={} ~MEMW={} ~MEMR={}", int(state_),
+                  int(pin_memw_.level()), int(pin_memr_.level()));
 
     // Re-drive DACKs after bidir HiZ release so they don't float.
     // The bidir block removes DAG edges in CPU mode (HiZ), but downstream
