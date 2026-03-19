@@ -473,9 +473,11 @@ void IC_8237A::on_clk_falling() {
         uint8_t transfer_type = (ch.mode >> 2) & 0x03;
         // 00=verify, 01=write (IO->mem), 10=read (mem->IO), 11=illegal
         if (transfer_type == 0x01) {
-            pin_memw_.drive(Level::Low);   // IO -> memory write
+            pin_memw_.drive(Level::Low);   // ~MEMW: write to memory
+            pin_ior_.drive(Level::Low);    // ~IOR: read from IO device
         } else if (transfer_type == 0x02) {
-            pin_memr_.drive(Level::Low);   // memory read -> IO
+            pin_memr_.drive(Level::Low);   // ~MEMR: read from memory
+            pin_iow_.drive(Level::Low);    // ~IOW: write to IO device
         }
         // verify (00): no strobes, address still generated
 
@@ -503,9 +505,11 @@ void IC_8237A::on_clk_falling() {
     case State::S4: {
         auto& ch = ch_[active_ch_];
 
-        // Deassert memory strobes
+        // Deassert all strobes
         pin_memr_.drive(Level::High);
         pin_memw_.drive(Level::High);
+        pin_ior_.drive(Level::High);
+        pin_iow_.drive(Level::High);
 
         // Update address
         bool decrement = (ch.mode & 0x20) != 0;
@@ -571,10 +575,13 @@ void IC_8237A::on_clk_falling() {
                     pin_a_[i].drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
                 // Re-assert strobes for next transfer
                 uint8_t tt = (ch.mode >> 2) & 0x03;
-                if (tt == 0x01)
+                if (tt == 0x01) {
                     pin_memw_.drive(Level::Low);
-                else if (tt == 0x02)
+                    pin_ior_.drive(Level::Low);
+                } else if (tt == 0x02) {
                     pin_memr_.drive(Level::Low);
+                    pin_iow_.drive(Level::Low);
+                }
                 // Go to S3 or S4 (compressed skips S3)
                 bool compressed = (command_ & 0x01) != 0;
                 state_ = compressed ? State::S4 : State::S3;

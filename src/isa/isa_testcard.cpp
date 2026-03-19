@@ -245,7 +245,8 @@ void ISA_TestCard::io_write(uint16_t port, uint8_t val) {
                 irq_sig_[i]->drive(Level::Low);
         }
     } else if (port == 0xF4) {
-        // DMA start: assert DRQ1.
+        // DMA start: reset pointer and assert DRQ1.
+        dma_ptr_ = 0;
         spdlog::debug("[{}] DMA start: asserting DRQ1, ptr={}", name(), dma_ptr_);
         dma_active_ = true;
         if (drq1_sig_)

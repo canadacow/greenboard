@@ -204,11 +204,29 @@ public:
                 for (int a = 0; a < nn; ++a)
                     if (depends[b2][a]) ++in_deg[b2];
 
+            // Build component -> active index map for wave lookup.
+            std::unordered_map<Component*, int> comp_to_idx;
+            for (int i = 0; i < nn; ++i)
+                comp_to_idx[active[i]] = i;
+
             // Reuse dump_cycle_dot with output path in wave_output/.
-            std::string dot = "digraph dag {\n  rankdir=LR;\n  node [shape=box fontname=\"Consolas\" fontsize=10];\n  edge [fontname=\"Consolas\" fontsize=8];\n";
-            dot += fmt::format("  labelloc=t;\n  label=\"perm {}\";\n", perm);
+            std::string dot = "digraph dag {\n  rankdir=LR;\n  newrank=true;\n  node [shape=box fontname=\"Consolas\" fontsize=10];\n  edge [fontname=\"Consolas\" fontsize=8];\n";
+            dot += fmt::format("  labelloc=t;\n  label=\"perm {} ({} waves)\";\n", perm, plan.waves.size());
             for (int i = 0; i < nn; ++i) {
                 dot += fmt::format("  n{} [label=\"{}\"];\n", i, active[i]->name());
+            }
+            // Force wave columns with rank=same + subtle wave labels.
+            for (size_t w = 0; w < plan.waves.size(); ++w) {
+                dot += fmt::format("  subgraph cluster_w{} {{\n", w);
+                dot += fmt::format("    label=\"W{}\";\n", w);
+                dot += "    style=dashed; color=\"#cccccc\"; fontcolor=\"#999999\"; fontsize=8;\n";
+                dot += "    rank=same;\n";
+                for (auto* c : plan.waves[w]) {
+                    auto it2 = comp_to_idx.find(c);
+                    if (it2 != comp_to_idx.end())
+                        dot += fmt::format("    n{};\n", it2->second);
+                }
+                dot += "  }\n";
             }
             for (int i = 0; i < nn; ++i) {
                 for (int j = 0; j < nn; ++j) {

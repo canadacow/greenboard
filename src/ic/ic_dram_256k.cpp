@@ -116,7 +116,11 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
                 break;
             }
         }
-        if (b < 0) return;
+        if (b < 0) {
+            prev_addr_ = read_address();
+            spdlog::trace("[DRAM] prev_addr=0x{:02X}", prev_addr_);
+            return;
+        }
     }
 
     auto& bank = banks_[b];
@@ -125,10 +129,12 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
 
     // ~RAS falling edge: latch row address
     if (ras_cur == Level::Low && bank.ras_prev != Level::Low) {
-        bank.row_addr = read_address();
+        // If CAS is already Low (same-eval RAS+CAS, DMA first byte),
+        // the mux has switched to column mode -- use saved row from
+        // previous eval.  Otherwise mux is in row mode -- read live.
+        bank.row_addr = (cas_cur == Level::Low) ? prev_addr_ : read_address();
         bank.row_latched = true;
         active_bank_ = b;
-        spdlog::debug("[DRAM] ~RAS{} fall: row=0x{:02X} ~WE={}", b, bank.row_addr, int(pin_we_.level()));
     }
 
     // ~RAS rising edge: end of cycle, release outputs
@@ -142,14 +148,18 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         active_bank_ = -1;
     }
 
-    // ~CAS falling edge: latch column address, perform read or write
-    if (cas_cur == Level::Low && bank.cas_prev != Level::Low) {
-        if (!bank.row_latched) {
-            spdlog::warn("[DRAM] ~CAS{} fall WITHOUT row latched! col=0x{:02X} ~WE={}",
-                         b, read_address(), int(pin_we_.level()));
-        }
+    // ~CAS falling edge or RAS-fell-while-CAS-already-low:
+    // latch column address, perform read or write.
+    // Both edges may occur in the same eval (DMA first byte); check
+    // row_latched AFTER the RAS handler above has had a chance to set it.
+    bool cas_edge = (cas_cur == Level::Low && bank.cas_prev != Level::Low);
+    bool ras_edge_with_cas = (ras_cur == Level::Low && bank.ras_prev != Level::Low
+                              && cas_cur == Level::Low);
+    if (cas_edge && !bank.row_latched && !ras_edge_with_cas) {
+        spdlog::warn("[DRAM] ~CAS{} fall WITHOUT row latched! col=0x{:02X} ~WE={}",
+                     b, read_address(), int(pin_we_.level()));
     }
-    if (cas_cur == Level::Low && bank.cas_prev != Level::Low && bank.row_latched) {
+    if ((cas_edge || ras_edge_with_cas) && bank.row_latched) {
         uint8_t col_addr = read_address();
         uint32_t addr = (static_cast<uint32_t>(b) << 16)
                       | (static_cast<uint32_t>(bank.row_addr) << 8)
@@ -191,6 +201,14 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
 
     bank.ras_prev = ras_cur;
     bank.cas_prev = cas_cur;
+    spdlog::trace("[DRAM] state: bank={} ras={} cas={} ras_prev={} cas_prev={} "
+                  "row_addr=0x{:02X} row_latched={} driving={} active_bank={} "
+                  "prev_addr=0x{:02X} ~WE={} addr_now=0x{:02X}",
+                  b, int(ras_cur), int(cas_cur), int(bank.ras_prev), int(bank.cas_prev),
+                  bank.row_addr, bank.row_latched, bank.driving, active_bank_,
+                  prev_addr_, int(pin_we_.level()), read_address());
+
+    prev_addr_ = read_address();                  
 }
 
 uint8_t IC_DRAM_256K::read_address() const {

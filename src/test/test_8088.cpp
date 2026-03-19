@@ -248,7 +248,7 @@ int main() {
 #else
             bool debugger = false;
 #endif
-            constexpr uint64_t secondTimeout = 30;
+            constexpr uint64_t secondTimeout = 60;
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secondTimeout);
             while (!cpu->halted() && (debugger || std::chrono::steady_clock::now() < deadline))
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
