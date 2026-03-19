@@ -77,7 +77,9 @@ private:
     uint8_t read_data() const;
     bool is_dma_active() const {
         return state_ == State::S1 || state_ == State::S2 ||
-               state_ == State::S3 || state_ == State::S4;
+               state_ == State::S3 || state_ == State::S4 ||
+               state_ == State::M2M_S1 || state_ == State::M2M_S2 ||
+               state_ == State::M2M_S3 || state_ == State::M2M_S4;
     }
 
     // Data bus pins: DB0=pin30, DB1=pin29, ..., DB5=pin23, DB4=pin26, ..., DB7=pin21
@@ -131,7 +133,7 @@ private:
     //   SI: idle, polling DREQ
     //   BusRequested: HRQ asserted, waiting for HLDA
     //   S1-S4: active DMA transfer states
-    enum class State { SI, BusRequested, S1, S2, S3, S4 };
+    enum class State { SI, BusRequested, S1, S2, S3, S4, M2M_S1, M2M_S2, M2M_S3, M2M_S4 };
     State state_ = State::SI;
     int active_ch_ = -1;        // which channel is currently active
     bool disabled_ = false;     // controller disabled (command bit 2)

@@ -468,30 +468,34 @@ void IC_8237A::on_clk_falling() {
         // Release data bus (was holding upper address)
         release_data();
 
-        // Assert memory strobes based on transfer type
         auto& ch = ch_[active_ch_];
-        uint8_t transfer_type = (ch.mode >> 2) & 0x03;
-        // 00=verify, 01=write (IO->mem), 10=read (mem->IO), 11=illegal
-        if (transfer_type == 0x01) {
-            pin_memw_.drive(Level::Low);   // ~MEMW: write to memory
-            pin_ior_.drive(Level::Low);    // ~IOR: read from IO device
-        } else if (transfer_type == 0x02) {
-            pin_memr_.drive(Level::Low);   // ~MEMR: read from memory
-            pin_iow_.drive(Level::Low);    // ~IOW: write to IO device
-        }
-        // verify (00): no strobes, address still generated
 
-        // U14 routes DMA's ~XMEMW/~XMEMR to system side (B->A during DMA).
-        // Re-nudge in case this is a continuation transfer that skipped S1.
+        if (command_ & 0x01) {
+            // Memory-to-memory: read phase uses ~MEMR only.
+            pin_memr_.drive(Level::Low);
+            // U12: MD->D (read from DRAM onto D bus)
+            if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::A);
+        } else {
+            // Normal DMA: assert strobes based on transfer type
+            uint8_t transfer_type = (ch.mode >> 2) & 0x03;
+            if (transfer_type == 0x01) {
+                pin_memw_.drive(Level::Low);
+                pin_ior_.drive(Level::Low);
+            } else if (transfer_type == 0x02) {
+                pin_memr_.drive(Level::Low);
+                pin_iow_.drive(Level::Low);
+            }
+        }
+
         if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::A);
 
-        spdlog::debug("[8237A] S2 ch{}: ~MEMW={} ~MEMR={} addr={:#06x}",
+        spdlog::debug("[8237A] S2 ch{}: ~MEMW={} ~MEMR={} addr={:#06x}{}",
                       active_ch_,
                       int(pin_memw_.level()), int(pin_memr_.level()),
-                      ch.current_address);
+                      ch.current_address,
+                      (command_ & 0x01) ? " (m2m read)" : "");
 
-        // Compressed timing: skip S3 (command register bit 0)
-        bool compressed = (command_ & 0x01) != 0;
+        bool compressed = (command_ & 0x08) != 0;
         state_ = compressed ? State::S4 : State::S3;
         break;
     }
@@ -511,6 +515,27 @@ void IC_8237A::on_clk_falling() {
         pin_ior_.drive(Level::High);
         pin_iow_.drive(Level::High);
 
+        // Memory-to-memory read phase complete: capture data, switch to write phase
+        if ((command_ & 0x01) && !mem2mem_write_) {
+            temp_ = read_data();
+            spdlog::debug("[8237A] S4 ch0 m2m read: temp=0x{:02X}, switching to ch1 write", temp_);
+
+            // Update ch0 address (source)
+            bool decrement = (ch.mode & 0x20) != 0;
+            if (decrement) ch.current_address--;
+            else           ch.current_address++;
+
+            // If ch0 address hold (command bit 1), restore address
+            if (command_ & 0x02)
+                ch.current_address = ch.base_address;
+
+            // Switch to ch1 for write phase
+            active_ch_ = 1;
+            mem2mem_write_ = true;
+            state_ = State::M2M_S1;
+            break;
+        }
+
         // Update address
         bool decrement = (ch.mode & 0x20) != 0;
         if (decrement)
@@ -518,61 +543,61 @@ void IC_8237A::on_clk_falling() {
         else
             ch.current_address++;
 
-        // Terminal count check
+        // Terminal count check (ch1 for m2m, active_ch_ otherwise)
         bool tc = false;
         spdlog::debug("[8237A] S4 ch{}: count={} addr={:#06x}", active_ch_, ch.current_count, ch.current_address);
         if (ch.current_count == 0) {
             tc = true;
             ch.tc_reached = true;
 
-            // Assert ~EOP (active low) -- will be deasserted next CLK falling
             pin_eop_.drive(Level::Low);
             eop_pending_ = true;
             spdlog::debug("[8237A] TC! ch{} ~EOP driven Low", active_ch_);
 
-            // Auto-initialize: reload base values
             if (ch.mode & 0x10) {
                 ch.current_address = ch.base_address;
                 ch.current_count = ch.base_count;
             } else {
-                ch.masked = true;  // mask channel after TC
+                ch.masked = true;
             }
         } else {
             ch.current_count--;
         }
 
-        // Determine whether to release the bus or continue
+        // Memory-to-memory write phase complete: loop back to ch0 read
+        if (mem2mem_write_) {
+            mem2mem_write_ = false;
+            if (tc) {
+                end_dma_service();
+            } else {
+                // Continue: switch back to ch0 for next read
+                active_ch_ = 0;
+                state_ = State::S1;
+            }
+            break;
+        }
+
+        // Normal DMA: determine whether to release the bus or continue
         uint8_t mode_type = (ch.mode >> 6) & 0x03;
-        // 00=demand, 01=single, 10=block, 11=cascade
         bool release_bus = false;
 
         if (mode_type == 0x01) {
-            // Single transfer: always release after each byte
             release_bus = true;
         } else if (mode_type == 0x00) {
-            // Demand: release if DREQ inactive or TC
             release_bus = tc || (pin_dreq_[active_ch_].level() != Level::High);
         } else if (mode_type == 0x02) {
-            // Block: release only on TC/EOP
             release_bus = tc;
         } else {
-            // Cascade: release on TC
             release_bus = tc;
         }
 
         if (release_bus) {
             end_dma_service();
         } else {
-            // Continue with next transfer.
-            // Optimization: skip S1 if upper address byte hasn't changed
-            // (datasheet: "S1 states only when updating of A8-A15 is necessary")
             uint8_t new_upper = static_cast<uint8_t>(ch.current_address >> 8);
             if (new_upper != prev_upper_addr_) {
-                state_ = State::S1;  // need to re-latch upper address
+                state_ = State::S1;
             } else {
-                // Drive updated A0-A7 directly, skip S1.
-                // Go to S2 to re-assert strobes next eval (not same eval
-                // as S4 deassert -- IO devices need to see the rising edge).
                 for (int i = 0; i < 8; ++i)
                     pin_a_[i].drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
                 state_ = State::S2;
@@ -580,6 +605,62 @@ void IC_8237A::on_clk_falling() {
         }
         break;
     }
+
+    // =====================================================================
+    // Memory-to-memory write phase (ch1 destination)
+    // =====================================================================
+    case State::M2M_S1: {
+        auto& ch = ch_[1];
+
+        // Drive ch1 address (destination)
+        for (int i = 0; i < 8; ++i)
+            pin_a_[i].drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
+        a_driving_ = true;
+
+        uint8_t upper = static_cast<uint8_t>(ch.current_address >> 8);
+        drive_data(upper);
+        prev_upper_addr_ = upper;
+
+        pin_adstb_.drive(Level::High);
+
+        // U12: D->MD (write to DRAM from D bus)
+        if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::B);
+
+        spdlog::debug("[8237A] M2M_S1 ch1: addr={:#06x} (write temp=0x{:02X})",
+                      ch.current_address, temp_);
+        state_ = State::M2M_S2;
+        break;
+    }
+
+    case State::M2M_S2: {
+        pin_adstb_.drive(Level::Low);
+
+        // Drive temp register data onto bus
+        drive_data(temp_);
+
+        // Assert ~MEMW
+        pin_memw_.drive(Level::Low);
+
+        if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::A);
+
+        spdlog::debug("[8237A] M2M_S2 ch1: ~MEMW={} data=0x{:02X}",
+                      int(pin_memw_.level()), temp_);
+
+        bool compressed = (command_ & 0x08) != 0;
+        state_ = compressed ? State::M2M_S4 : State::M2M_S3;
+        break;
+    }
+
+    case State::M2M_S3:
+        state_ = State::M2M_S4;
+        break;
+
+    case State::M2M_S4:
+        // Deassert strobes, release data, fall through to S4 for count/TC
+        pin_memw_.drive(Level::High);
+        release_data();
+        state_ = State::S4;  // S4 handles count, TC, and looping back to ch0
+        break;
 
     } // switch
 }
