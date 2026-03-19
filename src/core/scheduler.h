@@ -334,7 +334,7 @@ public:
                 if (sig_count > 4)
                     sigs += fmt::format("\\n+{} more", sig_count - 4);
                 const char* ec = (in_deg[i] > 0 && in_deg[j] > 0) ? "red" : "black";
-                dot += fmt::format("  n{} -> n{} [label=\"{}\" color={}];\n", j, i, sigs, ec);
+                dot += fmt::format("  n{} -> n{} [label=\"{}\" color={} fontcolor={}];\n", j, i, sigs, ec, ec);
             }
         }
         dot += "}\n";

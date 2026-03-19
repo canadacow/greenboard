@@ -51,7 +51,12 @@ void ISA_TestCard::install(IsaSlot& slot) {
     }
 
     // Pin directions for DAG.
-    for (int i = 0; i < 20; ++i) declare_input(sa_[i]);
+    // SA0-SA3: HiZ during DMA to break DAG cycle (U35 -> XA0-3 -> TestCard -> XD -> U35).
+    // During DMA the card doesn't use SA0-3 for port decode; it responds to ~DACK1.
+    declare_bidir_block({sa_[0], sa_[1], sa_[2], sa_[3]},
+        BidirDir::Input | BidirDir::HiZ,
+        [this]() { return dma_active_ ? BidirDir::HiZ : BidirDir::Input; });
+    for (int i = 4; i < 20; ++i) declare_input(sa_[i]);
     declare_input(ior_);
     declare_input(iow_);
     declare_async_input(dack1_);  // ~DACK1: cross-cycle (asserted by DMA controller)
