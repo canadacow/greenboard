@@ -114,14 +114,16 @@ void IC_8288::nudge_xcvr() {
     if (xcvr_x_) xcvr_x_->set_driving(dir);
     // U12: DIR=~XMEMR.  Memory read -> ~XMEMR=Low -> DIR=Low -> B->A (MD->D).
     // Memory write -> ~XMEMR=High -> DIR=High -> A->B (D->MD).
-    // Only nudge for memory cycles.
+    // Only nudge for memory cycles AND only when ~RAM_ADDR_SEL is Low (RAM address).
+    // For ROM addresses, ~RAM_ADDR_SEL is High and U12 must stay off.
     if (xcvr_m_) {
-        if (cycle_ == BusCycle::Fetch || cycle_ == BusCycle::MemR)
+        bool ram_selected = pin_ram_addr_sel_.level() == Level::Low;
+        if (ram_selected && (cycle_ == BusCycle::Fetch || cycle_ == BusCycle::MemR))
             xcvr_m_->set_driving(IC_74S245::Driving::A);  // B->A (MD->D)
-        else if (cycle_ == BusCycle::MemW)
+        else if (ram_selected && cycle_ == BusCycle::MemW)
             xcvr_m_->set_driving(IC_74S245::Driving::B);  // A->B (D->MD)
         else
-            xcvr_m_->set_driving(IC_74S245::Driving::None);  // I/O: disable
+            xcvr_m_->set_driving(IC_74S245::Driving::None);  // I/O or ROM: disable
     }
     // U14: CPU mode -> A->B (8288 commands to X-side)
     if (xcvr_c_)

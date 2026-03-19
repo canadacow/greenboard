@@ -175,9 +175,9 @@ void IC_8088::drive_address(uint32_t address) {
         pin_ad_[i].drive((address >> i) & 1 ? Level::High : Level::Low);
     for (int i = 0; i < 12; ++i)
         pin_a_upper_[i].drive((address >> (i + 8)) & 1 ? Level::High : Level::Low);
-    spdlog::trace("[8088] drive_address 0x{:05X} AD=0x{:02X} A8-15=0x{:02X} A16-19=0x{:01X} ad[0].idx={} a[0].idx={}",
+    spdlog::trace("[8088] drive_address 0x{:05X} AD=0x{:02X} A8-15=0x{:02X} A16-19=0x{:01X} CS={:04X} DS={:04X} ES={:04X} SS={:04X}",
                   address, address & 0xFF, (address >> 8) & 0xFF, (address >> 16) & 0xF,
-                  pin_ad_[0].idx, pin_a_upper_[0].idx);
+                  regs16()[REG_CS], regs16()[REG_DS], regs16()[REG_ES], regs16()[REG_SS]);
     spdlog::trace("[8088]   AD pool after drive: {}={} {}={} {}={} {}={} {}={} {}={} {}={} {}={}",
                   pin_ad_[0].idx, int(SignalPool::levels[pin_ad_[0].idx]),
                   pin_ad_[1].idx, int(SignalPool::levels[pin_ad_[1].idx]),

@@ -65,6 +65,7 @@ public:
     // U8 (AD<->D), U13 (D<->XD), U12 (D<->MD), U14 (cmd strobes).
     void set_xcvr(IC_74S245* u8, IC_74S245* u13 = nullptr,
                   IC_74S245* u12 = nullptr, IC_74S245* u14 = nullptr);
+    void set_ram_addr_sel(Pin pin) { pin_ram_addr_sel_ = pin; declare_async_input(pin_ram_addr_sel_); }
 
 protected:
     void on_power_on() override;
@@ -108,6 +109,9 @@ private:
     IC_74S245* xcvr_x_ = nullptr;  // U13: D <-> XD
     IC_74S245* xcvr_m_ = nullptr;  // U12: D <-> MD
     IC_74S245* xcvr_c_ = nullptr;  // U14: cmd strobes
+
+    // U12 gate: only nudge U12 when ~RAM_ADDR_SEL is Low (address in RAM range).
+    Pin pin_ram_addr_sel_;
 
     void nudge_xcvr();
     void disable_xcvr();

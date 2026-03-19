@@ -28,6 +28,9 @@
 #include <cstring>
 #include <fstream>
 #include <vector>
+#ifdef _WIN32
+extern "C" __declspec(dllimport) int __stdcall IsDebuggerPresent();
+#endif
 #include <string>
 #include <thread>
 #include <chrono>
@@ -238,11 +241,16 @@ int main() {
         clk_gen->power_on();
         clk_gen->psu_power_on();
 
-        // Wait for CPU to halt, with safety timeout.
+        // Wait for CPU to halt, with safety timeout (disabled under debugger).
         {
+#ifdef _WIN32
+            bool debugger = ::IsDebuggerPresent();
+#else
+            bool debugger = false;
+#endif
             constexpr uint64_t secondTimeout = 60;
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secondTimeout);
-            while (!cpu->halted() && std::chrono::steady_clock::now() < deadline)
+            while (!cpu->halted() && (debugger || std::chrono::steady_clock::now() < deadline))
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             if (!cpu->halted())
                 spdlog::warn("  timeout -- CPU did not halt within {}s", secondTimeout);

@@ -525,6 +525,7 @@ struct TestBoard {
         // Fold all four transceivers into the 8288 so transfers happen
         // synchronously with ~DEN/DT/~R assertion (no one-cycle DAG lag).
         bc->set_xcvr(xcvr, xcvr13_ic, mem_xcvr, xcvr14_ic);
+        bc->set_ram_addr_sel(ram_addr_sel.pin());
 
         // U10: 74S373 Address Latch (low byte: AD0-AD7 -> XA0-XA7)
         // BRD: pin 1 (~OE) = AEN_BRD.  During normal CPU ops AEN_BRD is Low
