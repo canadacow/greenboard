@@ -82,7 +82,7 @@ public:
     // Build per-permutation wave plans for all bidirectional pin configurations.
     // For N bidir blocks across all components, builds 2^N DAGs. At runtime,
     // evaluate_no_wake() checks each block's lambda to select the correct plan.
-    static constexpr const char* WAVE_OUTPUT_DIR = "wave_output";
+    static inline const std::string WAVE_OUTPUT_DIR = std::string(PROJECT_ROOT) + "/wave_output";
 
     void dump_unified_waves() {
         // Clean and recreate wave output directory.

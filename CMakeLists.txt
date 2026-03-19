@@ -57,6 +57,9 @@ add_executable(bench
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt)
+target_compile_definitions(bench PRIVATE
+    PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
+)
 
 # Organize source files into VS filters matching directory structure
 source_group(TREE ${CMAKE_SOURCE_DIR}/src PREFIX "Source Files" FILES ${BENCH_HEADERS})
@@ -151,4 +154,5 @@ target_compile_definitions(test_8088 PRIVATE
     ASM_TEST_DIR="${ASM_BIN_DIR}"
     ASM_SRC_DIR="${ASM_TEST_DIR}"
     ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets"
+    PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
 )

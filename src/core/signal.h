@@ -87,9 +87,6 @@ struct Pin {
 #endif
         SignalPool::levels[idx] = Level::HiZ;
     }
-
-    // Alias for drive() -- no double buffering, so immediate is the default.
-    void drive_immediate(Level lvl) { drive(lvl); }
 };
 
 // Contiguous block of N pool slots. Stores one base index; read/write

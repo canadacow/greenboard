@@ -117,7 +117,7 @@ void IC_8288::nudge_xcvr() {
     // Only nudge for memory cycles AND only when ~RAM_ADDR_SEL is Low (RAM address).
     // For ROM addresses, ~RAM_ADDR_SEL is High and U12 must stay off.
     if (xcvr_m_) {
-        bool ram_selected = pin_ram_addr_sel_.level() == Level::Low;
+        bool ram_selected = (pin_a18_.level() != Level::High && pin_a19_.level() != Level::High);
         if (ram_selected && (cycle_ == BusCycle::Fetch || cycle_ == BusCycle::MemR))
             xcvr_m_->set_driving(IC_74S245::Driving::A);  // B->A (MD->D)
         else if (ram_selected && cycle_ == BusCycle::MemW)
@@ -132,11 +132,11 @@ void IC_8288::nudge_xcvr() {
 
 void IC_8288::release_command() {
     // Deassert all command strobes (active low -> High).
-    pin_memr_.drive_immediate(Level::High);
-    pin_memw_.drive_immediate(Level::High);
-    pin_ior_.drive_immediate(Level::High);
-    pin_iow_.drive_immediate(Level::High);
-    pin_inta_.drive_immediate(Level::High);
+    pin_memr_.drive(Level::High);
+    pin_memw_.drive(Level::High);
+    pin_ior_.drive(Level::High);
+    pin_iow_.drive(Level::High);
+    pin_inta_.drive(Level::High);
 }
 
 void IC_8288::on_clk_rising() {
@@ -144,8 +144,8 @@ void IC_8288::on_clk_rising() {
     if (pin_aen_.level() == Level::Low) {
         if (state_ != State::Idle) {
             release_command();
-            pin_ale_.drive_immediate(Level::Low);
-            pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
+            pin_ale_.drive(Level::Low);
+            pin_den_.drive(Level::High);  // ~DEN deasserted
             disable_xcvr();
             state_ = State::Idle;
             cycle_ = BusCycle::Passive;
@@ -175,8 +175,8 @@ void IC_8288::on_clk_rising() {
                 state_ = State::T1;
 
                 bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
-                pin_ale_.drive_immediate(Level::High);
-                pin_dtr_.drive_immediate(is_write ? Level::High : Level::Low);
+                pin_ale_.drive(Level::High);
+                pin_dtr_.drive(is_write ? Level::High : Level::Low);
                 spdlog::trace("[{}] Idle->T1 cycle={} DT/~R={}", name(), cyc_name(bus), is_write ? "H(wr)" : "L(rd)");
             }
             break;
@@ -184,23 +184,23 @@ void IC_8288::on_clk_rising() {
 
         case State::T1: {
             state_ = State::T2;
-            pin_ale_.drive_immediate(Level::Low);
+            pin_ale_.drive(Level::Low);
             // Assert command strobe and ~DEN (was deferred to falling edge).
             {
                 bool cen = pin_cen_.level() == Level::High;
                 if (cen) {
                     switch (cycle_) {
-                        case BusCycle::INTA:  pin_inta_.drive_immediate(Level::Low); break;
-                        case BusCycle::IOR:   pin_ior_.drive_immediate(Level::Low);  break;
-                        case BusCycle::IOW:   pin_iow_.drive_immediate(Level::Low);  break;
+                        case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
+                        case BusCycle::IOR:   pin_ior_.drive(Level::Low);  break;
+                        case BusCycle::IOW:   pin_iow_.drive(Level::Low);  break;
                         case BusCycle::Fetch:
-                        case BusCycle::MemR:  pin_memr_.drive_immediate(Level::Low); break;
-                        case BusCycle::MemW:  pin_memw_.drive_immediate(Level::Low); break;
+                        case BusCycle::MemR:  pin_memr_.drive(Level::Low); break;
+                        case BusCycle::MemW:  pin_memw_.drive(Level::Low); break;
                         default: break;
                     }
                 }
                 spdlog::trace("[{}] T1->T2 cycle={} cmd asserted CEN={}", name(), cyc_name(cycle_), cen);
-                pin_den_.drive_immediate(Level::Low);
+                pin_den_.drive(Level::Low);
             }
             nudge_xcvr();
             break;
@@ -217,7 +217,7 @@ void IC_8288::on_clk_rising() {
         case State::T3: {
             // T4: Deassert commands, deassert ~DEN, back to idle.
             release_command();
-            pin_den_.drive_immediate(Level::High);  // ~DEN deasserted
+            pin_den_.drive(Level::High);  // ~DEN deasserted
             disable_xcvr();
             spdlog::trace("[{}] T3->T4(Idle) cycle={} cmds released", name(), cyc_name(cycle_));
             state_ = State::Idle;
