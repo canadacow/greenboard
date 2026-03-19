@@ -52,7 +52,7 @@ void IC_8237A::install(Socket& socket) {
 
     // Pin directions for wiring visualization / DAG construction.
     declare_input(pin_ior_); declare_input(pin_iow_);
-    declare_async_input(pin_cs_);    // ~CS: CPU programming only, never during DMA transfers
+    declare_input(pin_cs_);          // ~CS: must be regular input so falling edge triggers on_signal_change
     declare_async_input(pin_clk_);   // DCLK: clock input, no combinational dependency
     declare_input(pin_reset_);
     declare_async_input(pin_hlda_);  // HLDA: latched by external FFs, cross-cycle
@@ -114,24 +114,30 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     if (reset_cur == Level::High && reset_prev_ != Level::High)
         on_reset();
 
-    // Bus write: ~IOW falling while ~CS active
-    if (iow_cur == Level::Low && iow_prev_ != Level::Low && cs_cur == Level::Low)
+    // Deferred bus operations: execute pending read/write (data is now stable)
+    if (write_pending_) {
         on_bus_write();
-    if (cs_cur == Level::Low && cs_prev_ != Level::Low && iow_cur == Level::Low)
-        on_bus_write();
+        write_pending_ = false;
+    } else if (iow_cur == Level::Low && cs_cur == Level::Low) {
+        write_pending_ = true;
+    }
 
-    // Bus read: ~IOR falling while ~CS active
-    if (ior_cur == Level::Low && ior_prev_ != Level::Low && cs_cur == Level::Low)
+    if (read_pending_) {
         on_bus_read();
-    if (cs_cur == Level::Low && cs_prev_ != Level::Low && ior_cur == Level::Low)
-        on_bus_read();
+        read_pending_ = false;
+    } else if (ior_cur == Level::Low && cs_cur == Level::Low) {
+        read_pending_ = true;
+    }
 
-    // Release data bus when ~IOR or ~CS goes inactive (was active Low, now not)
-    if ((ior_cur != Level::Low && ior_prev_ == Level::Low) ||
-        (cs_cur != Level::Low && cs_prev_ == Level::Low))
+    // Release data bus when read goes inactive
+    if (db_driving_ && !(ior_cur == Level::Low && cs_cur == Level::Low))
         release_data();
 
     // DREQ changes -- check for new DMA requests
+    spdlog::trace("[8237A] DREQ: ch0={} ch1={} ch2={} ch3={} disabled={} state={}",
+                  int(pin_dreq_[0].level()), int(pin_dreq_[1].level()),
+                  int(pin_dreq_[2].level()), int(pin_dreq_[3].level()),
+                  disabled_, int(state_));    
     evaluate_dreq();
 
     // Advance state machine. Each call to on_signal_change is one full cycle, always
@@ -175,6 +181,8 @@ void IC_8237A::on_reset() {
     }
 
     // Deassert outputs
+    write_pending_ = false;
+    read_pending_ = false;
     pin_hrq_.drive(Level::Low);
     pin_eop_.drive(Level::High);          // ~EOP inactive (active low)
     for (int i = 0; i < 4; ++i)
@@ -330,7 +338,9 @@ void IC_8237A::evaluate_dreq() {
     // Fixed priority: CH0 highest
     for (int i = 0; i < 4; ++i) {
         if (ch_[i].masked) continue;
-        bool dreq = (pin_dreq_[i].level() == Level::High) || ch_[i].request;
+        Level pinLevel = pin_dreq_[i].level();
+
+        bool dreq = (pinLevel == Level::High) || ch_[i].request;
         if (dreq) {
             // Assert HRQ, wait for HLDA
             active_ch_ = i;
