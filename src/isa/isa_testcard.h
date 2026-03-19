@@ -17,11 +17,11 @@ namespace bench {
 //     Port 0xF4: write = assert DRQ1 (start DMA transfer)
 //     Port 0xF5: write = deassert DRQ1
 //     The card drives sequential bytes from dma_buf_ on each ~DACK1 pulse.
+//   - MMIO: 16KB at 0xB8000-0xBBFFF (CGA-style video RAM region)
+//     Responds to ~MEMR/~MEMW when address is in range.
 //
-// Reads ISA bus signals (SA0-SA19, SD0-SD7, ~IOR, ~IOW) directly from
-// the slot connector. Reacts to ~IOR/~IOW edges to drive/read the data
-// bus -- no T-state machine needed since the 8288 has already decoded
-// the bus cycle type.
+// Reads ISA bus signals (SA0-SA19, SD0-SD7, ~IOR, ~IOW, ~MEMR, ~MEMW)
+// directly from the slot connector.
 class ISA_TestCard : public CallbackComponent {
 public:
     ISA_TestCard();
@@ -35,6 +35,11 @@ public:
     static constexpr int DMA_BUF_SIZE = 256;
     uint8_t* dma_buf() { return dma_buf_; }
 
+    // MMIO: 16KB at 0xB8000-0xBBFFF (test harness can preload).
+    uint8_t* mmio_data() { return mmio_; }
+    static constexpr uint32_t MMIO_BASE = 0xB8000;
+    static constexpr uint32_t MMIO_SIZE = 16 * 1024;
+
 protected:
     void on_power_on() override;
     void on_signal_change(Fiber caller) override;
@@ -45,6 +50,8 @@ private:
     Pin sa_[20];      // SA0-SA19 (address bus, input)
     Pin ior_;         // ~IOR (input, active-low read strobe)
     Pin iow_;         // ~IOW (input, active-low write strobe)
+    Pin memr_;        // ~MEMR (input, active-low memory read)
+    Pin memw_;        // ~MEMW (input, active-low memory write)
 
     // IRQ output pins (test trigger/clear)
     Pin irq_pin_[8];  // IRQ0-IRQ7 (output)
@@ -72,6 +79,10 @@ private:
     // Edge tracking
     Level ior_prev_ = Level::HiZ;
     Level iow_prev_ = Level::HiZ;
+    Level memr_prev_ = Level::HiZ;
+    Level memw_prev_ = Level::HiZ;
+    bool mem_read_pending_ = false;
+    bool mem_write_pending_ = false;
     bool data_driven_ = false;
     uint8_t read_byte_ = 0;
     bool write_pending_ = false;
@@ -85,6 +96,9 @@ private:
 
     // Address decode: this card claims ports 0x80-0xFF.
     static bool my_port(uint16_t port) { return (port & 0xFF80) == 0x0080; }
+
+    uint8_t mmio_[MMIO_SIZE] = {};
+    static bool my_mmio(uint32_t addr) { return addr >= MMIO_BASE && addr < MMIO_BASE + MMIO_SIZE; }
 
     // I/O handlers
     uint8_t io_read(uint16_t port);

@@ -25,9 +25,11 @@ void ISA_TestCard::install(IsaSlot& slot) {
         }
     }
 
-    // Control: ~IOR, ~IOW (subscribe for edge detection).
+    // Control: ~IOR, ~IOW, ~MEMR, ~MEMW (subscribe for edge detection).
     if (slot.ior) { ior_ = slot.ior->pin(); slot.ior->connect(this); }
     if (slot.iow) { iow_ = slot.iow->pin(); slot.iow->connect(this); }
+    if (slot.memr) { memr_ = slot.memr->pin(); slot.memr->connect(this); }
+    if (slot.memw) { memw_ = slot.memw->pin(); slot.memw->connect(this); }
 
     // DMA channel 1: ~DACK1 (input), DRQ1 (output).
     if (slot.dack1) { dack1_ = slot.dack1->pin(); slot.dack1->connect(this); }
@@ -59,6 +61,8 @@ void ISA_TestCard::install(IsaSlot& slot) {
     for (int i = 4; i < 20; ++i) declare_input(sa_[i]);
     declare_input(ior_);
     declare_input(iow_);
+    declare_input(memr_);
+    declare_input(memw_);
     declare_async_input(dack1_);  // ~DACK1: cross-cycle (asserted by DMA controller)
     declare_async_input(tc_);    // T/C: cross-cycle pulse from DMA controller
     for (int i = 2; i < 8; ++i) {
@@ -90,6 +94,12 @@ void ISA_TestCard::install(IsaSlot& slot) {
                 return BidirDir::HiZ;
             }
             if (iow_lev == Level::Low) return BidirDir::Input;
+            // MMIO read: drive data when ~MEMR is active and address in range.
+            if (memr_.level() == Level::Low && my_mmio(read_address()))
+                return BidirDir::Output;
+            // MMIO write: accept data when ~MEMW is active and address in range.
+            if (memw_.level() == Level::Low && my_mmio(read_address()))
+                return BidirDir::Input;
             return BidirDir::HiZ;
         });
 }
@@ -103,6 +113,10 @@ void ISA_TestCard::on_power_on() {
     read_byte_ = 0;
     write_pending_ = false;
     read_pending_ = false;
+    mem_write_pending_ = false;
+    mem_read_pending_ = false;
+    memr_prev_ = Level::HiZ;
+    memw_prev_ = Level::HiZ;
     dma_ptr_ = 0;
     dma_active_ = false;
 }
@@ -187,6 +201,45 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
         }
     }
     ior_prev_ = ior_cur;
+
+    // --- MMIO (memory-mapped I/O at 0xB8000-0xBBFFF) ---
+    Level memr_cur = memr_.level();
+    Level memw_cur = memw_.level();
+
+    // Write: deferred one eval so data bus has propagated.
+    if (mem_write_pending_) {
+        uint32_t addr = read_address();
+        if (my_mmio(addr)) {
+            uint8_t val = read_sd();
+            mmio_[addr - MMIO_BASE] = val;
+            spdlog::trace("[{}] MMIO WRITE 0x{:05X} = 0x{:02X}", name(), addr, val);
+        }
+        mem_write_pending_ = false;
+    } else if (memw_cur == Level::Low && memw_prev_ != Level::Low) {
+        uint32_t addr = read_address();
+        if (my_mmio(addr))
+            mem_write_pending_ = true;
+    }
+    memw_prev_ = memw_cur;
+
+    // Read: deferred one eval so bidir has declared Output.
+    if (mem_read_pending_) {
+        uint32_t addr = read_address();
+        if (my_mmio(addr)) {
+            uint8_t val = mmio_[addr - MMIO_BASE];
+            spdlog::trace("[{}] MMIO READ 0x{:05X} = 0x{:02X}", name(), addr, val);
+            drive_sd(val);
+        }
+        mem_read_pending_ = false;
+    } else if (memr_cur == Level::Low && memr_prev_ != Level::Low) {
+        uint32_t addr = read_address();
+        if (my_mmio(addr))
+            mem_read_pending_ = true;
+    } else if (memr_cur != Level::Low && memr_prev_ == Level::Low) {
+        // ~MEMR rising edge: release bus
+        if (data_driven_) release_sd();
+    }
+    memr_prev_ = memr_cur;
 }
 
 // =========================================================================
