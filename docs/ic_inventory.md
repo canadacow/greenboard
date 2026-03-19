@@ -2,7 +2,7 @@
 
 Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets)
 
-## Implemented (29 IC types, 84 sockets)
+## Implemented (30 IC types, 85 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
@@ -29,6 +29,7 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U19 | 74LS670 | DMA page register (4x4 register file) |
 | U84 | 74S10 | Triple 3-input NAND (DACK/AEN gating) |
 | U27 | 74LS02 | Quad NOR (ROM/RAM select decode) |
+| U50 | 74S02 | Quad NOR (~DMA_AEN, DMA wait state logic) |
 | U101 | 74LS32 | Quad OR (~DMA_CS generation) |
 | U37-U45,U53-U61,U69-U77,U85-U93 | 4164 (IC_DRAM_256K) | DRAM banks 0-3 (36 chips, 256KB + parity) |
 | U28-U33 | 8K_X_8ROS | ROM (6 sockets) |
@@ -47,24 +48,25 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 | U100 | 20DIP300 | 20 | Empty socket (unpopulated) |
 | XU4 | 8087 socket | 40 | Math coprocessor (optional) |
 
-## Not Implemented -- Glue Logic (3 sockets)
+## Not Implemented -- Glue Logic (2 sockets)
 
 | Ref | IC | Role |
 |---|---|---|
-| U50 | 74S02 | Quad NOR |
 | U63 | 74S38 | Quad OC NAND |
 | U80 | 74S125 | Quad tri-state buffer |
 
 ## DMA Subsystem
 
-The 8237A (U35) and its supporting ICs (U67, U98, U19, U52, U62, U79, U49, U81, TD1) can be disabled en masse for performance. On the real 5150, DMA channel 0 performed DRAM refresh. Since the emulator uses behavioral DRAM (no charge leakage), refresh is unnecessary. Disabling DMA removes these ICs from the scheduler's evaluate loop, reducing per-cycle overhead.
+The 8237A (U35) and its supporting glue logic (U67, U98, U19, U50, U52, U62, U79, U49, U81, TD1) implement full 4-channel DMA. Channel 0 handles DRAM refresh (auto-init, single transfer from PIT CH1). Channels 1-3 are available for ISA peripherals.
 
-DMA can be re-enabled for testing DMA transfers (e.g. floppy, ISA DMA devices).
+DMA transfers require careful DAG cycle management. The 8237A's outputs (address, DACKs, HRQ, ~EOP, ~MEMR/~MEMW) feed back through the decode chain to its own inputs (~DMA_CS, CEN). These cycles are broken with bidir blocks that return HiZ for signals that are stable during a given phase -- e.g. HRQ/~EOP are HiZ during active transfers (S1-S4) since they don't change combinationally.
+
+The 8237A uses a deferred write/read pattern: when ~IOW+~CS both go Low, a pending flag is set. The actual register write executes on the next evaluation, when bus data has propagated through the transceiver chain to the XD bus.
 
 ## Non-IC Components
 
 - J1-J5: ISA slots (62p each, wired in test bench -- direct to XA/D/cmd, no buffer ICs)
-  - J1: ISA_TestCard (generic I/O 0x80-0xFF, test IRQ trigger 0xF0/0xF1)
+  - J1: ISA_TestCard (I/O 0x80-0xFF, IRQ trigger 0xF0/0xF1, DMA ch1 data source 0xF4)
 - J6: Cassette port, J7: Keyboard port, J8: +RUN jumper
 - SW1, SW2: DIP switch banks (config: RAM size, display, FPU)
 

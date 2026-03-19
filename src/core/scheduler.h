@@ -242,10 +242,11 @@ public:
             }
             spdlog::info("[Scheduler] wrote {}", dot_path);
             int rc = std::system(fmt::format("\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg {} -o {}", dot_path, svg_path).c_str());
-            if (rc == 0)
+
+            if (rc == 0) {
                 spdlog::info("[Scheduler] rendered {}", svg_path);
-            else
-                spdlog::warn("[Scheduler] dot failed (rc={}), SVG not generated for {}", rc, svg_path);
+            }
+            std::filesystem::remove(dot_path);
         }
     }
 
@@ -354,10 +355,12 @@ public:
         }
         spdlog::critical("[Scheduler] Wrote {}", dot_path);
         int rc = std::system(fmt::format("\"C:/Program Files/Graphviz/bin/dot.exe\" -Tsvg {} -o {}", dot_path, svg_path).c_str());
-        if (rc == 0)
+        if (rc == 0) {
             spdlog::critical("[Scheduler] Rendered {}", svg_path);
-        else
+            std::filesystem::remove(dot_path);
+        } else {
             spdlog::critical("[Scheduler] dot failed (rc={}), SVG not generated", rc);
+        }
     }
 
 private:

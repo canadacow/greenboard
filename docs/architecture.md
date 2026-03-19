@@ -51,12 +51,36 @@ Lightweight, non-owning. Called by the 8284A at each CLK cycle.
 
 ```
 evaluate(Fiber caller):
-  1. Compute DAG permutation from bidirectional pin state
-  2. Look up (or solve on cache miss) the topological wave plan
-  3. For each wave: call on_signal_change() on every component in that wave
+  1. Evaluate bidir lambdas to determine current pin directions
+  2. Compute DAG permutation key from bidir state
+  3. Look up (or solve on cache miss) the topological wave plan
+  4. For each wave: call on_signal_change() on every component in that wave
 ```
 
-The scheduler builds a dependency DAG from pin declarations (`declare_input`/`declare_output`). Bidirectional pins (e.g. 74S245 data bus) create multiple DAG permutations -- one per combination of directions. Permutations are solved on demand and cached in an `unordered_map<int, WavePlan>`.
+**One evaluate() = one full clock cycle.** Each component's `on_signal_change()` is called exactly once per cycle. There is no edge detection at the scheduler level -- components track their own `_prev_` state internally to detect rising/falling edges.
+
+The scheduler builds a dependency DAG from pin declarations:
+- `declare_input(pin)` -- permanent input edge (component depends on whoever drives this signal)
+- `declare_output(pin)` -- permanent output edge (component drives this signal)
+- `declare_async_input(pin)` -- reads the signal but creates no DAG edge (value from previous cycle)
+- `declare_bidir_block(pins, dirs, lambda)` -- conditional edges that switch direction at runtime
+
+Bidirectional pins (e.g. 74S245 data bus, DMA address pins) create multiple DAG permutations -- one per combination of directions. The bidir lambda runs at the start of each evaluate to determine the current direction (Input, Output, or HiZ). HiZ removes all DAG edges for those pins, effectively making the component invisible on that bus for that cycle. A bidir returning HiZ overrides any `declare_output` on the same pin.
+
+Permutations are solved on demand (topological sort) and cached in an `unordered_map<uint64_t, WavePlan>`. On a DAG cycle, the scheduler dumps a Graphviz SVG (`wave_output/cycle_debug.svg`) showing the stuck components and conflicting edges in red.
+
+### Bus Ownership and Transceiver Control
+
+The 8288 bus controller and 8237A DMA controller are **authoritative** for all 74S245 bus transceivers. They call `set_driving()` directly on U8 (AD<->D), U12 (D<->MD), U13 (D<->XD), and U14 (cmd strobes) to set direction before the bidir lambda runs. This ensures the DAG permutation reflects the correct data flow direction for the current bus cycle.
+
+- **CPU mode**: 8288 controls all four transceivers based on DT/~R and ~DEN. For memory reads, U12 is only enabled when A18=Low and A19=Low (RAM address range); ROM addresses leave U12 off so ROM data flows through U13 instead.
+- **DMA mode**: 8237A takes over U14 (B->A direction so DMA's ~MEMR/~MEMW reach the system bus). U8/U13 go HiZ. U12 direction depends on transfer type (IO->mem write vs mem->IO read).
+
+### Deferred Bus Operations (Pending Pattern)
+
+Several peripherals (8253 PIT, 8237A DMA, ISA TestCard, 8K ROM) use a deferred read/write pattern. When a chip-select and strobe go active in the same cycle, the component sets a `_pending_` flag but does NOT read/write data yet -- the bus data hasn't propagated through the transceiver chain. On the next `on_signal_change()` call, the pending flag is consumed and the actual read/write executes with valid bus data.
+
+This is necessary because the 8288's transceiver nudge and the address decode chain settle in the same evaluation cycle, but the actual data transfer through the 74S245 chain happens one wave later than the component's `on_signal_change()`.
 
 ### SignalPool
 
@@ -181,9 +205,9 @@ Design principles:
 
 ## DMA Subsystem
 
-The 8237A DMA controller and its supporting glue logic (U67, U98, U19, U52, U62, U79, U49, U81, TD1) can be disabled to reduce the number of ICs evaluated per CLK cycle. On the real 5150, DMA channel 0 performed DRAM refresh (~15 us intervals). Since the emulator's DRAM is behavioral (no charge leakage), refresh cycles are unnecessary. Disabling DMA is equivalent to replacing the 4164 DRAM with SRAM.
+The 8237A DMA controller (U35) and its supporting glue logic (U50, U52, U67, U98, U19, U62, U79, U49, U81, TD1) implement full 4-channel DMA with single/block/demand transfer modes. Channel 0 handles DRAM refresh via auto-init single transfers triggered by PIT channel 1. Channels 1-3 serve ISA peripherals.
 
-DMA can be re-enabled for testing DMA transfers or when ISA devices require it.
+DMA outputs (address, DACKs, HRQ, ~EOP, ~MEMR/~MEMW) feed back through the address decode chain to the 8237A's own inputs (~DMA_CS, CEN), creating DAG cycles. These are resolved with bidir blocks that return HiZ for signals stable during a given DMA phase. The 8237A uses deferred register writes (pending flag pattern) since bus data arrives one evaluation after ~IOW/~CS assert.
 
 ## Future
 
