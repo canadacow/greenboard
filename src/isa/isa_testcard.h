@@ -11,12 +11,11 @@ namespace bench {
 //   - I/O port space for ports > 0x7F (non hardware-decoded range)
 //   - Test trigger port 0xF0: write bit N to raise IRQ N
 //   - Test clear port 0xF1: write bit N to lower IRQ N
-//   - DMA channel 1 support:
-//     Port 0xF2: write = load DMA buffer pointer offset (low byte)
-//     Port 0xF3: write = load DMA buffer pointer offset (high byte)
-//     Port 0xF4: write = assert DRQ1 (start DMA transfer)
-//     Port 0xF5: write = deassert DRQ1
-//     The card drives sequential bytes from dma_buf_ on each ~DACK1 pulse.
+//   - DMA channels 1-3 support:
+//     Port 0xF4: write channel (1-3) = assert DRQn (start DMA transfer)
+//     Port 0xF5: write channel (1-3) = deassert DRQn
+//     Port 0xF6: write IRQ number (2-7) for DMA completion notification
+//     The card drives sequential bytes from dma_buf_ on each ~DACKn pulse.
 //   - MMIO: 16KB at 0xB8000-0xBBFFF (CGA-style video RAM region)
 //     Responds to ~MEMR/~MEMW when address is in range.
 //
@@ -57,10 +56,11 @@ private:
     Pin irq_pin_[8];  // IRQ0-IRQ7 (output)
     Signal* irq_sig_[8] = {};
 
-    // DMA channel 1 pins
-    Pin dack1_;       // ~DACK1 (input, active-low DMA acknowledge)
-    Pin drq1_;        // DRQ1 (output, DMA request)
-    Signal* drq1_sig_ = nullptr;
+    // DMA channels 1-3: ~DACKn (input), DRQn (output)
+    Pin dack_[4];         // ~DACK0-3 (input, only 1-3 used)
+    Pin drq_[4];          // DRQ0-3 (output, only 1-3 used)
+    Signal* drq_sig_[4] = {};
+    Level dack_prev_[4] = {Level::HiZ, Level::HiZ, Level::HiZ, Level::HiZ};
 
     // T/C (terminal count) from ISA bus -- fires when DMA transfer completes.
     Pin tc_;          // T/C (input, active-high terminal count pulse)
@@ -68,12 +68,11 @@ private:
     // I/O port space
     std::unique_ptr<uint8_t[]> io_ = std::make_unique<uint8_t[]>(1 << 16);
 
-    // DMA transfer buffer and state
+    // DMA transfer buffer and state (shared across channels)
     uint8_t dma_buf_[DMA_BUF_SIZE] = {};
     uint16_t dma_ptr_ = 0;        // current offset into dma_buf_
-    bool dma_active_ = false;     // DRQ1 asserted
-    uint8_t dma_irq_ = 5;        // IRQ to fire on DMA completion (default IRQ5)
-    Level dack1_prev_ = Level::HiZ;
+    int dma_active_ch_ = -1;      // which channel is active (-1 = none)
+    uint8_t dma_irq_ = 5;         // IRQ to fire on DMA completion (default IRQ5)
     Level tc_prev_ = Level::HiZ;
 
     // Edge tracking
@@ -103,6 +102,9 @@ private:
     // I/O handlers
     uint8_t io_read(uint16_t port);
     void    io_write(uint16_t port, uint8_t val);
+
+    // Helper: is any DMA channel active?
+    bool dma_active() const { return dma_active_ch_ >= 0; }
 };
 
 } // namespace bench

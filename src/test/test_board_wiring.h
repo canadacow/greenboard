@@ -1195,9 +1195,11 @@ struct TestBoard {
             slot.wire_pin(6, &d3);  slot.wire_pin(7, &d2);
             slot.wire_pin(8, &d1);  slot.wire_pin(9, &d0);
 
-            // Address bus: SA0-SA19 = XA0-XA19 (pins 31..12 = SA0..SA19)
+            // Address bus: SA0-SA19 from LA (latch outputs = A bus).
+            // On the real 5150, A0-A19 is a single bus shared by the
+            // 74S373 latches, 74S244 buffers, muxes, and ISA slots.
             for (int a = 0; a < 20; ++a)
-                slot.wire_pin(31 - a, &xa[a]);
+                slot.wire_pin(31 - a, &la[a]);
 
             // Control signals: system-side per BRD (J5 nets are ~IOR/~IOW/~MEMR/~MEMW,
             // not the X-side versions).  U14 routes DMA commands to system side.

@@ -43,6 +43,14 @@
 ; @expect 0516 0001 Run2: Bytes 4-7 "m ip"
 ; @expect 0518 0001 Run2: Last 4 bytes "et, "
 ; @expect 051A 001C Run2: Byte count (28)
+; @expect 0520 0001 Ch2: DMA TC reached
+; @expect 0522 0001 Ch2: IRQ5 completion fired
+; @expect 0524 0001 Ch2: First 4 bytes "Lore"
+; @expect 052A 001C Ch2: Byte count (28)
+; @expect 0530 0001 Ch3 block: DMA TC reached
+; @expect 0532 0001 Ch3 block: IRQ5 completion fired
+; @expect 0534 0001 Ch3 block: First 4 bytes "Lore"
+; @expect 053A 001C Ch3 block: Byte count (28)
 ;
 cpu 8086
 org 0x0100
@@ -305,6 +313,150 @@ mov word [0x0518], 0x0001
 ; Store byte count for run 2
 mov word [0x051A], DMA_COUNT
 
+; =====================================================================
+; RUN 3: DMA channel 2, single transfer mode to 0x4000
+; =====================================================================
+mov word [0x0522], 0x0000
+mov word [0x0034], irq5_handler3
+mov word [0x0036], 0x0100
+
+; Master clear
+mov al, 0x00
+out 0x0D, al
+
+; Clear flip-flop, set ch2 address = 0x4000
+out 0x0C, al
+mov al, 0x00
+out 0x04, al              ; ch2 addr low
+mov al, 0x40
+out 0x04, al              ; ch2 addr high
+
+; Clear flip-flop, set ch2 count = DMA_COUNT - 1
+mov al, 0x00
+out 0x0C, al
+mov al, ((DMA_COUNT - 1) & 0xFF)
+out 0x05, al              ; ch2 count low
+mov al, ((DMA_COUNT - 1) >> 8)
+out 0x05, al              ; ch2 count high
+
+; Mode: single transfer, write (IO->mem), ch2 = 0x45 but ch2 = 0100_0110 = 0x46
+mov al, 0x46
+out 0x0B, al
+
+; Page register ch2 = 0 (port 0x81)
+mov al, 0x00
+out 0x81, al
+
+; Unmask ch2: bits [1:0]=10 (ch2), bit 2=0 (unmask) = 0x02
+mov al, 0x02
+out 0x0A, al
+
+; Start DMA on ch2 via test card
+mov al, 0x02
+out 0xF4, al
+
+; Wait for completion
+mov cx, 0xFFFF
+.wait_loop3:
+    cmp word [0x0522], 0x0001
+    je .dma3_done
+    nop
+    loop .wait_loop3
+.dma3_done:
+
+; Check TC
+in al, 0x08
+test al, 0x04             ; bit 2 = ch2 TC
+jz .no_tc3
+mov word [0x0520], 0x0001
+.no_tc3:
+
+; Check first 4 bytes at 0x4000: "Lore"
+cmp byte [0x4000], 0x4C
+jne .fail3_first4
+cmp byte [0x4001], 0x6F
+jne .fail3_first4
+cmp byte [0x4002], 0x72
+jne .fail3_first4
+cmp byte [0x4003], 0x65
+jne .fail3_first4
+mov word [0x0524], 0x0001
+.fail3_first4:
+
+mov word [0x052A], DMA_COUNT
+
+; =====================================================================
+; RUN 4: DMA channel 3, block transfer mode to 0x5000
+; =====================================================================
+mov word [0x0532], 0x0000
+mov word [0x0034], irq5_handler4
+mov word [0x0036], 0x0100
+
+; Master clear
+mov al, 0x00
+out 0x0D, al
+
+; Clear flip-flop, set ch3 address = 0x5000
+out 0x0C, al
+mov al, 0x00
+out 0x06, al              ; ch3 addr low
+mov al, 0x50
+out 0x06, al              ; ch3 addr high
+
+; Clear flip-flop, set ch3 count = DMA_COUNT - 1
+mov al, 0x00
+out 0x0C, al
+mov al, ((DMA_COUNT - 1) & 0xFF)
+out 0x07, al              ; ch3 count low
+mov al, ((DMA_COUNT - 1) >> 8)
+out 0x07, al              ; ch3 count high
+
+; Mode: block transfer, write (IO->mem), ch3 = 1000_0111 = 0x87
+mov al, 0x87
+out 0x0B, al
+
+; Page register ch3 = 0 (port 0x82)
+mov al, 0x00
+out 0x82, al
+
+; Unmask ch3: bits [1:0]=11 (ch3), bit 2=0 (unmask) = 0x03
+mov al, 0x03
+out 0x0A, al
+
+; Start DMA on ch3 via test card
+mov al, 0x03
+out 0xF4, al
+
+; Wait for completion
+mov cx, 0xFFFF
+.wait_loop4:
+    cmp word [0x0532], 0x0001
+    je .dma4_done
+    nop
+    loop .wait_loop4
+.dma4_done:
+
+; Check TC
+in al, 0x08
+test al, 0x08             ; bit 3 = ch3 TC
+jz .no_tc4
+mov word [0x0530], 0x0001
+.no_tc4:
+
+; Check first 4 bytes at 0x5000: "Lore"
+cmp byte [0x5000], 0x4C
+jne .fail4_first4
+cmp byte [0x5001], 0x6F
+jne .fail4_first4
+cmp byte [0x5002], 0x72
+jne .fail4_first4
+cmp byte [0x5003], 0x65
+jne .fail4_first4
+mov word [0x0534], 0x0001
+.fail4_first4:
+
+mov word [0x053A], DMA_COUNT
+
 hlt
 
 ; =====================================================================
@@ -325,15 +477,25 @@ irq5_handler:
     iret
 
 irq5_handler2:
-    ; Mark completion for run 2
     mov word [0x0512], 0x0001
-
-    ; Clear IRQ5 line on test card
     mov al, 0x20
     out 0xF1, al
-
-    ; Send EOI to PIC
     mov al, 0x20
     out 0x20, al
+    iret
 
+irq5_handler3:
+    mov word [0x0522], 0x0001
+    mov al, 0x20
+    out 0xF1, al
+    mov al, 0x20
+    out 0x20, al
+    iret
+
+irq5_handler4:
+    mov word [0x0532], 0x0001
+    mov al, 0x20
+    out 0xF1, al
+    mov al, 0x20
+    out 0x20, al
     iret

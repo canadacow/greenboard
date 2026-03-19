@@ -31,16 +31,23 @@ void ISA_TestCard::install(IsaSlot& slot) {
     if (slot.memr) { memr_ = slot.memr->pin(); slot.memr->connect(this); }
     if (slot.memw) { memw_ = slot.memw->pin(); slot.memw->connect(this); }
 
-    // DMA channel 1: ~DACK1 (input), DRQ1 (output).
-    if (slot.dack1) { dack1_ = slot.dack1->pin(); slot.dack1->connect(this); }
-    drq1_sig_ = slot.drq1;
-    if (drq1_sig_) drq1_ = drq1_sig_->pin();
+    // DMA channels 1-3: ~DACKn (input), DRQn (output).
+    Signal* dack_sigs[] = { slot.dack0, slot.dack1, slot.dack2, slot.dack3 };
+    Signal* drq_sigs[]  = { nullptr,    slot.drq1,  slot.drq2,  slot.drq3  };
+    for (int ch = 1; ch <= 3; ++ch) {
+        if (dack_sigs[ch]) {
+            dack_[ch] = dack_sigs[ch]->pin();
+            dack_sigs[ch]->connect(this);
+        }
+        drq_sig_[ch] = drq_sigs[ch];
+        if (drq_sig_[ch])
+            drq_[ch] = drq_sig_[ch]->pin();
+    }
 
     // T/C (terminal count): rising edge = DMA transfer complete.
     if (slot.tc) { tc_ = slot.tc->pin(); slot.tc->connect(this); }
 
     // IRQ lines: ISA slot provides IRQ2-IRQ7.
-    // IRQ0 and IRQ1 are motherboard-only (not on ISA bus).
     irq_sig_[2] = slot.irq2;
     irq_sig_[3] = slot.irq3;
     irq_sig_[4] = slot.irq4;
@@ -53,38 +60,42 @@ void ISA_TestCard::install(IsaSlot& slot) {
     }
 
     // Pin directions for DAG.
-    // SA0-SA3: HiZ during DMA to break DAG cycle (U35 -> XA0-3 -> TestCard -> XD -> U35).
-    // During DMA the card doesn't use SA0-3 for port decode; it responds to ~DACK1.
+    // SA0-SA3: HiZ during DMA to break DAG cycle.
     declare_bidir_block({sa_[0], sa_[1], sa_[2], sa_[3]},
         BidirDir::Input | BidirDir::HiZ,
-        [this]() { return dma_active_ ? BidirDir::HiZ : BidirDir::Input; });
+        [this]() { return dma_active() ? BidirDir::HiZ : BidirDir::Input; });
     for (int i = 4; i < 20; ++i) declare_input(sa_[i]);
     declare_input(ior_);
     declare_input(iow_);
     declare_input(memr_);
     declare_input(memw_);
-    declare_async_input(dack1_);  // ~DACK1: cross-cycle (asserted by DMA controller)
-    declare_async_input(tc_);    // T/C: cross-cycle pulse from DMA controller
+    for (int ch = 1; ch <= 3; ++ch)
+        declare_async_input(dack_[ch]);
+    declare_async_input(tc_);
     for (int i = 2; i < 8; ++i) {
         if (irq_sig_[i])
             declare_output(irq_pin_[i]);
     }
-    if (drq1_sig_)
-        declare_output(drq1_);
+    for (int ch = 1; ch <= 3; ++ch) {
+        if (drq_sig_[ch])
+            declare_output(drq_[ch]);
+    }
 
-    // SD is bidirectional: output during reads (~IOR low AND our port), input during writes,
-    // and output during DMA transfers (~DACK1 low).
+    // SD is bidirectional: output during reads, input during writes,
+    // output during DMA transfers.
     declare_bidir_block(
         {sd_[0], sd_[1], sd_[2], sd_[3], sd_[4], sd_[5], sd_[6], sd_[7]},
         BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
         [this]() -> BidirDir {
-            // DMA: card drives data when ~DACK1 is asserted (active low).
-            if (dack1_.level() == Level::Low && dma_active_)
-                return BidirDir::Output;
+            // DMA: card drives data when any ~DACKn is asserted.
+            if (dma_active()) {
+                for (int ch = 1; ch <= 3; ++ch)
+                    if (dack_[ch].level() == Level::Low && ch == dma_active_ch_)
+                        return BidirDir::Output;
+            }
             auto ior_lev = ior_.level();
             auto iow_lev = iow_.level();
             if (ior_lev == Level::Low) {
-                // Only claim bus if this is our port range.
                 uint16_t port = static_cast<uint16_t>(read_address());
                 if (my_port(port)) {
                     spdlog::trace("[{}] bidir: ~IOR={} port=0x{:04X} -> OUT",
@@ -94,10 +105,8 @@ void ISA_TestCard::install(IsaSlot& slot) {
                 return BidirDir::HiZ;
             }
             if (iow_lev == Level::Low) return BidirDir::Input;
-            // MMIO read: drive data when ~MEMR is active and address in range.
             if (memr_.level() == Level::Low && my_mmio(read_address()))
                 return BidirDir::Output;
-            // MMIO write: accept data when ~MEMW is active and address in range.
             if (memw_.level() == Level::Low && my_mmio(read_address()))
                 return BidirDir::Input;
             return BidirDir::HiZ;
@@ -107,7 +116,8 @@ void ISA_TestCard::install(IsaSlot& slot) {
 void ISA_TestCard::on_power_on() {
     ior_prev_ = Level::HiZ;
     iow_prev_ = Level::HiZ;
-    dack1_prev_ = Level::HiZ;
+    for (int ch = 0; ch < 4; ++ch)
+        dack_prev_[ch] = Level::HiZ;
     tc_prev_ = Level::HiZ;
     data_driven_ = false;
     read_byte_ = 0;
@@ -118,7 +128,7 @@ void ISA_TestCard::on_power_on() {
     memr_prev_ = Level::HiZ;
     memw_prev_ = Level::HiZ;
     dma_ptr_ = 0;
-    dma_active_ = false;
+    dma_active_ch_ = -1;
 }
 
 // =========================================================================
@@ -128,43 +138,42 @@ void ISA_TestCard::on_power_on() {
 void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     Level ior_cur = ior_.level();
     Level iow_cur = iow_.level();
-    Level dack1_cur = dack1_.level();
     Level tc_cur = tc_.level();
 
-    // --- DMA channel 1 ---
-    // ~DACK1 falling edge: DMA controller acknowledges our request.
-    // Drive the next byte from dma_buf_ onto the data bus.
-    if (dack1_cur == Level::Low && dack1_prev_ != Level::Low && dma_active_) {
-        uint8_t byte = dma_buf_[dma_ptr_ % DMA_BUF_SIZE];
-        spdlog::debug("[{}] DMA DACK1: driving byte [{}]=0x{:02X}", name(), dma_ptr_, byte);
-        drive_sd(byte);
-        dma_ptr_++;
+    // --- DMA channels 1-3 ---
+    for (int ch = 1; ch <= 3; ++ch) {
+        Level dack_cur = dack_[ch].level();
+        // ~DACKn falling edge: drive next byte from dma_buf_.
+        if (dack_cur == Level::Low && dack_prev_[ch] != Level::Low && dma_active_ch_ == ch) {
+            uint8_t byte = dma_buf_[dma_ptr_ % DMA_BUF_SIZE];
+            spdlog::debug("[{}] DMA DACK{}: driving byte [{}]=0x{:02X}", name(), ch, dma_ptr_, byte);
+            drive_sd(byte);
+            dma_ptr_++;
+        }
+        // ~DACKn rising edge: release data bus.
+        if (dack_cur != Level::Low && dack_prev_[ch] == Level::Low) {
+            release_sd();
+        }
+        dack_prev_[ch] = dack_cur;
     }
-    // ~DACK1 rising edge: release data bus after DMA transfer cycle.
-    if (dack1_cur != Level::Low && dack1_prev_ == Level::Low) {
-        release_sd();
-    }
-    dack1_prev_ = dack1_cur;
 
-    // T/C rising edge: DMA transfer complete. Deassert DRQ1, fire IRQ.
-    if (dma_active_)
-        spdlog::debug("[{}] T/C check: tc_cur={} tc_prev={} dma_active={} tc_.idx={}",
-                      name(), int(tc_cur), int(tc_prev_), dma_active_, tc_.idx);
-    if (tc_cur == Level::High && tc_prev_ != Level::High && dma_active_) {
-        spdlog::debug("[{}] DMA T/C: transfer complete, {} bytes sent, firing IRQ{}",
-                      name(), dma_ptr_, dma_irq_);
-        dma_active_ = false;
-        if (drq1_sig_)
-            drq1_sig_->drive(Level::Low);
-        // Fire completion IRQ.
+    // T/C rising edge: DMA transfer complete. Deassert DRQn, fire IRQ.
+    if (dma_active())
+        spdlog::debug("[{}] T/C check: tc_cur={} tc_prev={} dma_ch={} tc_.idx={}",
+                      name(), int(tc_cur), int(tc_prev_), dma_active_ch_, tc_.idx);
+    if (tc_cur == Level::High && tc_prev_ != Level::High && dma_active()) {
+        int ch = dma_active_ch_;
+        spdlog::debug("[{}] DMA T/C: ch{} transfer complete, {} bytes sent, firing IRQ{}",
+                      name(), ch, dma_ptr_, dma_irq_);
+        dma_active_ch_ = -1;
+        if (ch >= 1 && ch <= 3 && drq_sig_[ch])
+            drq_sig_[ch]->drive(Level::Low);
         if (dma_irq_ >= 2 && dma_irq_ <= 7 && irq_sig_[dma_irq_])
             irq_sig_[dma_irq_]->drive(Level::High);
     }
     tc_prev_ = tc_cur;
 
     // --- CPU I/O ---
-    // Pending system: detect ~IOW/~IOR going low, handle on next call,
-    // so we don't fire twice (once with valid data, once with cleared bus).
     if (write_pending_) {
         uint16_t port = static_cast<uint16_t>(read_address());
         uint8_t val = read_sd();
@@ -179,9 +188,11 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     }
     iow_prev_ = iow_cur;
 
-    // Read pending: same pattern -- defer one call so bidir has declared Output.
     if (read_pending_) {
-        if (dack1_cur != Level::Low) {
+        bool any_dack = false;
+        for (int ch = 1; ch <= 3; ++ch)
+            if (dack_[ch].level() == Level::Low) any_dack = true;
+        if (!any_dack) {
             uint16_t port = static_cast<uint16_t>(read_address());
             if (my_port(port)) {
                 read_byte_ = io_read(port);
@@ -192,8 +203,7 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
         read_pending_ = false;
     } else if (ior_cur == Level::Low && ior_prev_ != Level::Low) {
         read_pending_ = true;
-    } else if (dack1_cur != Level::Low) {
-        // Re-drive or release based on current ~IOR level.
+    } else if (!dma_active()) {
         if (ior_cur == Level::Low && data_driven_) {
             drive_sd(read_byte_);
         } else if (ior_cur != Level::Low && data_driven_) {
@@ -206,7 +216,6 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     Level memr_cur = memr_.level();
     Level memw_cur = memw_.level();
 
-    // Write: deferred one eval so data bus has propagated.
     if (mem_write_pending_) {
         uint32_t addr = read_address();
         if (my_mmio(addr)) {
@@ -222,7 +231,6 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     }
     memw_prev_ = memw_cur;
 
-    // Read: deferred one eval so bidir has declared Output.
     if (mem_read_pending_) {
         uint32_t addr = read_address();
         if (my_mmio(addr)) {
@@ -236,7 +244,6 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
         if (my_mmio(addr))
             mem_read_pending_ = true;
     } else if (memr_cur != Level::Low && memr_prev_ == Level::Low) {
-        // ~MEMR rising edge: release bus
         if (data_driven_) release_sd();
     }
     memr_prev_ = memr_cur;
@@ -298,17 +305,21 @@ void ISA_TestCard::io_write(uint16_t port, uint8_t val) {
                 irq_sig_[i]->drive(Level::Low);
         }
     } else if (port == 0xF4) {
-        // DMA start: reset pointer and assert DRQ1.
-        dma_ptr_ = 0;
-        spdlog::debug("[{}] DMA start: asserting DRQ1, ptr={}", name(), dma_ptr_);
-        dma_active_ = true;
-        if (drq1_sig_)
-            drq1_sig_->drive(Level::High);
+        // DMA start on channel N (val = 1, 2, or 3).
+        if (val >= 1 && val <= 3) {
+            dma_ptr_ = 0;
+            dma_active_ch_ = val;
+            spdlog::debug("[{}] DMA start: asserting DRQ{}, ptr={}", name(), val, dma_ptr_);
+            if (drq_sig_[val])
+                drq_sig_[val]->drive(Level::High);
+        }
     } else if (port == 0xF5) {
-        // DMA stop: deassert DRQ1.
-        dma_active_ = false;
-        if (drq1_sig_)
-            drq1_sig_->drive(Level::Low);
+        // DMA stop on channel N.
+        if (val >= 1 && val <= 3) {
+            dma_active_ch_ = -1;
+            if (drq_sig_[val])
+                drq_sig_[val]->drive(Level::Low);
+        }
     } else if (port == 0xF6) {
         // Set DMA completion IRQ number (2-7).
         if (val >= 2 && val <= 7)
