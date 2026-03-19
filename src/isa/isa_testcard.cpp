@@ -129,6 +129,7 @@ void ISA_TestCard::on_power_on() {
     memw_prev_ = Level::HiZ;
     dma_ptr_ = 0;
     dma_active_ch_ = -1;
+    dma_ior_count_ = 0;
 }
 
 // =========================================================================
@@ -143,18 +144,35 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     // --- DMA channels 1-3 ---
     for (int ch = 1; ch <= 3; ++ch) {
         Level dack_cur = dack_[ch].level();
-        // ~DACKn falling edge: drive next byte from dma_buf_.
+        // ~DACKn falling edge: drive first byte, reset IOR counter.
         if (dack_cur == Level::Low && dack_prev_[ch] != Level::Low && dma_active_ch_ == ch) {
             uint8_t byte = dma_buf_[dma_ptr_ % DMA_BUF_SIZE];
             spdlog::debug("[{}] DMA DACK{}: driving byte [{}]=0x{:02X}", name(), ch, dma_ptr_, byte);
             drive_sd(byte);
             dma_ptr_++;
+            dma_ior_count_ = 0;
         }
         // ~DACKn rising edge: release data bus.
         if (dack_cur != Level::Low && dack_prev_[ch] == Level::Low) {
             release_sd();
         }
         dack_prev_[ch] = dack_cur;
+    }
+
+    // Block/demand mode: ~DACK stays Low, 8237A pulses ~IOR for each byte.
+    // Skip the first IOR (overlaps with DACK-driven byte in single mode).
+    // Subsequent IOR falling edges advance to the next byte.
+    if (dma_active() && ior_cur == Level::Low && ior_prev_ != Level::Low) {
+        int ch = dma_active_ch_;
+        if (dack_[ch].level() == Level::Low) {
+            if (dma_ior_count_ > 0) {
+                uint8_t byte = dma_buf_[dma_ptr_ % DMA_BUF_SIZE];
+                spdlog::debug("[{}] DMA IOR ch{}: driving byte [{}]=0x{:02X}", name(), ch, dma_ptr_, byte);
+                drive_sd(byte);
+                dma_ptr_++;
+            }
+            dma_ior_count_++;
+        }
     }
 
     // T/C rising edge: DMA transfer complete. Deassert DRQn, fire IRQ.

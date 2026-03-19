@@ -155,7 +155,7 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
     bool cas_edge = (cas_cur == Level::Low && bank.cas_prev != Level::Low);
     bool ras_edge_with_cas = (ras_cur == Level::Low && bank.ras_prev != Level::Low
                               && cas_cur == Level::Low);
-    if (cas_edge && !bank.row_latched && !ras_edge_with_cas) {
+    if (cas_edge && !bank.row_latched && !ras_edge_with_cas && active_bank_ >= 0) {
         spdlog::warn("[DRAM] ~CAS{} fall WITHOUT row latched! col=0x{:02X} ~WE={}",
                      b, read_address(), int(pin_we_.level()));
     }

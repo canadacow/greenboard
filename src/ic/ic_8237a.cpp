@@ -570,21 +570,12 @@ void IC_8237A::on_clk_falling() {
             if (new_upper != prev_upper_addr_) {
                 state_ = State::S1;  // need to re-latch upper address
             } else {
-                // Drive updated A0-A7 directly, skip S1
+                // Drive updated A0-A7 directly, skip S1.
+                // Go to S2 to re-assert strobes next eval (not same eval
+                // as S4 deassert -- IO devices need to see the rising edge).
                 for (int i = 0; i < 8; ++i)
                     pin_a_[i].drive((ch.current_address >> i) & 1 ? Level::High : Level::Low);
-                // Re-assert strobes for next transfer
-                uint8_t tt = (ch.mode >> 2) & 0x03;
-                if (tt == 0x01) {
-                    pin_memw_.drive(Level::Low);
-                    pin_ior_.drive(Level::Low);
-                } else if (tt == 0x02) {
-                    pin_memr_.drive(Level::Low);
-                    pin_iow_.drive(Level::Low);
-                }
-                // Go to S3 or S4 (compressed skips S3)
-                bool compressed = (command_ & 0x01) != 0;
-                state_ = compressed ? State::S4 : State::S3;
+                state_ = State::S2;
             }
         }
         break;

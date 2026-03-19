@@ -61,6 +61,7 @@ private:
     Pin drq_[4];          // DRQ0-3 (output, only 1-3 used)
     Signal* drq_sig_[4] = {};
     Level dack_prev_[4] = {Level::HiZ, Level::HiZ, Level::HiZ, Level::HiZ};
+    int dma_ior_count_ = 0;       // IOR falling edges since last DACK fall
 
     // T/C (terminal count) from ISA bus -- fires when DMA transfer completes.
     Pin tc_;          // T/C (input, active-high terminal count pulse)
