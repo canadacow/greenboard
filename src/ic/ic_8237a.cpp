@@ -52,7 +52,11 @@ void IC_8237A::install(Socket& socket) {
 
     // Pin directions for wiring visualization / DAG construction.
     declare_input(pin_ior_); declare_input(pin_iow_);
-    declare_input(pin_cs_);          // ~CS: must be regular input so falling edge triggers on_signal_change
+    // ~CS: Input during CPU mode (for register programming), HiZ during DMA
+    // to break DAG cycle (U35 -> DACK/addr -> decode chain -> U66 -> ~DMA_CS -> U35).
+    declare_bidir_block({pin_cs_},
+        BidirDir::Input | BidirDir::HiZ,
+        [this]() { return (state_ != State::SI) ? BidirDir::HiZ : BidirDir::Input; });
     declare_async_input(pin_clk_);   // DCLK: clock input, no combinational dependency
     declare_input(pin_reset_);
     declare_async_input(pin_hlda_);  // HLDA: latched by external FFs, cross-cycle
@@ -68,7 +72,14 @@ void IC_8237A::install(Socket& socket) {
     // DACKs included: bidir HiZ removes DAG edges in CPU mode, but
     // on_signal_change re-drives them High so downstream enables (U48 G1)
     // see a stable High rather than floating HiZ.
-    declare_bidir_block({pin_hrq_, pin_dack_[0], pin_dack_[1],
+    // HRQ: Output only during BusRequested (asserting HRQ), HiZ during
+    // active DMA (S1-S4) since HRQ stays stable -- avoids DAG cycle
+    // (U35 HRQ -> U99 -> U52 -> CEN -> U5 -> ... -> U6-8288 -> U35).
+    declare_bidir_block({pin_hrq_, pin_eop_},
+        BidirDir::HiZ | BidirDir::Output,
+        [this]() { return state_ == State::BusRequested ? BidirDir::Output : BidirDir::HiZ; });
+    // DACKs, ADSTB, AEN: Output during active DMA transfers.
+    declare_bidir_block({pin_dack_[0], pin_dack_[1],
                          pin_dack_[2], pin_dack_[3], pin_adstb_, pin_aen_},
         BidirDir::HiZ | BidirDir::Output,
         [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::HiZ; });

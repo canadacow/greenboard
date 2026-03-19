@@ -308,12 +308,15 @@ public:
                                const std::vector<int>& in_deg,
                                const std::vector<std::array<uint64_t, W>>& eff_out,
                                const std::vector<std::array<uint64_t, W>>& eff_in) {
-        std::string dot = "digraph dag {\n  rankdir=LR;\n  node [shape=box fontname=\"Consolas\" fontsize=10];\n  edge [fontname=\"Consolas\" fontsize=8];\n";
+        std::string dot = "digraph dag {\n  rankdir=LR;\n  concentrate=true;\n  node [shape=box fontname=\"Consolas\" fontsize=10];\n  edge [fontname=\"Consolas\" fontsize=8];\n";
         for (int i = 0; i < n; ++i) {
             const char* color = (in_deg[i] > 0) ? "red" : "black";
             dot += fmt::format("  n{} [label=\"{}\" color={} fontcolor={}];\n",
                                i, comps[i]->name(), color, color);
         }
+        // Collect edges, then assign compass points to spread arrows around boxes.
+        struct Edge { int from, to; std::string sigs; const char* color; };
+        std::vector<Edge> edges;
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 if (!depends[i][j]) continue;
@@ -334,8 +337,12 @@ public:
                 if (sig_count > 4)
                     sigs += fmt::format("\\n+{} more", sig_count - 4);
                 const char* ec = (in_deg[i] > 0 && in_deg[j] > 0) ? "red" : "black";
-                dot += fmt::format("  n{} -> n{} [label=\"{}\" color={} fontcolor={}];\n", j, i, sigs, ec, ec);
+                edges.push_back({j, i, std::move(sigs), ec});
             }
+        }
+        for (auto& e : edges) {
+            dot += fmt::format("  n{} -> n{} [label=\"{}\" color={} fontcolor={}];\n",
+                               e.from, e.to, e.sigs, e.color, e.color);
         }
         dot += "}\n";
         std::filesystem::create_directories(WAVE_OUTPUT_DIR);
