@@ -154,6 +154,8 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         uint32_t addr = (static_cast<uint32_t>(b) << 16)
                       | (static_cast<uint32_t>(bank.row_addr) << 8)
                       | col_addr;
+        // Reconstruct linear address: 74S158 inverts, so row=~A0-A7, col=~A8-A15
+        uint32_t linear = (static_cast<uint32_t>(uint8_t(~col_addr)) << 8) | uint8_t(~bank.row_addr);
         if (pin_we_.level() == Level::Low) {
             // Write: sample DIN pins, store to RAM
             uint8_t data = 0;
@@ -163,13 +165,13 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
             }
             ram_[addr] = data;
             parity_[addr] = bank.din[8].level() == Level::High ? 1 : 0;
-            spdlog::trace("[DRAM] WRITE bank{} row=0x{:02X} col=0x{:02X} addr=0x{:05X} data=0x{:02X}",
-                          b, bank.row_addr, col_addr, addr, data);
+            spdlog::trace("[DRAM] WRITE bank{} row=0x{:02X} col=0x{:02X} linear=0x{:05X} (idx=0x{:05X}) data=0x{:02X}",
+                          b, bank.row_addr, col_addr, linear, addr, data);
         } else {
             // Read: drive DOUT pins from RAM
             uint8_t data = ram_[addr];
-            spdlog::trace("[DRAM] READ bank{} row=0x{:02X} col=0x{:02X} addr=0x{:05X} data=0x{:02X}",
-                          b, bank.row_addr, col_addr, addr, data);
+            spdlog::trace("[DRAM] READ bank{} row=0x{:02X} col=0x{:02X} linear=0x{:05X} (idx=0x{:05X}) data=0x{:02X}",
+                          b, bank.row_addr, col_addr, linear, addr, data);
             for (int i = 0; i < 8; ++i) {
                 bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
             }

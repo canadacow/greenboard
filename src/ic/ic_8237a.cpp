@@ -6,7 +6,12 @@ namespace bench {
 
 IC_8237A::IC_8237A() : CallbackComponent("8237A") { set_description("DMA"); }
 
-void IC_8237A::set_cmd_xcvr(IC_74S245* u14) { cmd_xcvr_ = u14; }
+void IC_8237A::set_xcvr(IC_74S245* u8, IC_74S245* u12, IC_74S245* u13, IC_74S245* u14) {
+    xcvr_ = u8;
+    xcvr_m_ = u12;
+    xcvr_x_ = u13;
+    xcvr_c_ = u14;
+}
 
 void IC_8237A::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {
@@ -422,6 +427,29 @@ void IC_8237A::on_clk_falling() {
         // ADSTB high -- will fall at S2 entry, latching upper address
         pin_adstb_.drive(Level::High);
 
+        // Nudge transceivers now (S1) so bidir lambdas pick up the
+        // correct direction at the start of next evaluate (S2).
+        //   U8  (AD<->D): HiZ -- CPU disconnected during DMA
+        //   U14 (cmd):    B->A -- DMA's ~MEMR/~MEMW reach system side
+        //   U13 (D<->XD): IO->mem write: A (XD->D), mem->IO read: B (D->XD)
+        //   U12 (D<->MD): IO->mem write: B (D->MD), mem->IO read: A (MD->D)
+        {
+            uint8_t transfer_type = (ch.mode >> 2) & 0x03;
+            // U8 (AD<->D): CPU disconnected during DMA
+            if (xcvr_)   xcvr_->set_driving(IC_74S245::Driving::None);
+            // U13 (D<->XD): ISA slots connect directly to D bus, not XD.
+            // U13 must stay off during DMA or it tramples D with stale XD data.
+            if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::None);
+            // U14 (cmd): B->A so DMA's ~MEMR/~MEMW reach system side
+            if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::A);
+            // U12 (D<->MD): data path between D bus and DRAM
+            if (transfer_type == 0x01) {
+                if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
+            } else if (transfer_type == 0x02) {
+                if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::A);  // MD->D
+            }
+        }
+
         spdlog::debug("[8237A] S1 ch{}: addr={:#06x} upper={:#04x} A0-7=[{}{}{}{}{}{}{}{}]",
                       active_ch_, ch.current_address, upper,
                       int(pin_a_[7].level()), int(pin_a_[6].level()),
@@ -452,8 +480,8 @@ void IC_8237A::on_clk_falling() {
         // verify (00): no strobes, address still generated
 
         // U14 routes DMA's ~XMEMW/~XMEMR to system side (B->A during DMA).
-        if (cmd_xcvr_)
-            cmd_xcvr_->set_driving(IC_74S245::Driving::A);
+        // Re-nudge in case this is a continuation transfer that skipped S1.
+        if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::A);
 
         spdlog::debug("[8237A] S2 ch{}: ~MEMW={} ~MEMR={} addr={:#06x}",
                       active_ch_,

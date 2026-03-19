@@ -54,9 +54,12 @@ public:
 
     void install(Socket& socket);
 
-    // U14 command strobe transceiver: during DMA, direction flips to B->A
-    // so DMA's ~XMEMW/~XMEMR reach the system side.
-    void set_cmd_xcvr(IC_74S245* u14);
+    // Transceivers the DMA controller nudges during transfers:
+    //   U8  (AD<->D):  HiZ during DMA (CPU disconnected)
+    //   U12 (D<->MD):  data path to/from DRAM
+    //   U13 (D<->XD):  data path to/from ISA bus
+    //   U14 (cmd):     B->A so DMA's ~MEMR/~MEMW reach system side
+    void set_xcvr(IC_74S245* u8, IC_74S245* u12, IC_74S245* u13, IC_74S245* u14);
 
 protected:
     void on_signal_change(Fiber caller) override;
@@ -138,7 +141,10 @@ private:
     bool write_pending_ = false; // deferred bus write (data not yet on bus)
     bool read_pending_ = false;  // deferred bus read
     bool eop_pending_ = false;   // EOP asserted this cycle, deassert next cycle
-    IC_74S245* cmd_xcvr_ = nullptr;  // U14: cmd strobe transceiver
+    IC_74S245* xcvr_ = nullptr;      // U8:  AD<->D transceiver
+    IC_74S245* xcvr_m_ = nullptr;    // U12: D<->MD transceiver (DRAM)
+    IC_74S245* xcvr_x_ = nullptr;    // U13: D<->XD transceiver (ISA)
+    IC_74S245* xcvr_c_ = nullptr;    // U14: cmd strobe transceiver
     bool mem2mem_write_ = false; // true during write phase of mem-to-mem transfer
     uint8_t prev_upper_addr_ = 0; // last A8-A15 latched, for S1 skip optimization
 

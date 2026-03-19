@@ -914,7 +914,7 @@ struct TestBoard {
         dma_socket.wire(39, dma_a6);       // A6 (N-000284 -> U17 pin 15)
         dma_socket.wire(40, dma_a7);       // A7 (N-000283 -> U17 pin 17)
         dma_ic = dma_socket.emplace<IC_8237A>();
-        dma_ic->set_cmd_xcvr(xcvr14_ic);
+        dma_ic->set_xcvr(xcvr, mem_xcvr, xcvr13_ic, xcvr14_ic);
 
         // --- DMA Bus Grant Handshake ---
         // Path: HRQ -> U99(inv) -> U52(NAND) -> U5(8-NAND) -> U83(inv)

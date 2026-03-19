@@ -57,6 +57,8 @@ evaluate(Fiber caller):
   4. For each wave: call on_signal_change() on every component in that wave
 ```
 
+**Signal Enum** -1 is Low, 0 is HiZ and 1 is High. DO NOT FORGET THIS.
+
 **One evaluate() = one full clock cycle.** Each component's `on_signal_change()` is called exactly once per cycle. There is no edge detection at the scheduler level -- components track their own `_prev_` state internally to detect rising/falling edges.
 
 The scheduler builds a dependency DAG from pin declarations:
