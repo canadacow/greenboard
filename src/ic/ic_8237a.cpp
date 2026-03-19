@@ -411,8 +411,9 @@ void IC_8237A::on_clk_falling() {
         // AEN high -- signals external logic that DMA owns the bus
         pin_aen_.drive(Level::High);
 
-        // Assert ~DACK for active channel
-        pin_dack_[active_ch_].drive(Level::Low);
+        // Assert ~DACK for active channel (not during mem-to-mem per datasheet)
+        if (!(command_ & 0x01))
+            pin_dack_[active_ch_].drive(Level::Low);
 
         // Drive A0-A7 with lower 8 bits of current address
         for (int i = 0; i < 8; ++i)
@@ -434,19 +435,27 @@ void IC_8237A::on_clk_falling() {
         //   U13 (D<->XD): IO->mem write: A (XD->D), mem->IO read: B (D->XD)
         //   U12 (D<->MD): IO->mem write: B (D->MD), mem->IO read: A (MD->D)
         {
-            uint8_t transfer_type = (ch.mode >> 2) & 0x03;
             // U8 (AD<->D): CPU disconnected during DMA
             if (xcvr_)   xcvr_->set_driving(IC_74S245::Driving::None);
-            // U13 (D<->XD): ISA slots connect directly to D bus, not XD.
-            // U13 must stay off during DMA or it tramples D with stale XD data.
-            if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::None);
             // U14 (cmd): B->A so DMA's ~MEMR/~MEMW reach system side
             if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::A);
-            // U12 (D<->MD): data path between D bus and DRAM
-            if (transfer_type == 0x01) {
-                if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
-            } else if (transfer_type == 0x02) {
+
+            if (command_ & 0x01) {
+                // Memory-to-memory: read phase (ch0)
+                // DRAM -> MD -> U12(MD->D) -> D -> U13(D->XD) -> XD -> 8237A DB
                 if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::A);  // MD->D
+                if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::B);  // D->XD
+            } else {
+                // Normal IO DMA
+                // U13 must stay off during DMA or it tramples D with stale XD data.
+                if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::None);
+                // U12 (D<->MD): data path between D bus and DRAM
+                uint8_t transfer_type = (ch.mode >> 2) & 0x03;
+                if (transfer_type == 0x01) {
+                    if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
+                } else if (transfer_type == 0x02) {
+                    if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::A);  // MD->D
+                }
             }
         }
 
@@ -623,8 +632,9 @@ void IC_8237A::on_clk_falling() {
 
         pin_adstb_.drive(Level::High);
 
-        // U12: D->MD (write to DRAM from D bus)
-        if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::B);
+        // M2M write: 8237A DB -> XD -> U13(XD->D) -> D -> U12(D->MD) -> DRAM
+        if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
+        if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::A);  // XD->D
 
         spdlog::debug("[8237A] M2M_S1 ch1: addr={:#06x} (write temp=0x{:02X})",
                       ch.current_address, temp_);
@@ -680,12 +690,16 @@ void IC_8237A::end_dma_service() {
     release_address();
     release_data();
 
-    // Clear software request for the channel that just completed
+    // Clear software request for the channel that just completed.
+    // For mem-to-mem, clear ch0's request (the trigger channel).
     if (ch_idx >= 0)
         ch_[ch_idx].request = false;
+    if (command_ & 0x01)
+        ch_[0].request = false;
 
     state_ = State::SI;
     active_ch_ = -1;
+    mem2mem_write_ = false;
 
     spdlog::debug("[8237A] DMA service complete for ch{}", ch_idx);
 
