@@ -64,7 +64,7 @@ void IC_8237A::install(Socket& socket) {
         [this]() { return (state_ != State::SI) ? BidirDir::HiZ : BidirDir::Input; });
     declare_async_input(pin_clk_);   // DCLK: clock input, no combinational dependency
     declare_input(pin_reset_);
-    declare_async_input(pin_hlda_);  // HLDA: latched by external FFs, cross-cycle
+    declare_async_input(pin_hlda_);  // HLDA: clocked by U67, no same-cycle feedback from HRQ
     for (int i = 0; i < 4; ++i) declare_async_input(pin_dreq_[i]);  // async DMA requests
     declare_output(pin_hrq_); declare_output(pin_eop_);
     for (int i = 0; i < 4; ++i) declare_output(pin_dack_[i]);
@@ -149,11 +149,18 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     if (db_driving_ && !(ior_cur == Level::Low && cs_cur == Level::Low))
         release_data();
 
-    // DREQ changes -- check for new DMA requests
+    // DREQ changes -- check for new DMA requests.
+    // Skip one cycle after releasing the bus so the CPU can execute
+    // at least one instruction (e.g. mask a channel).
     spdlog::trace("[8237A] DREQ: ch0={} ch1={} ch2={} ch3={} disabled={} state={}",
                   int(pin_dreq_[0].level()), int(pin_dreq_[1].level()),
                   int(pin_dreq_[2].level()), int(pin_dreq_[3].level()),
-                  disabled_, int(state_));    
+                  disabled_, int(state_));
+    // Only check DREQ when HLDA is Low (CPU owns the bus).
+    // This ensures the CPU has completed its bus handshake before
+    // the DMA re-requests. On real HW, U52/U67 enforce this: HOLDA
+    // clears asynchronously when HRQ drops, and only re-asserts
+    // after the 8088 enters passive state on a subsequent CLK edge.
     evaluate_dreq();
 
     // Advance state machine. Each call to on_signal_change is one full cycle, always
@@ -265,6 +272,7 @@ void IC_8237A::on_bus_write() {
         case 0x0A: {  // Single mask register
             int ch = data & 0x03;
             ch_[ch].masked = (data & 0x04) != 0;
+            spdlog::debug("[8237A] single mask: ch{}={}", ch, ch_[ch].masked ? "MASKED" : "unmasked");
             evaluate_dreq();
             break;
         }
@@ -395,7 +403,6 @@ void IC_8237A::on_clk_falling() {
         break;
 
     case State::BusRequested:
-        // HLDA is sampled at CLK falling edge
         if (pin_hlda_.level() == Level::High) {
             spdlog::debug("[8237A] HLDA received, entering S1 for ch{}", active_ch_);
             state_ = State::S1;
@@ -703,8 +710,8 @@ void IC_8237A::end_dma_service() {
 
     spdlog::debug("[8237A] DMA service complete for ch{}", ch_idx);
 
-    // Check for more pending requests
-    evaluate_dreq();
+    // Bus released. HLDA will clear via U52/U67 handshake.
+    // evaluate_dreq() won't re-request until HLDA is Low.
 }
 
 void IC_8237A::drive_data(uint8_t value) {

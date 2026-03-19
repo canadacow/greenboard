@@ -69,9 +69,8 @@ void IC_8284A::run(std::stop_token stop) {
     // so RESET (inverted RES) is Low for the entire run. Drive once.
     pin_reset_.drive(Level::Low);
 
-    // READY is unconditionally High until we implement slow ISA devices
-    // that pull I/O_CH_RDY Low to insert wait states. Until then, every
-    // bus cycle completes at minimum length (T1-T4, no Tw).
+    // READY: synchronized from RDY1/~AEN1 each CLK cycle (see spin loop).
+    // Start High (no wait states until DMA asserts).
     pin_ready_.drive(Level::High);
 
     // Clock state.
@@ -104,6 +103,19 @@ void IC_8284A::run(std::stop_token stop) {
         // PCLK toggles each CLK cycle (CLK / 2).
         pclk_level = Level(int8_t(-int8_t(pclk_level)));
         pin_pclk_.drive(pclk_level);
+
+        // READY: synchronize from RDY1 (~DMA_WAIT) gated by ~AEN1 (~RDY/WAIT).
+        // When ~AEN1 is Low (active), READY follows RDY1.
+        // When ~AEN1 is High (disabled), READY is High (no wait).
+        // On the 5150, ~AEN1 = ~RDY/WAIT from U82, RDY1 = ~DMA_WAIT from U98.
+        // During DMA: ~DMA_WAIT goes Low -> READY Low -> CPU stalls in Tw.
+        {
+            Level aen1 = pin_aen1_.level();
+            Level rdy1 = pin_rdy1_.level();
+            Level ready = (aen1 == Level::Low && rdy1 == Level::Low)
+                        ? Level::Low : Level::High;
+            pin_ready_.drive(ready);
+        }
 
         scheduler_->evaluate(self);
     }

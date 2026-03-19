@@ -168,7 +168,8 @@ struct TestBoard {
     Signal n_000215{"N-000215"};      // U84 gate 1 output (inverted DT/~R)
     Signal n_000239{"N-000239"};      // U84 gate 2 output
     Signal n_000241{"N-000241"};      // U83 gate 5 output (inverted ~XMEMR)
-    Signal n_000240{"N-000240"};      // U64 gate 2 output -> U82 (unimpl)
+    Signal n_000240{"N-000240"};      // U64 gate 2 output -> U82 CLK2
+    Signal n_000237{"N-000237"};      // U82 FF2 ~Q -> U97 gate 3 A input
     Signal u101_y4{"N-000291"};       // U101 gate 4 output -> U5 pin 3
     Signal pg_reg_cs{"N-000259"};      // U66 ~Y4: I/O decode 0x80-0x9F
     Signal wrt_dma_pg{"~WRT_DMA_PG_REG"}; // U51 inv6 output -> U19 ~WE
@@ -275,6 +276,7 @@ struct TestBoard {
     Socket nand52_socket{"U52", "74S00", 14};  // Quad NAND (HRQ gate, DCLK)
     Socket nand5_socket{"U5", "74LS30", 14};   // 8-input NAND (bus idle)
     Socket ff67_socket{"U67", "74S74", 14};    // Dual D FF (HOLDA, DRQ0 latch)
+    Socket ff82_socket{"U82", "74S74", 14};    // Dual D FF (keyboard IRQ1, DMA wait state)
     Socket ff98_socket{"U98", "74S175", 16};   // Quad D FF (AEN_BRD)
     Socket inv51_socket{"U51", "74S04", 14};   // Hex inverter (~RESET_DRV)
     Socket dma_page_latch{"U18", "74S373", 20};  // DMA address latch (A8-A15)
@@ -315,6 +317,7 @@ struct TestBoard {
     IC_74S00* nand52_ic = nullptr;    // U52
     IC_74LS30* nand5_ic = nullptr;    // U5
     IC_74S74* ff67_ic = nullptr;      // U67
+    IC_74S74* ff82_ic = nullptr;      // U82
     IC_74S175* ff98_ic = nullptr;     // U98
     IC_74S04* inv51_ic = nullptr;     // U51
     IC_74S373* dma_page_latch_ic = nullptr;  // U18
@@ -384,6 +387,8 @@ struct TestBoard {
 
         // U11: 8284A Clock Generator
         clk_socket.wire(2, pclk);    // PCLK output
+        clk_socket.wire(3, rdy_wait_bar);  // ~AEN1 = ~RDY/WAIT (from U82 FF2)
+        clk_socket.wire(4, dma_wait_bar);  // RDY1 = ~DMA_WAIT (from U98 ~Q2)
         clk_socket.wire(5, ready);   // READY output
         clk_socket.wire(8, clk);     // CLK output
         clk_socket.wire(9, gnd);     // GND
@@ -1032,6 +1037,27 @@ struct TestBoard {
         ff67_socket.wire(14, vcc);             // VCC
         ff67_ic = ff67_socket.emplace<IC_74S74>();
 
+        // U82: 74S74 Dual D Flip-Flop (keyboard IRQ1 + DMA wait state)
+        // FF1: keyboard/SW1 mux control (not implemented -- tie outputs stable)
+        ff82_socket.wire(1, vcc);              // ~CLR1 = VCC (no clear)
+        ff82_socket.wire(2, gnd);              // D1 = GND (stub)
+        ff82_socket.wire(3, gnd);              // CLK1 = GND (stub, never clocks)
+        ff82_socket.wire(4, vcc);              // ~PRE1 = VCC (no preset)
+        ff82_socket.wire(5, gnd);              // Q1 = IRQ1 (stub, not connected to PIC yet)
+        ff82_socket.wire(6, gnd);              // ~Q1 = stub
+        ff82_socket.wire(7, gnd);              // GND
+        // FF2: DMA wait state generator
+        //   D = ~DACK_0_BRD, CLK = N-000240, ~CLR = N-000244
+        //   Q = ~RDY/WAIT -> U11 pin 3, ~Q = N-000237 -> U97 pin 9
+        ff82_socket.wire(8, n_000237);         // ~Q2 = N-000237
+        ff82_socket.wire(9, rdy_wait_bar);     // Q2 = ~RDY/WAIT
+        ff82_socket.wire(10, vcc);             // ~PRE2 = I/O_CH_RDY (High = no preset)
+        ff82_socket.wire(11, n_000240);        // CLK2 = N-000240 (from U64)
+        ff82_socket.wire(12, dack0_brd);       // D2 = ~DACK_0_BRD
+        ff82_socket.wire(13, n_000244);        // ~CLR2 = N-000244 (from U98)
+        ff82_socket.wire(14, vcc);             // VCC
+        ff82_ic = ff82_socket.emplace<IC_74S74>();
+
         // U18: 74S373 DMA Page Address Latch (A8-A15 from data bus via ADSTB)
         // BRD: ~OC=~DMA_AEN, LE=ADSTB(N-000280)
         // During DMA transfer, 8237A multiplexes upper address onto data bus,
@@ -1340,7 +1366,7 @@ struct TestBoard {
         and97_socket.wire(3, nmi);             // Y1 = NMI
         and97_socket.wire(6, u97_y2_nc);        // Y2 = dummy (gate 2 unused)
         and97_socket.wire(7, gnd);
-        and97_socket.wire(9, vcc);             // A3 = N-000237 (pulled up)
+        and97_socket.wire(9, n_000237);        // A3 = N-000237 (from U82 FF2 ~Q)
         and97_socket.wire(10, n_000244);       // B3 = N-000244 (U98 ~3Q)
         and97_socket.wire(8, rdy_to_dma);      // Y3 = RDY_TO_DMA -> DMA pin 6
         and97_socket.wire(12, n_000245);       // A4 = N-000245 (U98 3Q)
@@ -1447,6 +1473,7 @@ struct TestBoard {
         scheduler.register_callback(nand52_ic,          dma_group);
         scheduler.register_callback(nand5_ic,           dma_group);
         scheduler.register_callback(ff67_ic,            dma_group);
+        scheduler.register_callback(ff82_ic,            dma_group);
         scheduler.register_callback(ff98_ic,            dma_group);
         scheduler.register_callback(inv51_ic,           dma_group);
         scheduler.register_callback(dma_page_latch_ic,  dma_group);

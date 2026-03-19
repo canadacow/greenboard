@@ -37,12 +37,12 @@ void IC_74S74::install(Socket& socket) {
     if (vcc) vcc->connect(this);
 
     // Pin directions for DAG ordering.
-    // D pins are async: sampled on CLK edge only, value read this cycle
-    // was driven in a previous cycle -- no combinational DAG dependency.
+    // D and CLK are async: output changes on CLK edge, not combinationally.
+    // No same-cycle dependency from D or CLK to Q.
     for (auto& f : ff_) {
         declare_input(f.clr);
         declare_async_input(f.d);
-        declare_input(f.clk);
+        declare_async_input(f.clk);
         declare_input(f.pre);
         declare_output(f.q);
         declare_output(f.nq);

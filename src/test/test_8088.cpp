@@ -158,8 +158,6 @@ int main() {
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
         "mov",
-        "dma",
-        "dma_m2m",
         "rom",
         "io",
         "alu",
@@ -175,6 +173,9 @@ int main() {
         "irq",
         "pit",
         "mmio",
+        "dma",
+        "dma_m2m",
+        /*"dma_refresh",*/
     };
 
     std::vector<TestCase> tests;
