@@ -78,8 +78,6 @@ private:
     // Bus cycle type decoded from S0-S2
     enum class BusCycle { Passive, INTA, IOR, IOW, Halt, Fetch, MemR, MemW };
 
-    // T-state within a bus cycle
-    enum class State { Idle, T1, T2, T3, Tw };
 
     BusCycle decode_status() const;
     void release_command();
@@ -104,9 +102,10 @@ private:
     Pin pin_aen_;    // Pin 15: ~AEN
 
     // Internal state
-    State state_ = State::Idle;
     BusCycle cycle_ = BusCycle::Passive;
-    bool inhibited_ = false;  // true while AEN/CEN inhibits outputs
+    bool prev_active_ = false;   // status was active last cycle
+    bool commanding_ = false;    // command strobe currently asserted
+    bool inhibited_ = false;     // AEN/CEN inhibits outputs
 
     // Transceivers: direction pre-set after DT/~R changes.
     IC_74S245* xcvr_ = nullptr;    // U8: AD <-> D

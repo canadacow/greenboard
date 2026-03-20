@@ -130,18 +130,21 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     if (reset_cur == Level::High && reset_prev_ != Level::High)
         on_reset();
 
-    // Deferred bus operations: execute pending read/write (data is now stable)
+    // Deferred bus operations: detect falling edge of ~IOW/~IOR + ~CS,
+    // execute on the next cycle when data is stable.
     if (write_pending_) {
         on_bus_write();
         write_pending_ = false;
-    } else if (iow_cur == Level::Low && cs_cur == Level::Low) {
+    } else if (iow_cur == Level::Low && cs_cur == Level::Low &&
+               !(iow_prev_ == Level::Low && cs_prev_ == Level::Low)) {
         write_pending_ = true;
     }
 
     if (read_pending_) {
         on_bus_read();
         read_pending_ = false;
-    } else if (ior_cur == Level::Low && cs_cur == Level::Low) {
+    } else if (ior_cur == Level::Low && cs_cur == Level::Low &&
+               !(ior_prev_ == Level::Low && cs_prev_ == Level::Low)) {
         read_pending_ = true;
     }
 

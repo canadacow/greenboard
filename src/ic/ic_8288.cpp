@@ -7,8 +7,9 @@ namespace bench {
 IC_8288::IC_8288() : CallbackComponent("8288") { set_description("Bus Controller"); }
 
 void IC_8288::on_power_on() {
-    state_ = State::Idle;
     cycle_ = BusCycle::Passive;
+    prev_active_ = false;
+    commanding_ = false;
     inhibited_ = false;
     release_command();
     // U14 always copies CPU -> X-bus in CPU mode (A->B).
@@ -162,7 +163,7 @@ void IC_8288::on_clk_rising() {
     // preserved bus cycle so the CPU's suspended read/write completes.
     if (inhibited_) {
         inhibited_ = false;
-        if (state_ == State::T2 || state_ == State::T3 || state_ == State::Tw) {
+        if (commanding_) {
             // Re-assert the command that was forced inactive during DMA.
             switch (cycle_) {
                 case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
@@ -179,8 +180,7 @@ void IC_8288::on_clk_rising() {
                           cycle_ == BusCycle::MemR ? "MemR" :
                           cycle_ == BusCycle::Fetch ? "Fetch" : "other");
         }
-        // Don't advance the state machine this cycle -- just re-assert.
-        // The normal T3->T4 transition will happen on the next CLK.
+        // Don't process status this cycle -- just re-assert.
         return;
     }
 
@@ -196,80 +196,55 @@ void IC_8288::on_clk_rising() {
         return "???";
     };
 
-    switch (state_) {
-        case State::Idle:
-        idle_recheck:
-        {
-            BusCycle bus = decode_status();
-            if (bus != BusCycle::Passive && bus != BusCycle::Halt) {
-                cycle_ = bus;
-                state_ = State::T1;
+    BusCycle bus = decode_status();
+    bool active = (bus != BusCycle::Passive && bus != BusCycle::Halt);
 
-                bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
-                pin_ale_.drive(Level::High);
-                pin_dtr_.drive(is_write ? Level::High : Level::Low);
-                spdlog::trace("[{}] Idle->T1 cycle={} DT/~R={}", name(), cyc_name(bus), is_write ? "H(wr)" : "L(rd)");
-            }
-            break;
-        }
-
-        case State::T1: {
-            state_ = State::T2;
-            pin_ale_.drive(Level::Low);
-            // Assert command strobe and ~DEN (was deferred to falling edge).
-            {
-                bool cen = pin_cen_.level() == Level::High;
-                if (cen) {
-                    switch (cycle_) {
-                        case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
-                        case BusCycle::IOR:   pin_ior_.drive(Level::Low);  break;
-                        case BusCycle::IOW:   pin_iow_.drive(Level::Low);  break;
-                        case BusCycle::Fetch:
-                        case BusCycle::MemR:  pin_memr_.drive(Level::Low); break;
-                        case BusCycle::MemW:  pin_memw_.drive(Level::Low); break;
-                        default: break;
-                    }
-                }
-                spdlog::trace("[{}] T1->T2 cycle={} cmd asserted CEN={}", name(), cyc_name(cycle_), cen);
-                pin_den_.drive(Level::Low);
-            }
-            nudge_xcvr();
-            break;
-        }
-
-        case State::T2:
-            // T3: Commands stay active. Re-nudge transceivers so reads
-            // pick up data that peripherals drove onto XD in the previous eval.
-            state_ = State::T3;
-            nudge_xcvr();
-            spdlog::trace("[{}] T2->T3 cycle={}", name(), cyc_name(cycle_));
-            break;
-
-        case State::T3:
-            // Normal T3: advance to Tw. Commands stay asserted.
-            // The real 8288 holds commands through T3 and any wait states.
-            // We transition to Tw so the NEXT cycle can check for T4.
-            state_ = State::Tw;
-            break;
-
-        case State::Tw: {
-            // Wait state: hold commands while status is passive (CPU in Tw).
-            // Status goes active at T4 (new cycle starting) -> release.
-            BusCycle bus = decode_status();
-            if (bus == BusCycle::Passive) break;  // CPU still in Tw
-
-            // Status active -> T4: deassert commands, check for new cycle.
+    if (!prev_active_ && active) {
+        // passive->active: new bus cycle (T1).
+        // If commands are held from previous cycle, release them first.
+        if (commanding_) {
             release_command();
-            pin_den_.drive(Level::High);  // ~DEN deasserted
+            pin_den_.drive(Level::High);
             disable_xcvr();
-            spdlog::trace("[{}] T3->T4(Idle) cycle={} cmds released", name(), cyc_name(cycle_));
-            state_ = State::Idle;
-            cycle_ = BusCycle::Passive;
-            // Back-to-back bus cycles: T4 of one overlaps T1 of the next.
-            // Re-check status immediately for a new bus cycle.
-            goto idle_recheck;
+            commanding_ = false;
+            spdlog::trace("[{}] cmds released (prev cycle={})", name(), cyc_name(cycle_));
         }
+        cycle_ = bus;
+        bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
+        pin_ale_.drive(Level::High);
+        pin_dtr_.drive(is_write ? Level::High : Level::Low);
+        spdlog::trace("[{}] T1 cycle={} DT/~R={}", name(), cyc_name(bus), is_write ? "H(wr)" : "L(rd)");
+
+    } else if (prev_active_ && active) {
+        // active->active: T2. ALE falls, assert command, enable data.
+        pin_ale_.drive(Level::Low);
+        bool cen = pin_cen_.level() == Level::High;
+        if (cen && !commanding_) {
+            switch (cycle_) {
+                case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
+                case BusCycle::IOR:   pin_ior_.drive(Level::Low);  break;
+                case BusCycle::IOW:   pin_iow_.drive(Level::Low);  break;
+                case BusCycle::Fetch:
+                case BusCycle::MemR:  pin_memr_.drive(Level::Low); break;
+                case BusCycle::MemW:  pin_memw_.drive(Level::Low); break;
+                default: break;
+            }
+            commanding_ = true;
+        }
+        pin_den_.drive(Level::Low);
+        nudge_xcvr();
+        spdlog::trace("[{}] T2 cycle={} cmd asserted CEN={}", name(), cyc_name(cycle_), cen);
+
+    } else if (prev_active_ && !active) {
+        // active->passive: entering T3. Commands stay active, nudge xcvrs.
+        nudge_xcvr();
+        spdlog::trace("[{}] T3 cycle={}", name(), cyc_name(cycle_));
+
+    } else {
+        // passive->passive: Tw. Hold commands.
     }
+
+    prev_active_ = active;
 }
 
 } // namespace bench

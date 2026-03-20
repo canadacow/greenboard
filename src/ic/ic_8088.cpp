@@ -240,13 +240,12 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     drive_address(address & 0xFFFFF);
     full_wait_clk("T1 bus_read");                                // T1
 
-    // T2 -- ALE falls, latches capture. Release AD, go passive.
+    // T2 -- ALE falls, latches capture. Release AD. Status stays active.
     release_data();
-    drive_status_passive();
     full_wait_clk("T2 bus_read");                                // T2
 
-    // T3 -- BusGlue/74S245 drive data (earlier in DAG wave), then we read.
-    uint8_t data = read_data();
+    // T3 -- status goes passive. Data driven by memory/peripherals.
+    drive_status_passive();
     full_wait_clk("T3 bus_read");                                // T3
 
     // Tw -- wait states while READY is low
@@ -254,8 +253,9 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
         spdlog::trace("[8088] Tw wait (read) READY={}", int(pin_ready_.level()));
         full_wait_clk("Tw bus_read");                            // Tw
     }
-
+    
     // T4 -- bus cycle complete
+    uint8_t data = read_data();
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk("T4 bus_read");                                // T4
     return data;
@@ -268,12 +268,12 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     drive_address(address & 0xFFFFF);
     full_wait_clk("T1 bus_write");                               // T1
 
-    // T2 -- ALE falls, latches capture. Switch AD to write data, go passive.
+    // T2 -- ALE falls, latches capture. Switch AD to write data. Status stays active.
     drive_data(value);
-    drive_status_passive();
     full_wait_clk("T2 bus_write");                               // T2
 
-    // T3 -- data held on bus
+    // T3 -- status goes passive. Data held on bus.
+    drive_status_passive();
     full_wait_clk("T3 bus_write");                               // T3
 
     // Tw -- wait states while READY is low
@@ -306,13 +306,12 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
     drive_address(port);
     full_wait_clk("T1 io_read");                                 // T1
 
-    // T2 -- ALE falls, latches capture. Release AD, go passive.
+    // T2 -- ALE falls, latches capture. Release AD. Status stays active.
     release_data();
-    drive_status_passive();
     full_wait_clk("T2 io_read");                                 // T2
 
-    // T3 -- BusGlue/74S245 drive data (earlier in DAG wave), then we read.
-    uint8_t data = read_data();
+    // T3 -- status goes passive. Data driven by peripheral.
+    drive_status_passive();
     full_wait_clk("T3 io_read");                                 // T3
 
     // Tw -- wait states while READY is low
@@ -322,6 +321,7 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
     }
 
     // T4 -- bus cycle complete
+    uint8_t data = read_data();
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk("T4 io_read");                                 // T4
     return data;
@@ -334,12 +334,12 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     drive_address(port);
     full_wait_clk("T1 io_write");                                // T1
 
-    // T2 -- ALE falls, latches capture. Switch AD to write data, go passive.
+    // T2 -- ALE falls, latches capture. Switch AD to write data. Status stays active.
     drive_data(value);
-    drive_status_passive();
     full_wait_clk("T2 io_write");                                // T2
 
-    // T3 -- data held on bus
+    // T3 -- status goes passive. Data held on bus.
+    drive_status_passive();
     full_wait_clk("T3 io_write");                                // T3
 
     // Tw -- wait states while READY is low
