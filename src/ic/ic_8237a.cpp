@@ -151,10 +151,13 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
 
     // DREQ changes -- check for new DMA requests.
     // evaluate_dreq() gates on HLDA Low per datasheet p.6.
+    static constexpr const char* state_names[] = {
+        "SI", "S0", "S1", "S2", "S3", "S4", "M2M_S1", "M2M_S2", "M2M_S3", "M2M_S4"
+    };
     spdlog::trace("[8237A] DREQ: ch0={} ch1={} ch2={} ch3={} disabled={} state={}",
                   int(pin_dreq_[0].level()), int(pin_dreq_[1].level()),
                   int(pin_dreq_[2].level()), int(pin_dreq_[3].level()),
-                  disabled_, int(state_));
+                  disabled_, state_names[static_cast<int>(state_)]);
     evaluate_dreq();
 
     // Advance state machine. Each call to on_signal_change is one full cycle, always
@@ -486,8 +489,8 @@ void IC_8237A::on_clk_falling() {
         // ADSTB falling edge latches upper address into external 74S373 (U18)
         pin_adstb_.drive(Level::Low);
 
-        // Release data bus (was holding upper address)
-        release_data();
+        // Keep driving DB with upper address through S2 so U18 can latch
+        // on ADSTB falling edge. Release deferred to S3.
 
         auto& ch = ch_[active_ch_];
 
@@ -518,7 +521,8 @@ void IC_8237A::on_clk_falling() {
 
         bool compressed = (command_ & 0x08) != 0;
         if (compressed) {
-            // Compressed timing skips S3; check READY here instead.
+            // Compressed timing skips S3; release DB and check READY here.
+            release_data();
             state_ = (pin_ready_.level() == Level::High) ? State::S4 : State::S2;
         } else {
             state_ = State::S3;
@@ -527,6 +531,8 @@ void IC_8237A::on_clk_falling() {
     }
 
     case State::S3:
+        // Release DB (was holding upper address for U18 latch in S2).
+        release_data();
         // Datasheet p.4: "wait states (SW) can be inserted between
         // S2 or S3 and S4 by the use of the Ready line."
         if (pin_ready_.level() != Level::High) break;  // Sw

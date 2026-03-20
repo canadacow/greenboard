@@ -226,7 +226,8 @@ void IC_8088::drive_status_passive() {
     pin_lock_.drive(Level::High);  // ~LOCK: active-low, deasserted during normal operation
 }
 
-void IC_8088::full_wait_clk() {
+void IC_8088::full_wait_clk(const char* stateYield) {
+    spdlog::trace("[8088] T-state {}", stateYield);
     yield();
     check_nmi();
 }
@@ -237,26 +238,26 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
     // T1 -- drive S0-S2 (MEMR), drive address on AD0-AD7 / A8-A19
     drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
     drive_address(address & 0xFFFFF);
-    full_wait_clk();                                             // T1
+    full_wait_clk("T1 bus_read");                                // T1
 
     // T2 -- ALE falls, latches capture. Release AD, go passive.
     release_data();
     drive_status_passive();
-    full_wait_clk();                                             // T2
+    full_wait_clk("T2 bus_read");                                // T2
+
+    // T3 -- BusGlue/74S245 drive data (earlier in DAG wave), then we read.
+    uint8_t data = read_data();
+    full_wait_clk("T3 bus_read");                                // T3
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
         spdlog::trace("[8088] Tw wait (read) READY={}", int(pin_ready_.level()));
-        full_wait_clk();                                         // Tw
+        full_wait_clk("Tw bus_read");                            // Tw
     }
-
-    // T3 -- BusGlue/74S245 drive data (earlier in DAG wave), then we read.
-    uint8_t data = read_data();
-    full_wait_clk();                                             // T3
 
     // T4 -- bus cycle complete
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
-    full_wait_clk();                                             // T4
+    full_wait_clk("T4 bus_read");                                // T4
     return data;
 }
 
@@ -265,26 +266,26 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     // T1 -- drive S0-S2 (MEMW), drive address on AD0-AD7 / A8-A19
     drive_status((BUS_MEMW >> 2) & 1, (BUS_MEMW >> 1) & 1, BUS_MEMW & 1);
     drive_address(address & 0xFFFFF);
-    full_wait_clk();                                             // T1
+    full_wait_clk("T1 bus_write");                               // T1
 
     // T2 -- ALE falls, latches capture. Switch AD to write data, go passive.
     drive_data(value);
     drive_status_passive();
-    full_wait_clk();                                             // T2
+    full_wait_clk("T2 bus_write");                               // T2
+
+    // T3 -- data held on bus
+    full_wait_clk("T3 bus_write");                               // T3
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
         spdlog::trace("[8088] Tw wait (write) READY={}", int(pin_ready_.level()));
-        full_wait_clk();                                         // Tw
+        full_wait_clk("Tw bus_write");                           // Tw
     }
-
-    // T3 -- data held on bus
-    full_wait_clk();                                             // T3
 
     // T4 -- bus cycle complete, release data bus
     release_data();
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
-    full_wait_clk();                                             // T4
+    full_wait_clk("T4 bus_write");                               // T4
 }
 
 uint16_t IC_8088::bus_read_word(uint32_t address) {
@@ -303,26 +304,26 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
     // T1 -- drive S0-S2 (IOR), drive port address
     drive_status((BUS_IOR >> 2) & 1, (BUS_IOR >> 1) & 1, BUS_IOR & 1);
     drive_address(port);
-    full_wait_clk();                                             // T1
+    full_wait_clk("T1 io_read");                                 // T1
 
     // T2 -- ALE falls, latches capture. Release AD, go passive.
     release_data();
     drive_status_passive();
-    full_wait_clk();                                             // T2
+    full_wait_clk("T2 io_read");                                 // T2
+
+    // T3 -- BusGlue/74S245 drive data (earlier in DAG wave), then we read.
+    uint8_t data = read_data();
+    full_wait_clk("T3 io_read");                                 // T3
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
         spdlog::trace("[8088] Tw wait (io_read) READY={}", int(pin_ready_.level()));
-        full_wait_clk();                                         // Tw
+        full_wait_clk("Tw io_read");                             // Tw
     }
-
-    // T3 -- BusGlue/74S245 drive data (earlier in DAG wave), then we read.
-    uint8_t data = read_data();
-    full_wait_clk();                                             // T3
 
     // T4 -- bus cycle complete
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
-    full_wait_clk();                                             // T4
+    full_wait_clk("T4 io_read");                                 // T4
     return data;
 }
 
@@ -331,26 +332,26 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     // T1 -- drive S0-S2 (IOW), drive port address
     drive_status((BUS_IOW >> 2) & 1, (BUS_IOW >> 1) & 1, BUS_IOW & 1);
     drive_address(port);
-    full_wait_clk();                                             // T1
+    full_wait_clk("T1 io_write");                                // T1
 
     // T2 -- ALE falls, latches capture. Switch AD to write data, go passive.
     drive_data(value);
     drive_status_passive();
-    full_wait_clk();                                             // T2
+    full_wait_clk("T2 io_write");                                // T2
+
+    // T3 -- data held on bus
+    full_wait_clk("T3 io_write");                                // T3
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
         spdlog::trace("[8088] Tw wait (write) READY={}", int(pin_ready_.level()));
-        full_wait_clk();                                         // Tw
-    }
-
-    // T3 -- data held on bus
-    full_wait_clk();                                             // T3
+        full_wait_clk("Tw io_write");                            // Tw
+    }    
 
     // T4 -- bus cycle complete, release data bus
     release_data();
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
-    full_wait_clk();                                             // T4
+    full_wait_clk("T4 io_write");                                // T4
 }
 
 // ========================================================================
@@ -1264,24 +1265,24 @@ void IC_8088::execute() {
 
             // First INTA pulse (PIC latches request) -- 4 T-states
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
-            full_wait_clk();                                     // T1
+            full_wait_clk("T1 INTA Pulse 1");                    // T1
             release_data();
             drive_status_passive();
-            full_wait_clk();                                     // T2
-            full_wait_clk();                                     // T3
+            full_wait_clk("T2 INTA Pulse 1");                    // T2
+            full_wait_clk("T3 INTA Pulse 1");                    // T3
             bus_t_ = BusT::T1;
-            full_wait_clk();                                     // T4
+            full_wait_clk("T4 INTA Pulse 1");                    // T4
 
             // Second INTA pulse (PIC drives vector on data bus) -- 4 T-states
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
-            full_wait_clk();                                     // T1
+            full_wait_clk("T1 INTA Pulse 2");                    // T1
             release_data();
             drive_status_passive();
-            full_wait_clk();                                     // T2
+            full_wait_clk("T2 INTA Pulse 2");                    // T2
             uint8_t vector = read_data();
-            full_wait_clk();                                     // T3
+            full_wait_clk("T3 INTA Pulse 2");                    // T3
             bus_t_ = BusT::T1;
-            full_wait_clk();                                     // T4
+            full_wait_clk("T4 INTA Pulse 2");                    // T4
 
             pc_interrupt(vector);
         }

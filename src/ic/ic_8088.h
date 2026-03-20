@@ -70,7 +70,7 @@ private:
     void release_data();
     void drive_status(uint8_t s2, uint8_t s1, uint8_t s0);
     void drive_status_passive();
-    void full_wait_clk();
+    void full_wait_clk(const char* stateYield);
 
     // --- Memory routing (register file or bus) ---
     static constexpr uint32_t REGS_BASE = 0xF0000;
