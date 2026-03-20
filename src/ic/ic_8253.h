@@ -80,6 +80,8 @@ private:
     bool data_bus_driven_ = false;
     bool write_pending_ = false;
     bool read_pending_ = false;
+    bool wr_prev_ = false;  // ~WR was low last cycle
+    bool rd_prev_ = false;  // ~RD was low last cycle
 };
 
 } // namespace bench

@@ -1267,8 +1267,8 @@ void IC_8088::execute() {
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             full_wait_clk("T1 INTA Pulse 1");                    // T1
             release_data();
-            drive_status_passive();
             full_wait_clk("T2 INTA Pulse 1");                    // T2
+            drive_status_passive();
             full_wait_clk("T3 INTA Pulse 1");                    // T3
             bus_t_ = BusT::T1;
             full_wait_clk("T4 INTA Pulse 1");                    // T4
@@ -1277,10 +1277,10 @@ void IC_8088::execute() {
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             full_wait_clk("T1 INTA Pulse 2");                    // T1
             release_data();
-            drive_status_passive();
             full_wait_clk("T2 INTA Pulse 2");                    // T2
-            uint8_t vector = read_data();
+            drive_status_passive();
             full_wait_clk("T3 INTA Pulse 2");                    // T3
+            uint8_t vector = read_data();
             bus_t_ = BusT::T1;
             full_wait_clk("T4 INTA Pulse 2");                    // T4
 

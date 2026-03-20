@@ -95,16 +95,19 @@ void IC_8253::on_signal_change(Fiber /*caller*/) {
             handle_write();
             write_pending_ = false;
         }
-    } else if (rd_low || wr_low) {
-        if (rd_low) {
+    } else if ((rd_low && !rd_prev_) || (wr_low && !wr_prev_)) {
+        // Edge detection: only trigger on falling edge of ~RD/~WR.
+        if (rd_low && !rd_prev_) {
             read_pending_ = true;
         }
-        if (wr_low) {
+        if (wr_low && !wr_prev_) {
             write_pending_ = true;
         }
-    } else if (data_bus_driven_) {
+    } else if (data_bus_driven_ && !rd_low) {
         release_data_bus();
     }
+    wr_prev_ = wr_low;
+    rd_prev_ = rd_low;
 
     // Gate levels -- sample once per cycle.
     for (int i = 0; i < 3; ++i)

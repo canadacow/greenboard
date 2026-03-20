@@ -190,6 +190,20 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         }
     }
 
+    // Level-based: keep driving data as long as CAS is Low and we're reading.
+    // The edge handler above sets driving=true on CAS fall; here we re-drive
+    // on subsequent cycles so the data stays on the bus until CAS releases.
+    if (bank.driving && cas_cur == Level::Low && pin_we_.level() != Level::Low) {
+        uint8_t col_addr = read_address();
+        uint32_t addr = (static_cast<uint32_t>(b) << 16)
+                      | (static_cast<uint32_t>(bank.row_addr) << 8)
+                      | col_addr;
+        uint8_t data = ram_[addr];
+        for (int i = 0; i < 8; ++i)
+            bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
+        bank.dout[8].drive(parity_[addr] ? Level::High : Level::Low);
+    }
+
     // ~CAS rising edge: release data outputs
     if (cas_cur == Level::High && bank.cas_prev != Level::High) {
         if (bank.driving) {
