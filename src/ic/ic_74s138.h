@@ -43,6 +43,9 @@ class IC_74S138 : public CallbackComponent {
 public:
     IC_74S138() : CallbackComponent("74S138") { set_description("3-to-8 Decoder"); }
 
+    // Make ~G2B async (for U66 where ~G2B = ~AEN from registered U98).
+    void set_g2b_async() { declare_async_input(g2b_); }
+
     void install(Socket& socket) {
         auto pin = [&](int p) -> Pin {
             Signal* s = socket.pin_signal(p);

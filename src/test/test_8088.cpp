@@ -150,14 +150,15 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov",
+        "dma",
+        /*"mov",
         "rom",
         "io",
         "alu",
@@ -173,9 +174,8 @@ int main() {
         "irq",
         "pit",
         "mmio",
-        "dma",
         "dma_m2m",
-        /*"dma_refresh",*/
+        "dma_refresh",*/
     };
 
     std::vector<TestCase> tests;

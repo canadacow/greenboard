@@ -399,7 +399,13 @@ void IC_8237A::on_clk_falling() {
     switch (state_) {
 
     case State::SI:
-        // Nothing -- evaluate_dreq() handles transition to BusRequested
+        // Deferred bus release from end_dma_service.
+        if (pin_hrq_.level() == Level::High && active_ch_ < 0) {
+            pin_hrq_.drive(Level::Low);
+            pin_aen_.drive(Level::Low);
+            release_address();
+            release_data();
+        }
         break;
 
     case State::BusRequested:
@@ -407,6 +413,7 @@ void IC_8237A::on_clk_falling() {
             spdlog::debug("[8237A] HLDA received, entering S1 for ch{}", active_ch_);
             state_ = State::S1;
         } else {
+            spdlog::trace("[8237A] BusRequested: waiting for HLDA (HLDA={})", int(pin_hlda_.level()));
             break;
         }
         // Fall through to execute S1 in this same CLK cycle
@@ -689,7 +696,8 @@ void IC_8237A::end_dma_service() {
     if (ch_idx >= 0)
         pin_dack_[ch_idx].drive(Level::High);
 
-    // Release bus
+    // Release bus: HRQ and AEN drop. HOLDA clears async (U67 ~CLR).
+    // AEN_BRD drops on next cycle (U98 latches HOLDA=Low).
     pin_hrq_.drive(Level::Low);
     pin_aen_.drive(Level::Low);
 
@@ -698,7 +706,6 @@ void IC_8237A::end_dma_service() {
     release_data();
 
     // Clear software request for the channel that just completed.
-    // For mem-to-mem, clear ch0's request (the trigger channel).
     if (ch_idx >= 0)
         ch_[ch_idx].request = false;
     if (command_ & 0x01)

@@ -40,6 +40,10 @@ public:
 
     void install(Socket& socket);
 
+    // Override a specific D pin from async to sync (adds DAG edge).
+    // Call after install. Use when the D source doesn't create a cycle.
+    void set_d_sync(int index);
+
 protected:
     void on_power_on() override;
     void on_power_off() override;

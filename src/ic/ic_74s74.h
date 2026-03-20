@@ -33,7 +33,9 @@ namespace bench {
 // Threading: CallbackComponent -- sequential, no fiber.
 class IC_74S74 : public CallbackComponent {
 public:
-    IC_74S74();
+    // async_clk: when true, CLK is declared async_input (breaks DAG cycles
+    // for registered feedback paths like U82's N-000240 -> CLK -> N-000237).
+    explicit IC_74S74(bool async_clk = false);
 
     void install(Socket& socket);
 
@@ -52,6 +54,7 @@ private:
         Level clk_prev = Level::HiZ;
     };
     FF ff_[2];
+    bool async_clk_ = false;
 };
 
 } // namespace bench

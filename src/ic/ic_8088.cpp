@@ -231,6 +231,7 @@ void IC_8088::full_wait_clk() {
     check_nmi();
 }
 
+
 // ---- Memory read: 4 T-states (T1, T2, T3, T4) + optional Tw ----
 uint8_t IC_8088::bus_read_byte(uint32_t address) {
     // T1 -- drive S0-S2 (MEMR), drive address on AD0-AD7 / A8-A19
@@ -245,6 +246,7 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
+        spdlog::trace("[8088] Tw wait (read) READY={}", int(pin_ready_.level()));
         full_wait_clk();                                         // Tw
     }
 
@@ -272,6 +274,7 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
+        spdlog::trace("[8088] Tw wait (write) READY={}", int(pin_ready_.level()));
         full_wait_clk();                                         // Tw
     }
 
@@ -309,6 +312,7 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
+        spdlog::trace("[8088] Tw wait (io_read) READY={}", int(pin_ready_.level()));
         full_wait_clk();                                         // Tw
     }
 
@@ -336,6 +340,7 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
+        spdlog::trace("[8088] Tw wait (write) READY={}", int(pin_ready_.level()));
         full_wait_clk();                                         // Tw
     }
 

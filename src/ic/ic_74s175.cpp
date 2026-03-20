@@ -39,12 +39,16 @@ void IC_74S175::install(Socket& socket) {
     pin_nq_[3] = pin(14);
 
     // Pin directions for DAG ordering.
-    // D pins use connect_pin (for signal-change notification) but
-    // declare_async_input (no DAG edge) to avoid feedback cycles
-    // through the output chain (e.g. U98: AEN_BRD -> ... -> N-000238 -> 4D).
+    // D pins default to async (registered FF: no same-cycle combinational path).
+    // Use set_d_sync() for specific D pins where the source doesn't create a cycle
+    // and correct DAG ordering is needed (e.g. U98 D1=HOLDA from U67).
     declare_input(pin_clr_); declare_input(pin_clk_);
     for (int i = 0; i < 4; ++i) declare_async_input(pin_d_[i]);
     for (int i = 0; i < 4; ++i) { declare_output(pin_q_[i]); declare_output(pin_nq_[i]); }
+}
+
+void IC_74S175::set_d_sync(int index) {
+    declare_input(pin_d_[index]);
 }
 
 void IC_74S175::on_power_on() {

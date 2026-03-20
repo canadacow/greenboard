@@ -51,7 +51,9 @@ void IC_8288::install(Socket& socket) {
     declare_input(pin_clk_);
     declare_input(pin_s0_); declare_input(pin_s1_);
     declare_input(pin_s2_);
-    declare_input(pin_cen_); declare_input(pin_aen_);
+    // CEN/AEN come from U98 (clocked FF). The 8288 sees the previous
+    // cycle's value, breaking the U98 -> U6 -> ... -> U98 feedback cycle.
+    declare_async_input(pin_cen_); declare_async_input(pin_aen_);
     declare_output(pin_ale_); declare_output(pin_den_); declare_output(pin_dtr_);
     declare_output(pin_memr_); declare_output(pin_memw_);
     declare_output(pin_ior_); declare_output(pin_iow_); declare_output(pin_inta_);

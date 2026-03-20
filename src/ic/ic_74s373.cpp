@@ -96,10 +96,17 @@ void IC_74S373::update_outputs() {
     bool oe_low = oe_.level() == Level::Low;
     if (oe_low) {
         q_.drive(latch_);
+        if (!oe_active_)
+            spdlog::trace("[{}] ~OE=Low -> outputs ENABLED val=0x{:02X}", name(),
+                          uint8_t((int(latch_[7])&1)<<7 | (int(latch_[6])&1)<<6 |
+                                  (int(latch_[5])&1)<<5 | (int(latch_[4])&1)<<4 |
+                                  (int(latch_[3])&1)<<3 | (int(latch_[2])&1)<<2 |
+                                  (int(latch_[1])&1)<<1 | (int(latch_[0])&1)));
         oe_active_ = true;
     } else if (oe_active_) {
         q_.release();
         oe_active_ = false;
+        spdlog::trace("[{}] ~OE=High -> outputs TRI-STATED", name());
     }
 }
 

@@ -600,6 +600,7 @@ struct TestBoard {
         io_decode.wire(11, pg_reg_cs);  // ~Y4 = page reg CS (0x80-0x9F)
         io_decode.wire(16, vcc);
         io_dec = io_decode.emplace<IC_74S138<0x1F>>();
+        io_dec->set_g2b_async();  // ~G2B=~AEN from U98 (registered, breaks DAG cycle)
 
         // U2: 8259A PIC
         pic_socket.wire(1, intr_cs);
@@ -1013,6 +1014,7 @@ struct TestBoard {
         ff98_socket.wire(15, n_000231);        // 4Q = N-000231 -> U67 FF1 D
         ff98_socket.wire(16, vcc);             // VCC
         ff98_ic = ff98_socket.emplace<IC_74S175>();
+        ff98_ic->set_d_sync(0);  // D1=HOLDA: sync so U98 evaluates after U67
 
         // U67: 74S74 Dual D Flip-Flop (HOLDA + DRQ0 latch)
         // FF1: generates HOLDA from bus idle grant
@@ -1035,7 +1037,7 @@ struct TestBoard {
         ff67_socket.wire(12, vcc);             // D2 = VCC (always latch High)
         ff67_socket.wire(13, dack0_brd);       // ~CLR2 = ~DACK_0_BRD (clears on DMA ack)
         ff67_socket.wire(14, vcc);             // VCC
-        ff67_ic = ff67_socket.emplace<IC_74S74>();
+        ff67_ic = ff67_socket.emplace<IC_74S74>(true);  // async CLK: FF2 CLK=PIT OUT1 (async timer)
 
         // U82: 74S74 Dual D Flip-Flop (keyboard IRQ1 + DMA wait state)
         // FF1: keyboard/SW1 mux control (not implemented -- tie outputs stable)
@@ -1056,7 +1058,7 @@ struct TestBoard {
         ff82_socket.wire(12, dack0_brd);       // D2 = ~DACK_0_BRD
         ff82_socket.wire(13, n_000244);        // ~CLR2 = N-000244 (from U98)
         ff82_socket.wire(14, vcc);             // VCC
-        ff82_ic = ff82_socket.emplace<IC_74S74>();
+        ff82_ic = ff82_socket.emplace<IC_74S74>(true);  // async CLK (registered feedback)
 
         // U18: 74S373 DMA Page Address Latch (A8-A15 from data bus via ADSTB)
         // BRD: ~OC=~DMA_AEN, LE=ADSTB(N-000280)

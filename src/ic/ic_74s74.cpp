@@ -3,7 +3,7 @@
 
 namespace bench {
 
-IC_74S74::IC_74S74() : CallbackComponent("74S74") { set_description("Dual D Flip-Flop"); }
+IC_74S74::IC_74S74(bool async_clk) : CallbackComponent("74S74"), async_clk_(async_clk) { set_description("Dual D Flip-Flop"); }
 
 void IC_74S74::install(Socket& socket) {
     auto connect_pin = [&](int p) -> Pin {
@@ -36,13 +36,16 @@ void IC_74S74::install(Socket& socket) {
     Signal* vcc = socket.pin_signal(14);
     if (vcc) vcc->connect(this);
 
-    // Pin directions for DAG ordering.
-    // D and CLK are async: output changes on CLK edge, not combinationally.
-    // No same-cycle dependency from D or CLK to Q.
+    // D pins are async: sampled on CLK edge only, not combinational.
+    // CLK is sync by default but can be made async to break registered
+    // feedback cycles (e.g. U82 where CLK comes from downstream of Q).
     for (auto& f : ff_) {
         declare_input(f.clr);
         declare_async_input(f.d);
-        declare_async_input(f.clk);
+        if (async_clk_)
+            declare_async_input(f.clk);
+        else
+            declare_input(f.clk);
         declare_input(f.pre);
         declare_output(f.q);
         declare_output(f.nq);
