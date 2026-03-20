@@ -150,17 +150,11 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
         release_data();
 
     // DREQ changes -- check for new DMA requests.
-    // Skip one cycle after releasing the bus so the CPU can execute
-    // at least one instruction (e.g. mask a channel).
+    // evaluate_dreq() gates on HLDA Low per datasheet p.6.
     spdlog::trace("[8237A] DREQ: ch0={} ch1={} ch2={} ch3={} disabled={} state={}",
                   int(pin_dreq_[0].level()), int(pin_dreq_[1].level()),
                   int(pin_dreq_[2].level()), int(pin_dreq_[3].level()),
                   disabled_, int(state_));
-    // Only check DREQ when HLDA is Low (CPU owns the bus).
-    // This ensures the CPU has completed its bus handshake before
-    // the DMA re-requests. On real HW, U52/U67 enforce this: HOLDA
-    // clears asynchronously when HRQ drops, and only re-asserts
-    // after the 8088 enters passive state on a subsequent CLK edge.
     evaluate_dreq();
 
     // Advance state machine. Each call to on_signal_change is one full cycle, always
@@ -359,6 +353,10 @@ void IC_8237A::on_bus_read() {
 void IC_8237A::evaluate_dreq() {
     if (disabled_ || state_ != State::SI) return;
 
+    // Datasheet p.6: "HRQ will go inactive and the 8237A will wait for
+    // HLDA to go low before activating HRQ to service another channel."
+    if (pin_hlda_.level() == Level::High) return;
+
     // Fixed priority: CH0 highest
     for (int i = 0; i < 4; ++i) {
         if (ch_[i].masked) continue;
@@ -519,18 +517,29 @@ void IC_8237A::on_clk_falling() {
                       (command_ & 0x01) ? " (m2m read)" : "");
 
         bool compressed = (command_ & 0x08) != 0;
-        state_ = compressed ? State::S4 : State::S3;
+        if (compressed) {
+            // Compressed timing skips S3; check READY here instead.
+            state_ = (pin_ready_.level() == Level::High) ? State::S4 : State::S2;
+        } else {
+            state_ = State::S3;
+        }
         break;
     }
 
     case State::S3:
-        // Wait state -- extends read access time.
-        // TODO: check READY for wait-state insertion
+        // Datasheet p.4: "wait states (SW) can be inserted between
+        // S2 or S3 and S4 by the use of the Ready line."
+        if (pin_ready_.level() != Level::High) break;  // Sw
         state_ = State::S4;
         break;
 
     case State::S4: {
         auto& ch = ch_[active_ch_];
+
+        spdlog::trace("[8237A] S4 entry ch{}: addr={:#06x} count={} HLDA={} HRQ={} DACK[{}]={}",
+                      active_ch_, ch.current_address, ch.current_count,
+                      int(pin_hlda_.level()), int(pin_hrq_.level()),
+                      active_ch_, int(pin_dack_[active_ch_].level()));
 
         // Deassert all strobes
         pin_memr_.drive(Level::High);
@@ -614,6 +623,7 @@ void IC_8237A::on_clk_falling() {
             release_bus = tc;
         }
 
+        spdlog::trace("[8237A] S4 ch{}: mode_type={} release_bus={} tc={}", active_ch_, mode_type, release_bus, tc);
         if (release_bus) {
             end_dma_service();
         } else {
@@ -715,7 +725,10 @@ void IC_8237A::end_dma_service() {
     active_ch_ = -1;
     mem2mem_write_ = false;
 
-    spdlog::debug("[8237A] DMA service complete for ch{}", ch_idx);
+    spdlog::debug("[8237A] DMA service complete for ch{}: HRQ={} HLDA={} DACK[0..3]={},{},{},{}",
+                  ch_idx, int(pin_hrq_.level()), int(pin_hlda_.level()),
+                  int(pin_dack_[0].level()), int(pin_dack_[1].level()),
+                  int(pin_dack_[2].level()), int(pin_dack_[3].level()));
 
     // Bus released. HLDA will clear via U52/U67 handshake.
     // evaluate_dreq() won't re-request until HLDA is Low.
