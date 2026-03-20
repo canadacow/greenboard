@@ -86,14 +86,16 @@ uint16_t IC_ROM_8K::read_address() const {
 void IC_ROM_8K::update_outputs() {
     bool selected = pin_cs_.level() == Level::Low;
 
-    if (selected && !driving_) {
+    if (selected) {
+        // Drive data every cycle while ~CS is Low.
         uint16_t addr = read_address();
         uint8_t data = rom_[addr & 0x1FFF];
         for (int i = 0; i < 8; ++i) {
             pin_d_[i].drive((data >> i) & 1 ? Level::High : Level::Low);
         }
-        spdlog::trace("[{}] ~CS Low, addr=0x{:04X} data=0x{:02X}", name(), addr, data);
-        driving_ = true;        
+        if (!driving_)
+            spdlog::trace("[{}] ~CS Low, addr=0x{:04X} data=0x{:02X}", name(), addr, data);
+        driving_ = true;
     } else if (driving_) {
         for (int i = 0; i < 8; ++i) {
             pin_d_[i].release();
