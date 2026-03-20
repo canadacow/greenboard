@@ -79,7 +79,7 @@ private:
     enum class BusCycle { Passive, INTA, IOR, IOW, Halt, Fetch, MemR, MemW };
 
     // T-state within a bus cycle
-    enum class State { Idle, T1, T2, T3 };
+    enum class State { Idle, T1, T2, T3, Tw };
 
     BusCycle decode_status() const;
     void release_command();
@@ -106,6 +106,7 @@ private:
     // Internal state
     State state_ = State::Idle;
     BusCycle cycle_ = BusCycle::Passive;
+    bool inhibited_ = false;  // true while AEN/CEN inhibits outputs
 
     // Transceivers: direction pre-set after DT/~R changes.
     IC_74S245* xcvr_ = nullptr;    // U8: AD <-> D

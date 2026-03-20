@@ -9,6 +9,7 @@ IC_8288::IC_8288() : CallbackComponent("8288") { set_description("Bus Controller
 void IC_8288::on_power_on() {
     state_ = State::Idle;
     cycle_ = BusCycle::Passive;
+    inhibited_ = false;
     release_command();
     // U14 always copies CPU -> X-bus in CPU mode (A->B).
     // Prime it at power-on so command signals propagate from the first cycle.
@@ -143,15 +144,43 @@ void IC_8288::release_command() {
 
 void IC_8288::on_clk_rising() {
     // If ~AEN is active (Low), DMA owns the bus -- 8288 is inhibited.
+    // Per 82C88 datasheet: CEN LOW forces command outputs inactive but
+    // does NOT reset the internal state machine.  Preserve state_/cycle_
+    // so the command re-asserts when DMA releases the bus.
     if (pin_aen_.level() == Level::Low) {
-        if (state_ != State::Idle) {
+        if (!inhibited_) {
             release_command();
             pin_ale_.drive(Level::Low);
             pin_den_.drive(Level::High);  // ~DEN deasserted
             disable_xcvr();
-            state_ = State::Idle;
-            cycle_ = BusCycle::Passive;
+            inhibited_ = true;
         }
+        return;
+    }
+
+    // Un-inhibited: if we were inhibited, re-assert command for the
+    // preserved bus cycle so the CPU's suspended read/write completes.
+    if (inhibited_) {
+        inhibited_ = false;
+        if (state_ == State::T2 || state_ == State::T3 || state_ == State::Tw) {
+            // Re-assert the command that was forced inactive during DMA.
+            switch (cycle_) {
+                case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
+                case BusCycle::IOR:   pin_ior_.drive(Level::Low);  break;
+                case BusCycle::IOW:   pin_iow_.drive(Level::Low);  break;
+                case BusCycle::Fetch:
+                case BusCycle::MemR:  pin_memr_.drive(Level::Low); break;
+                case BusCycle::MemW:  pin_memw_.drive(Level::Low); break;
+                default: break;
+            }
+            pin_den_.drive(Level::Low);
+            nudge_xcvr();
+            spdlog::trace("[{}] DMA released, re-asserting cmd cycle={}", name(),
+                          cycle_ == BusCycle::MemR ? "MemR" :
+                          cycle_ == BusCycle::Fetch ? "Fetch" : "other");
+        }
+        // Don't advance the state machine this cycle -- just re-assert.
+        // The normal T3->T4 transition will happen on the next CLK.
         return;
     }
 
@@ -216,8 +245,20 @@ void IC_8288::on_clk_rising() {
             spdlog::trace("[{}] T2->T3 cycle={}", name(), cyc_name(cycle_));
             break;
 
-        case State::T3: {
-            // T4: Deassert commands, deassert ~DEN, back to idle.
+        case State::T3:
+            // Normal T3: advance to Tw. Commands stay asserted.
+            // The real 8288 holds commands through T3 and any wait states.
+            // We transition to Tw so the NEXT cycle can check for T4.
+            state_ = State::Tw;
+            break;
+
+        case State::Tw: {
+            // Wait state: hold commands while status is passive (CPU in Tw).
+            // Status goes active at T4 (new cycle starting) -> release.
+            BusCycle bus = decode_status();
+            if (bus == BusCycle::Passive) break;  // CPU still in Tw
+
+            // Status active -> T4: deassert commands, check for new cycle.
             release_command();
             pin_den_.drive(Level::High);  // ~DEN deasserted
             disable_xcvr();
