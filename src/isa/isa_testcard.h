@@ -81,7 +81,6 @@ private:
     Level iow_prev_ = Level::HiZ;
     Level memr_prev_ = Level::HiZ;
     Level memw_prev_ = Level::HiZ;
-    bool mem_read_pending_ = false;
     bool mem_write_pending_ = false;
     bool data_driven_ = false;
     uint8_t read_byte_ = 0;

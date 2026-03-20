@@ -124,7 +124,6 @@ void ISA_TestCard::on_power_on() {
     write_pending_ = false;
     read_pending_ = false;
     mem_write_pending_ = false;
-    mem_read_pending_ = false;
     memr_prev_ = Level::HiZ;
     memw_prev_ = Level::HiZ;
     dma_ptr_ = 0;
@@ -249,19 +248,17 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     }
     memw_prev_ = memw_cur;
 
-    if (mem_read_pending_) {
+    if (memr_cur == Level::Low) {
+        // Drive data as long as ~MEMR is active (level-based, not edge).
         uint32_t addr = read_address();
         if (my_mmio(addr)) {
             uint8_t val = mmio_[addr - MMIO_BASE];
-            spdlog::trace("[{}] MMIO READ 0x{:05X} = 0x{:02X}", name(), addr, val);
+            if (!data_driven_ || memr_prev_ != Level::Low)
+                spdlog::trace("[{}] MMIO READ 0x{:05X} = 0x{:02X}", name(), addr, val);
             drive_sd(val);
         }
-        mem_read_pending_ = false;
-    } else if (memr_cur == Level::Low && memr_prev_ != Level::Low) {
-        uint32_t addr = read_address();
-        if (my_mmio(addr))
-            mem_read_pending_ = true;
-    } else if (memr_cur != Level::Low && memr_prev_ == Level::Low) {
+    } else if (memr_prev_ == Level::Low) {
+        // ~MEMR released -- stop driving.
         if (data_driven_) release_sd();
     }
     memr_prev_ = memr_cur;
