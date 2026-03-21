@@ -143,6 +143,7 @@ private:
     bool disabled_ = false;     // controller disabled (command bit 2)
 
     bool db_driving_ = false;   // true when we're actively driving data bus
+    bool hrq_driven_ = false;   // true when HRQ is High (avoid reading own output)
     bool a_driving_ = false;    // true when we're driving address pins A0-A7
     bool write_pending_ = false; // deferred bus write (data not yet on bus)
     bool read_pending_ = false;  // deferred bus read
