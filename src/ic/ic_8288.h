@@ -70,6 +70,14 @@ public:
         declare_async_input(pin_a18_); declare_async_input(pin_a19_);
     }
 
+    // Bus recovery state machine (B0-B3):
+    //   B0: detected, do nothing (DMA write still finishing)
+    //   B1: un-inhibit, re-assert commands, nudge transceivers
+    //   B2: bus settled, release READY for CPU (DMA still blocked)
+    //   B3: unblock DMA, fully normal
+    // bus_hold() keeps READY Low during B0 and B1.
+    bool bus_hold() const { return bus_hold_ > 1; }
+
 protected:
     void on_power_on() override;
     void on_signal_change(Fiber caller) override;
@@ -106,6 +114,7 @@ private:
     bool prev_active_ = false;   // status was active last cycle
     bool commanding_ = false;    // command strobe currently asserted
     bool inhibited_ = false;     // AEN/CEN inhibits outputs
+    int bus_hold_ = 0;           // recovering bus from DMA, countdown cycles
 
     // Transceivers: direction pre-set after DT/~R changes.
     IC_74S245* xcvr_ = nullptr;    // U8: AD <-> D

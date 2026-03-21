@@ -1,4 +1,5 @@
 #include "ic/ic_8284a.h"
+#include "ic/ic_8288.h"
 #include "core/scheduler.h"
 #include "host_platform/fiber.h"
 #include "host_platform/thread_util.h"
@@ -110,15 +111,15 @@ void IC_8284A::run(std::stop_token stop) {
         scheduler_->evaluate(self);
 
         // READY: synchronize from RDY1 (~DMA_WAIT) gated by ~AEN1 (~RDY/WAIT).
-        // When ~AEN1 is Low (active), READY follows RDY1.
-        // When ~AEN1 is High (disabled), READY is High (no wait).
-        // On the 5150, ~AEN1 = ~RDY/WAIT from U82, RDY1 = ~DMA_WAIT from U98.
-        // During DMA: ~DMA_WAIT goes Low -> READY Low -> CPU stalls in Tw.
+        // Also check 8288 bus_hold: when the 8288 is recovering the bus from
+        // DMA, hold READY Low so the CPU waits for the bus to settle.
         {
             Level aen1 = pin_aen1_.level();
             Level rdy1 = pin_rdy1_.level();
+            bool hold = bus_ctrl_ && bus_ctrl_->bus_hold();
             Level ready = (aen1 == Level::Low && rdy1 == Level::Low)
-                        ? Level::Low : Level::High;
+                        ? Level::Low
+                        : (hold ? Level::Low : Level::High);
             pin_ready_.drive(ready);
         }
 

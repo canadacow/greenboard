@@ -6,6 +6,7 @@
 namespace bench {
 
 class Scheduler;
+class IC_8288;
 
 // Intel 8284A Clock Generator / Driver.
 //
@@ -34,6 +35,7 @@ public:
     void install(Socket& socket);
 
     void set_scheduler(Scheduler* s) { scheduler_ = s; }
+    void set_bus_controller(IC_8288* bc) { bus_ctrl_ = bc; }
     uint64_t clk_cycles() const { return clk_cycles_; }
 
     // --- Mock PSU (driven from main thread, acted on by clock thread) ---
@@ -68,6 +70,7 @@ private:
     Pin pin_vcc_;
 
     Scheduler* scheduler_ = nullptr;
+    IC_8288* bus_ctrl_ = nullptr;
     uint64_t clk_cycles_ = 0;
 
     // --- PSU state ---

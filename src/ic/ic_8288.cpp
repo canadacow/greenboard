@@ -154,51 +154,78 @@ void IC_8288::on_clk_rising() {
     // Inhibit when DMA owns bus (AEN_BRD High) AND wait state active (~RDY/WAIT Low).
     // When U82 Q goes High, ~RDY/WAIT=High, un-inhibit so 8288 can re-assert
     // commands in the same cycle READY goes High.
-    bool dma_owns_bus = pin_cen_.level() == Level::Low;   // ~AEN=Low (U98 ~1Q) = DMA active
-    bool wait_active  = pin_aen_.level() == Level::Low;   // ~RDY/WAIT=Low
-    bool should_inhibit = dma_owns_bus && wait_active;
-    spdlog::trace("[{}] entry: ~AEN={} CEN={} dma={} wait={} inhibited={} commanding={} cycle={}",
-                  name(), int(pin_aen_.level()), int(pin_cen_.level()),
-                  dma_owns_bus, wait_active, inhibited_, commanding_, int(cycle_));
-    if (should_inhibit) {
-        if (!inhibited_) {
-            spdlog::debug("[{}] ~AEN Low -> inhibiting (was commanding={})", name(), commanding_);
-            release_command();
-            pin_ale_.drive(Level::Low);
-            pin_den_.drive(Level::High);  // ~DEN deasserted
-            disable_xcvr();
-            inhibited_ = true;
+    auto cyc_str = [this]() -> const char* {
+        switch (cycle_) {
+            case BusCycle::Passive: return "Passive"; case BusCycle::INTA: return "INTA";
+            case BusCycle::IOR: return "IOR"; case BusCycle::IOW: return "IOW";
+            case BusCycle::Halt: return "Halt"; case BusCycle::Fetch: return "Fetch";
+            case BusCycle::MemR: return "MemR"; case BusCycle::MemW: return "MemW";
+            default: return "???";
         }
-        return;
+    };
+
+    spdlog::trace("[{}] entry: ~AEN={} CEN={} inhibited={} commanding={} bus_hold={} cycle={}",
+                  name(), int(pin_aen_.level()), int(pin_cen_.level()),
+                  inhibited_, commanding_, bus_hold_, cyc_str());
+
+    // --- Bus recovery state machine (B0-B3) ---
+    // While bus_hold_ > 0, DMA re-inhibit is blocked.
+    // bus_hold() (checked by 8284A) returns true when bus_hold_ > 1.
+    if (bus_hold_ > 0) {
+        bus_hold_--;
+        if (bus_hold_ == 2) {
+            // B1: un-inhibit, re-assert commands, nudge transceivers.
+            inhibited_ = false;
+            spdlog::info("[{}] *** B1: un-inhibit, re-assert {} -- READY held Low ***", name(), cyc_str());
+            if (cycle_ != BusCycle::Passive && cycle_ != BusCycle::Halt) {
+                commanding_ = true;
+                switch (cycle_) {
+                    case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
+                    case BusCycle::IOR:   pin_ior_.drive(Level::Low);  break;
+                    case BusCycle::IOW:   pin_iow_.drive(Level::Low);  break;
+                    case BusCycle::Fetch:
+                    case BusCycle::MemR:  pin_memr_.drive(Level::Low); break;
+                    case BusCycle::MemW:  pin_memw_.drive(Level::Low); break;
+                    default: break;
+                }
+                pin_den_.drive(Level::Low);
+                nudge_xcvr();
+            }
+            return;
+        } else if (bus_hold_ == 1) {
+            // B2: bus settled, READY released for CPU. DMA still blocked.
+            spdlog::info("[{}] *** B2: bus settled, READY released for CPU -- DMA blocked ***", name());
+            // Fall through to normal status processing.
+        } else {
+            // B3: bus_hold_==0, fully normal. DMA unblocked.
+            spdlog::info("[{}] *** B3: DMA unblocked, fully normal ***", name());
+            // Fall through to normal processing.
+        }
     }
 
-    // Un-inhibited: if we were inhibited, re-assert command for the
-    // preserved bus cycle so the CPU's suspended read/write completes.
-    if (inhibited_) {
-        inhibited_ = false;
-        spdlog::debug("[{}] ~AEN High -> un-inhibiting, commanding={}", name(), commanding_);
-        if (cycle_ != BusCycle::Passive && cycle_ != BusCycle::Halt) {
-            // Re-assert the command for the stored bus cycle.
-            // DMA may have interrupted at T1 (before T2 asserted commands),
-            // so commanding_ might be false. Assert anyway -- the CPU needs
-            // the read/write to complete when READY goes High.
-            commanding_ = true;
-            switch (cycle_) {
-                case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
-                case BusCycle::IOR:   pin_ior_.drive(Level::Low);  break;
-                case BusCycle::IOW:   pin_iow_.drive(Level::Low);  break;
-                case BusCycle::Fetch:
-                case BusCycle::MemR:  pin_memr_.drive(Level::Low); break;
-                case BusCycle::MemW:  pin_memw_.drive(Level::Low); break;
-                default: break;
+    // Normal inhibit check (skipped while bus_hold_ > 0 = bus recovery active).
+    if (bus_hold_ == 0) {
+        bool dma_owns_bus = pin_cen_.level() == Level::Low;
+        bool wait_active  = pin_aen_.level() == Level::Low;
+        bool should_inhibit = dma_owns_bus && wait_active;
+        if (should_inhibit) {
+            if (!inhibited_) {
+                spdlog::info("[{}] *** INHIBIT: DMA taking bus (commanding={} cycle={}) ***", name(), commanding_, cyc_str());
+                release_command();
+                pin_ale_.drive(Level::Low);
+                pin_den_.drive(Level::High);
+                disable_xcvr();
+                inhibited_ = true;
             }
-            pin_den_.drive(Level::Low);
-            nudge_xcvr();
-            spdlog::debug("[{}] re-asserting cmd cycle={}", name(),
-                          cycle_ == BusCycle::MemR ? "MemR" :
-                          cycle_ == BusCycle::Fetch ? "Fetch" : "other");
+            return;
         }
-        // Don't process status this cycle -- just re-assert.
+    }
+
+    // Detect un-inhibit trigger: inhibited but should_inhibit is false.
+    // Start B0 of bus recovery.
+    if (inhibited_ && bus_hold_ == 0) {
+        bus_hold_ = 3;  // B0: do nothing this cycle, start recovery next
+        spdlog::info("[{}] *** B0: bus recovery STARTED (cycle={}) -- DMA write finishing ***", name(), cyc_str());
         return;
     }
 
