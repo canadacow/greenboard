@@ -110,16 +110,16 @@ void IC_8284A::run(std::stop_token stop) {
 
         scheduler_->evaluate(self);
 
-        // READY: synchronize from RDY1 (~DMA_WAIT) gated by ~AEN1 (~RDY/WAIT).
-        // Also check 8288 bus_hold: when the 8288 is recovering the bus from
-        // DMA, hold READY Low so the CPU waits for the bus to settle.
+        // READY = Low when any wait condition is active:
+        //   - bus_hold: 8288 recovering bus from DMA
+        //   - RDY1 Low: ~DMA_WAIT active (DMA owns bus)
+        //   - ~AEN1 Low: I/O_CH_RDY pulled Low (ISA device not ready)
         {
-            Level aen1 = pin_aen1_.level();
-            Level rdy1 = pin_rdy1_.level();
+            Level aen1 = pin_aen1_.level();  // I/O_CH_RDY
+            Level rdy1 = pin_rdy1_.level();  // ~DMA_WAIT
             bool hold = bus_ctrl_ && bus_ctrl_->bus_hold();
-            Level ready = (aen1 == Level::Low && rdy1 == Level::Low)
-                        ? Level::Low
-                        : (hold ? Level::Low : Level::High);
+            Level ready = (hold || rdy1 == Level::Low || aen1 == Level::Low)
+                        ? Level::Low : Level::High;
             pin_ready_.drive(ready);
         }
 

@@ -173,7 +173,7 @@ void IC_8288::on_clk_rising() {
     // bus_hold() (checked by 8284A) returns true when bus_hold_ > 0.
     if (bus_hold_ > 0) {
         bus_hold_--;
-        if (bus_hold_ == 3) {
+        if (bus_hold_ == 2) {
             // B1: un-inhibit, re-assert commands, nudge transceivers.
             inhibited_ = false;
             spdlog::info("[{}] *** B1: un-inhibit, re-assert {} -- READY held Low ***", name(), cyc_str());
@@ -191,10 +191,6 @@ void IC_8288::on_clk_rising() {
                 pin_den_.drive(Level::Low);
                 nudge_xcvr();
             }
-            return;
-        } else if (bus_hold_ == 2) {
-            // B2: RAS falls, row latched. CAS settling.
-            spdlog::info("[{}] *** B2: RAS/row latch, CAS settling -- READY held Low ***", name());
             return;
         } else if (bus_hold_ == 1) {
             // B3: CAS falls. Nudge transceivers again.
@@ -229,7 +225,7 @@ void IC_8288::on_clk_rising() {
     // Detect un-inhibit trigger: inhibited but should_inhibit is false.
     // Start B0 of bus recovery.
     if (inhibited_ && bus_hold_ == 0) {
-        bus_hold_ = 4;  // B0: do nothing this cycle, 4 cycles to full recovery
+        bus_hold_ = 3;  // B0: do nothing this cycle, 3 cycles to full recovery
         spdlog::info("[{}] *** B0: bus recovery STARTED (cycle={}) -- DMA write finishing ***", name(), cyc_str());
         return;
     }
