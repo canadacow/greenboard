@@ -61,6 +61,7 @@ private:
     Pin drq_[4];          // DRQ0-3 (output, only 1-3 used)
     Signal* drq_sig_[4] = {};
     Level dack_prev_[4] = {Level::HiZ, Level::HiZ, Level::HiZ, Level::HiZ};
+    bool dma_dack_pending_ = false;  // deferred: drive data next cycle after DACK fall
     int dma_ior_count_ = 0;       // IOR falling edges since last DACK fall
 
     // T/C (terminal count) from ISA bus -- fires when DMA transfer completes.

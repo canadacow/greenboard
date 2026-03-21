@@ -56,6 +56,12 @@ private:
         Pin i0, i1, y;
     };
     Mux muxes_[4];
+    IC_74S158* partner_ = nullptr;
+
+public:
+    // Link the high-nibble mux so this (low) mux can log full bytes.
+    void set_partner(IC_74S158* hi) { partner_ = hi; }
+    const Mux* muxes() const { return muxes_; }
 };
 
 } // namespace bench

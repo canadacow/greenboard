@@ -1,5 +1,7 @@
 #include "ic/ic_8237a.h"
 #include "ic/ic_74s245.h"
+#include "ic/ic_74s373.h"
+#include "ic/ic_74ls670.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -11,6 +13,11 @@ void IC_8237A::set_xcvr(IC_74S245* u8, IC_74S245* u12, IC_74S245* u13, IC_74S245
     xcvr_m_ = u12;
     xcvr_x_ = u13;
     xcvr_c_ = u14;
+}
+
+void IC_8237A::set_addr_latches(IC_74S373* u18, IC_74LS670* u19) {
+    u18_ = u18;
+    u19_ = u19;
 }
 
 void IC_8237A::install(Socket& socket) {
@@ -476,6 +483,11 @@ void IC_8237A::on_clk_falling() {
                 }
             }
         }
+
+        // Enable DMA address latches so their bidir lambdas return Output
+        // at the start of next cycle (S2), before ~DMA_AEN propagates.
+        if (u18_) u18_->set_dma_output(true);
+        if (u19_) u19_->set_dma_output(true);
 
         spdlog::debug("[8237A] S1 ch{}: addr={:#06x} upper={:#04x} A0-7=[{}{}{}{}{}{}{}{}]",
                       active_ch_, ch.current_address, upper,

@@ -117,8 +117,6 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
             }
         }
         if (b < 0) {
-            prev_addr_ = read_address();
-            spdlog::trace("[DRAM] prev_addr=0x{:02X}", prev_addr_);
             return;
         }
     }
@@ -129,12 +127,11 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
 
     // ~RAS falling edge: latch row address
     if (ras_cur == Level::Low && bank.ras_prev != Level::Low) {
-        // If CAS is already Low (same-eval RAS+CAS, DMA first byte),
-        // the mux has switched to column mode -- use saved row from
-        // previous eval.  Otherwise mux is in row mode -- read live.
-        bank.row_addr = (cas_cur == Level::Low) ? prev_addr_ : read_address();
+        bank.row_addr = read_address();
         bank.row_latched = true;
         active_bank_ = b;
+        spdlog::debug("[DRAM] ~RAS{} FALL -> row=0x{:02X} (A0-A7=0x{:02X})",
+                      b, bank.row_addr, uint8_t(~bank.row_addr));
     }
 
     // ~RAS rising edge: end of cycle, release outputs
@@ -161,6 +158,8 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
     }
     if ((cas_edge || ras_edge_with_cas) && bank.row_latched) {
         uint8_t col_addr = read_address();
+        spdlog::debug("[DRAM] ~CAS{} FALL -> col=0x{:02X} (A8-A15=0x{:02X}) row was 0x{:02X} (A0-A7=0x{:02X})",
+                      b, col_addr, uint8_t(~col_addr), bank.row_addr, uint8_t(~bank.row_addr));
         uint32_t addr = (static_cast<uint32_t>(b) << 16)
                       | (static_cast<uint32_t>(bank.row_addr) << 8)
                       | col_addr;
@@ -217,12 +216,10 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
     bank.cas_prev = cas_cur;
     spdlog::trace("[DRAM] state: bank={} ras={} cas={} ras_prev={} cas_prev={} "
                   "row_addr=0x{:02X} row_latched={} driving={} active_bank={} "
-                  "prev_addr=0x{:02X} ~WE={} addr_now=0x{:02X}",
+                  "~WE={} addr_now=0x{:02X}",
                   b, int(ras_cur), int(cas_cur), int(bank.ras_prev), int(bank.cas_prev),
                   bank.row_addr, bank.row_latched, bank.driving, active_bank_,
-                  prev_addr_, int(pin_we_.level()), read_address());
-
-    prev_addr_ = read_address();                  
+                  int(pin_we_.level()), read_address());
 }
 
 uint8_t IC_DRAM_256K::read_address() const {

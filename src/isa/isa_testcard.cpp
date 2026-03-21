@@ -141,15 +141,20 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     Level tc_cur = tc_.level();
 
     // --- DMA channels 1-3 ---
+    // Consume pending DACK: drive data one cycle after DACK fell.
+    if (dma_dack_pending_) {
+        dma_dack_pending_ = false;
+        uint8_t byte = dma_buf_[dma_ptr_ % DMA_BUF_SIZE];
+        spdlog::debug("[{}] DMA DACK{}: driving byte [{}]=0x{:02X}", name(), dma_active_ch_, dma_ptr_, byte);
+        drive_sd(byte);
+        dma_ptr_++;
+        dma_ior_count_ = 0;
+    }
     for (int ch = 1; ch <= 3; ++ch) {
         Level dack_cur = dack_[ch].level();
-        // ~DACKn falling edge: drive first byte, reset IOR counter.
+        // ~DACKn falling edge: defer data drive to next cycle.
         if (dack_cur == Level::Low && dack_prev_[ch] != Level::Low && dma_active_ch_ == ch) {
-            uint8_t byte = dma_buf_[dma_ptr_ % DMA_BUF_SIZE];
-            spdlog::debug("[{}] DMA DACK{}: driving byte [{}]=0x{:02X}", name(), ch, dma_ptr_, byte);
-            drive_sd(byte);
-            dma_ptr_++;
-            dma_ior_count_ = 0;
+            dma_dack_pending_ = true;
         }
         // ~DACKn rising edge: release data bus.
         if (dack_cur != Level::Low && dack_prev_[ch] == Level::Low) {

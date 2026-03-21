@@ -90,6 +90,26 @@ void IC_74S158::update_outputs() {
                   int(muxes_[2].i0.level()), int(muxes_[3].i0.level()),
                   int(muxes_[0].i1.level()), int(muxes_[1].i1.level()),
                   int(muxes_[2].i1.level()), int(muxes_[3].i1.level()));
+
+    // Log combined row/col bytes when partnered (low mux only)
+    if (partner_) {
+        auto to_byte = [](const Mux* lo, const Mux* hi, bool use_i1) -> uint8_t {
+            uint8_t v = 0;
+            for (int i = 0; i < 4; ++i) {
+                Level l = use_i1 ? lo[i].i1.level() : lo[i].i0.level();
+                if (l == Level::High) v |= (1 << i);
+            }
+            for (int i = 0; i < 4; ++i) {
+                Level l = use_i1 ? hi[i].i1.level() : hi[i].i0.level();
+                if (l == Level::High) v |= (1 << (i + 4));
+            }
+            return v;
+        };
+        uint8_t row_src = to_byte(muxes_, partner_->muxes(), false);
+        uint8_t col_src = to_byte(muxes_, partner_->muxes(), true);
+        spdlog::debug("[MUX] ADDR_SEL={} row_src(A0-A7)=0x{:02X} col_src(A8-A15)=0x{:02X}",
+                      sel ? "COL" : "ROW", row_src, col_src);
+    }
 }
 
 } // namespace bench

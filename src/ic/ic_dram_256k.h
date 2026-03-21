@@ -68,7 +68,6 @@ private:
     };
     Bank banks_[4];
     int active_bank_ = -1;  // which bank has ~RAS Low (-1 = none)
-    uint8_t prev_addr_ = 0; // debug: mux output from previous eval
 };
 
 } // namespace bench

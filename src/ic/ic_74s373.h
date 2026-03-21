@@ -39,6 +39,11 @@ public:
     void set_async_inputs() { async_d_ = true; }
     Level oe_level() const { return oe_.level(); }
 
+    // DMA output override: when true, bidir lambda returns Output
+    // regardless of ~OE pin level. Set by 8237A one cycle ahead.
+    void set_dma_output(bool en) { dma_output_ = en; }
+    bool dma_output() const { return dma_output_; }
+
     void install(Socket& socket);
 
 protected:
@@ -57,6 +62,7 @@ private:
     Level le_prev_ = Level::HiZ;
     bool oe_active_ = false;   // true when ~OE is Low (outputs driven)
     bool async_d_ = false;
+    bool dma_output_ = false;
 };
 
 } // namespace bench

@@ -5,6 +5,8 @@
 namespace bench {
 
 class IC_74S245;
+class IC_74S373;
+class IC_74LS670;
 
 // Intel 8237A-5 DMA Controller.
 //
@@ -60,6 +62,7 @@ public:
     //   U13 (D<->XD):  data path to/from ISA bus
     //   U14 (cmd):     B->A so DMA's ~MEMR/~MEMW reach system side
     void set_xcvr(IC_74S245* u8, IC_74S245* u12, IC_74S245* u13, IC_74S245* u14);
+    void set_addr_latches(IC_74S373* u18, IC_74LS670* u19);
 
 protected:
     void on_signal_change(Fiber caller) override;
@@ -147,6 +150,8 @@ private:
     IC_74S245* xcvr_m_ = nullptr;    // U12: D<->MD transceiver (DRAM)
     IC_74S245* xcvr_x_ = nullptr;    // U13: D<->XD transceiver (ISA)
     IC_74S245* xcvr_c_ = nullptr;    // U14: cmd strobe transceiver
+    IC_74S373* u18_ = nullptr;       // DMA upper address latch
+    IC_74LS670* u19_ = nullptr;      // DMA page register
     bool mem2mem_write_ = false; // true during write phase of mem-to-mem transfer
     uint8_t prev_upper_addr_ = 0; // last A8-A15 latched, for S1 skip optimization
 

@@ -126,6 +126,13 @@ private:
             r[3] = gate_eval<M3>(a_[3].level(), b_[3].level());
         }
         out_.drive(r);
+        spdlog::trace("[{}] gate1: A={} B={} -> Y={}  gate2: A={} B={} -> Y={}  "
+                      "gate3: A={} B={} -> Y={}  gate4: A={} B={} -> Y={}",
+                      name(),
+                      int(a_[0].level()), int(b_[0].level()), int(r[0]),
+                      int(a_[1].level()), int(b_[1].level()), int(r[1]),
+                      int(a_[2].level()), int(b_[2].level()), int(r[2]),
+                      int(a_[3].level()), int(b_[3].level()), int(r[3]));
     }
 
     Pin a_[4], b_[4], y_[4];

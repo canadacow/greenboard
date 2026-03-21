@@ -3,7 +3,7 @@
 #include "board/socket.h"
 
 // Forward declaration -- 8288 can nudge a folded-in 74S245 transceiver.
-namespace bench { class IC_74S245; }
+namespace bench { class IC_74S245; class IC_74S373; class IC_74LS670; }
 
 namespace bench {
 
@@ -65,6 +65,7 @@ public:
     // U8 (AD<->D), U13 (D<->XD), U12 (D<->MD), U14 (cmd strobes).
     void set_xcvr(IC_74S245* u8, IC_74S245* u13 = nullptr,
                   IC_74S245* u12 = nullptr, IC_74S245* u14 = nullptr);
+    void set_addr_latches(IC_74S373* u18, IC_74LS670* u19);
     void set_addr_hi(Pin a18, Pin a19) {
         pin_a18_ = a18; pin_a19_ = a19;
         declare_async_input(pin_a18_); declare_async_input(pin_a19_);
@@ -122,6 +123,8 @@ private:
     IC_74S245* xcvr_x_ = nullptr;  // U13: D <-> XD
     IC_74S245* xcvr_m_ = nullptr;  // U12: D <-> MD
     IC_74S245* xcvr_c_ = nullptr;  // U14: cmd strobes
+    IC_74S373* u18_ = nullptr;    // DMA upper address latch
+    IC_74LS670* u19_ = nullptr;   // DMA page register
 
     // U12 gate: only nudge U12 when address is in RAM range (A18=0, A19=0 for 256KB).
     Pin pin_a18_;

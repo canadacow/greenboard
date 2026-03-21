@@ -1,5 +1,7 @@
 #include "ic/ic_8288.h"
 #include "ic/ic_74s245.h"
+#include "ic/ic_74s373.h"
+#include "ic/ic_74ls670.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -103,6 +105,11 @@ void IC_8288::set_xcvr(IC_74S245* u8, IC_74S245* u13, IC_74S245* u12, IC_74S245*
     xcvr_c_ = u14;
 }
 
+void IC_8288::set_addr_latches(IC_74S373* u18, IC_74LS670* u19) {
+    u18_ = u18;
+    u19_ = u19;
+}
+
 void IC_8288::disable_xcvr() {
     if (xcvr_)   xcvr_->set_driving(IC_74S245::Driving::None);
     if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::None);
@@ -193,12 +200,12 @@ void IC_8288::on_clk_rising() {
             }
             return;
         } else if (bus_hold_ == 1) {
-            // B3: CAS falls. Nudge transceivers again.
+            // B2: CAS falls. Nudge transceivers again.
             spdlog::info("[{}] *** B3: CAS settling, nudge again -- READY held Low ***", name());
             nudge_xcvr();
             return;
         } else {
-            // B4: bus_hold_==0. DRAM reads. CPU reads. DMA unblocked.
+            // B3: bus_hold_==0. DRAM reads. CPU reads. DMA unblocked.
             spdlog::info("[{}] *** B4: bus settled, READY+DMA released ***", name());
             // Fall through to normal processing.
         }
@@ -226,6 +233,9 @@ void IC_8288::on_clk_rising() {
     // Start B0 of bus recovery.
     if (inhibited_ && bus_hold_ == 0) {
         bus_hold_ = 3;  // B0: do nothing this cycle, 3 cycles to full recovery
+        // Release DMA address latches so their bidirs revert to pin-driven
+        if (u18_) u18_->set_dma_output(false);
+        if (u19_) u19_->set_dma_output(false);
         spdlog::info("[{}] *** B0: bus recovery STARTED (cycle={}) -- DMA write finishing ***", name(), cyc_str());
         return;
     }

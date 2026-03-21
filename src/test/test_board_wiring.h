@@ -773,6 +773,7 @@ struct TestBoard {
         mux_hi.wire(15, gnd);              // ~STROBE = GND (always enabled)
         mux_hi.wire(16, vcc);              // VCC
         mux_hi_ic = mux_hi.emplace<IC_74S158>();
+        mux_lo_ic->set_partner(mux_hi_ic);
 
         // U81: 74S00 NAND -- RAS/CAS generation + refresh gating.
         // Gate 1: DACK0 NAND RAS -> ~REFRSH_GATE
@@ -1101,7 +1102,7 @@ struct TestBoard {
             ic->declare_bidir_block({qp[0],qp[1],qp[2],qp[3],qp[4],qp[5],qp[6],qp[7]},
                 Component::BidirDir::HiZ | Component::BidirDir::Output,
                 [raw]() {
-                    return raw->oe_level() == Level::Low
+                    return (raw->dma_output() || raw->oe_level() == Level::Low)
                         ? Component::BidirDir::Output : Component::BidirDir::HiZ;
                 });
             dma_page_latch.insert(std::move(ic));
@@ -1133,6 +1134,10 @@ struct TestBoard {
             ic->install(dma_page_reg);
             dma_page_reg.insert(std::move(ic));
         }
+
+        // Wire DMA address latches to 8237A (must be after U18/U19 creation)
+        dma_ic->set_addr_latches(dma_page_latch_ic, dma_page_reg_ic);
+        bc->set_addr_latches(dma_page_latch_ic, dma_page_reg_ic);
 
         // U17: 74S244 DMA Address Buffer (XA0-XA3 -> A0-A3, DMA A4-A7 -> A4-A7)
         // BRD: Group 1 (~1G=~DMA_AEN): XA0-XA3 (from 8237A) -> A0-A3 (system addr bus)
