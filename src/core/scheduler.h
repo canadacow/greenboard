@@ -543,6 +543,8 @@ private:
                 }
             }
             dump_cycle_dot(active_evals.data(), n, depends, in_deg, eff_out, eff_in);
+            // Also dump all previously-successful permutations for comparison.
+            dump_permutation_dots(evals_, static_cast<int>(evals_.size()));
             std::_Exit(1);
         }
 
