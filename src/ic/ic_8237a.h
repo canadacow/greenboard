@@ -63,6 +63,7 @@ public:
     //   U14 (cmd):     B->A so DMA's ~MEMR/~MEMW reach system side
     void set_xcvr(IC_74S245* u8, IC_74S245* u12, IC_74S245* u13, IC_74S245* u14);
     void set_addr_latches(IC_74S373* u18, IC_74LS670* u19);
+    void set_bus_ctrl(class IC_8288* bc) { bus_ctrl_ = bc; }
 
 protected:
     void on_signal_change(Fiber caller) override;
@@ -152,6 +153,7 @@ private:
     IC_74S245* xcvr_c_ = nullptr;    // U14: cmd strobe transceiver
     IC_74S373* u18_ = nullptr;       // DMA upper address latch
     IC_74LS670* u19_ = nullptr;      // DMA page register
+    IC_8288* bus_ctrl_ = nullptr;    // 8288: check bus_hold() before asserting HRQ
     bool mem2mem_write_ = false; // true during write phase of mem-to-mem transfer
     uint8_t prev_upper_addr_ = 0; // last A8-A15 latched, for S1 skip optimization
 

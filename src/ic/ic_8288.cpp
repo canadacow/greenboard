@@ -16,7 +16,7 @@ void IC_8288::on_power_on() {
     release_command();
     // U14 always copies CPU -> X-bus in CPU mode (A->B).
     // Prime it at power-on so command signals propagate from the first cycle.
-    if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::B);
+    xcvr_c_->set_driving(IC_74S245::Driving::B);
 }
 
 void IC_8288::install(Socket& socket) {
@@ -111,9 +111,9 @@ void IC_8288::set_addr_latches(IC_74S373* u18, IC_74LS670* u19) {
 }
 
 void IC_8288::disable_xcvr() {
-    if (xcvr_)   xcvr_->set_driving(IC_74S245::Driving::None);
-    if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::None);
-    if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::None);
+    xcvr_->set_driving(IC_74S245::Driving::None);
+    xcvr_x_->set_driving(IC_74S245::Driving::None);
+    xcvr_m_->set_driving(IC_74S245::Driving::None);
     // U14 (cmd xcvr) stays enabled -- CPU always drives command bus.
 }
 
@@ -122,24 +122,22 @@ void IC_8288::nudge_xcvr() {
     // before the bidir lambda catches up.
     bool is_write = (pin_dtr_.level() == Level::High);
     auto dir = is_write ? IC_74S245::Driving::B : IC_74S245::Driving::A;
-    if (xcvr_)   xcvr_->set_driving(dir);
-    if (xcvr_x_) xcvr_x_->set_driving(dir);
+    xcvr_->set_driving(dir);
+    xcvr_x_->set_driving(dir);
     // U12: DIR=~XMEMR.  Memory read -> ~XMEMR=Low -> DIR=Low -> B->A (MD->D).
     // Memory write -> ~XMEMR=High -> DIR=High -> A->B (D->MD).
     // Only nudge for memory cycles AND only when ~RAM_ADDR_SEL is Low (RAM address).
     // For ROM addresses, ~RAM_ADDR_SEL is High and U12 must stay off.
-    if (xcvr_m_) {
-        bool ram_selected = (pin_a18_.level() != Level::High && pin_a19_.level() != Level::High);
-        if (ram_selected && (cycle_ == BusCycle::Fetch || cycle_ == BusCycle::MemR))
-            xcvr_m_->set_driving(IC_74S245::Driving::A);  // B->A (MD->D)
-        else if (ram_selected && cycle_ == BusCycle::MemW)
-            xcvr_m_->set_driving(IC_74S245::Driving::B);  // A->B (D->MD)
-        else
-            xcvr_m_->set_driving(IC_74S245::Driving::None);  // I/O or ROM: disable
-    }
+
+    bool ram_selected = (pin_a18_.level() != Level::High && pin_a19_.level() != Level::High);
+    if (ram_selected && (cycle_ == BusCycle::Fetch || cycle_ == BusCycle::MemR))
+        xcvr_m_->set_driving(IC_74S245::Driving::A);  // B->A (MD->D)
+    else if (ram_selected && cycle_ == BusCycle::MemW)
+        xcvr_m_->set_driving(IC_74S245::Driving::B);  // A->B (D->MD)
+    else
+        xcvr_m_->set_driving(IC_74S245::Driving::None);  // I/O or ROM: disable
     // U14: CPU mode -> A->B (8288 commands to X-side)
-    if (xcvr_c_)
-        xcvr_c_->set_driving(IC_74S245::Driving::B);
+    xcvr_c_->set_driving(IC_74S245::Driving::B);
 }
 
 void IC_8288::release_command() {
@@ -234,8 +232,8 @@ void IC_8288::on_clk_rising() {
     if (inhibited_ && bus_hold_ == 0) {
         bus_hold_ = 3;  // B0: do nothing this cycle, 3 cycles to full recovery
         // Release DMA address latches so their bidirs revert to pin-driven
-        if (u18_) u18_->set_dma_output(false);
-        if (u19_) u19_->set_dma_output(false);
+        u18_->set_dma_output(false);
+        u19_->set_dma_output(false);
         spdlog::info("[{}] *** B0: bus recovery STARTED (cycle={}) -- DMA write finishing ***", name(), cyc_str());
         return;
     }

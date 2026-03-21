@@ -43,6 +43,11 @@ public:
     /// is effectively cross-cycle, not combinational.
     void set_async_inputs() { async_d_ = true; }
 
+    // DMA output override: when true, bidir lambda returns Output
+    // regardless of ~RE pin level. Set by 8237A one cycle ahead.
+    void set_dma_output(bool en) { dma_output_ = en; }
+    bool dma_output() const { return dma_output_; }
+
     void install(Socket& socket);
 
 protected:
@@ -63,6 +68,7 @@ private:
     uint8_t regs_[4] = {};  // 4 x 4-bit registers
     bool async_d_ = false;
     bool driving_ = false;  // true when Q pins are actively driven (~RE=Low)
+    bool dma_output_ = false;
 };
 
 } // namespace bench

@@ -2,6 +2,7 @@
 #include "ic/ic_74s245.h"
 #include "ic/ic_74s373.h"
 #include "ic/ic_74ls670.h"
+#include "ic/ic_8288.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -370,6 +371,13 @@ void IC_8237A::evaluate_dreq() {
     // HLDA to go low before activating HRQ to service another channel."
     if (pin_hlda_.level() == Level::High) return;
 
+    // Don't assert HRQ during bus recovery -- CPU needs the bus to complete
+    // its interrupted read/write before DMA can take it again.
+    if (bus_ctrl_->bus_hold()) {
+        spdlog::trace("[8237A] DREQ blocked by bus_hold (hold={})", bus_ctrl_->bus_hold());
+        return;
+    }
+
     // Fixed priority: CH0 highest
     for (int i = 0; i < 4; ++i) {
         if (ch_[i].masked) continue;
@@ -381,7 +389,8 @@ void IC_8237A::evaluate_dreq() {
             active_ch_ = i;
             state_ = State::BusRequested;
             pin_hrq_.drive(Level::High);
-            spdlog::debug("[8237A] HRQ asserted for ch{}", i);
+            spdlog::debug("[8237A] HRQ asserted for ch{} (HLDA={} bus_hold={} state={})",
+                          i, int(pin_hlda_.level()), bus_ctrl_->bus_hold(), int(state_));
             return;
         }
     }
@@ -461,33 +470,33 @@ void IC_8237A::on_clk_falling() {
         //   U12 (D<->MD): IO->mem write: B (D->MD), mem->IO read: A (MD->D)
         {
             // U8 (AD<->D): CPU disconnected during DMA
-            if (xcvr_)   xcvr_->set_driving(IC_74S245::Driving::None);
+            xcvr_->set_driving(IC_74S245::Driving::None);
             // U14 (cmd): B->A so DMA's ~MEMR/~MEMW reach system side
-            if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::A);
+            xcvr_c_->set_driving(IC_74S245::Driving::A);
 
             if (command_ & 0x01) {
                 // Memory-to-memory: read phase (ch0)
                 // DRAM -> MD -> U12(MD->D) -> D -> U13(D->XD) -> XD -> 8237A DB
-                if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::A);  // MD->D
-                if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::B);  // D->XD
+                xcvr_m_->set_driving(IC_74S245::Driving::A);  // MD->D
+                xcvr_x_->set_driving(IC_74S245::Driving::B);  // D->XD
             } else {
                 // Normal IO DMA
                 // U13 must stay off during DMA or it tramples D with stale XD data.
-                if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::None);
+                xcvr_x_->set_driving(IC_74S245::Driving::None);
                 // U12 (D<->MD): data path between D bus and DRAM
                 uint8_t transfer_type = (ch.mode >> 2) & 0x03;
                 if (transfer_type == 0x01) {
-                    if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
+                    xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
                 } else if (transfer_type == 0x02) {
-                    if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::A);  // MD->D
+                    xcvr_m_->set_driving(IC_74S245::Driving::A);  // MD->D
                 }
             }
         }
 
         // Enable DMA address latches so their bidir lambdas return Output
         // at the start of next cycle (S2), before ~DMA_AEN propagates.
-        if (u18_) u18_->set_dma_output(true);
-        if (u19_) u19_->set_dma_output(true);
+        u18_->set_dma_output(true);
+        u19_->set_dma_output(true);
 
         spdlog::debug("[8237A] S1 ch{}: addr={:#06x} upper={:#04x} A0-7=[{}{}{}{}{}{}{}{}]",
                       active_ch_, ch.current_address, upper,
@@ -513,7 +522,7 @@ void IC_8237A::on_clk_falling() {
             // Memory-to-memory: read phase uses ~MEMR only.
             pin_memr_.drive(Level::Low);
             // U12: MD->D (read from DRAM onto D bus)
-            if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::A);
+            xcvr_m_->set_driving(IC_74S245::Driving::A);
         } else {
             // Normal DMA: assert strobes based on transfer type
             uint8_t transfer_type = (ch.mode >> 2) & 0x03;
@@ -526,7 +535,7 @@ void IC_8237A::on_clk_falling() {
             }
         }
 
-        if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::A);
+        xcvr_c_->set_driving(IC_74S245::Driving::A);
 
         spdlog::debug("[8237A] S2 ch{}: ~MEMW={} ~MEMR={} addr={:#06x}{}",
                       active_ch_,
@@ -678,8 +687,8 @@ void IC_8237A::on_clk_falling() {
         pin_adstb_.drive(Level::High);
 
         // M2M write: 8237A DB -> XD -> U13(XD->D) -> D -> U12(D->MD) -> DRAM
-        if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
-        if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::A);  // XD->D
+        xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
+        xcvr_x_->set_driving(IC_74S245::Driving::A);  // XD->D
 
         spdlog::debug("[8237A] M2M_S1 ch1: addr={:#06x} (write temp=0x{:02X})",
                       ch.current_address, temp_);
@@ -696,7 +705,7 @@ void IC_8237A::on_clk_falling() {
         // Assert ~MEMW
         pin_memw_.drive(Level::Low);
 
-        if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::A);
+        xcvr_c_->set_driving(IC_74S245::Driving::A);
 
         spdlog::debug("[8237A] M2M_S2 ch1: ~MEMW={} data=0x{:02X}",
                       int(pin_memw_.level()), temp_);
