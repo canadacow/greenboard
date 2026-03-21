@@ -64,13 +64,17 @@ void IC_8237A::install(Socket& socket) {
     pin_aen_   = pin(9);
 
     // Pin directions for wiring visualization / DAG construction.
-    declare_input(pin_ior_); declare_input(pin_iow_);
+    // ~IOR/~IOW: Input during CPU mode, Output during DMA (IO transfers).
+    declare_bidir_block({pin_ior_, pin_iow_},
+        BidirDir::Input | BidirDir::Output,
+        [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::Input; });
     // ~CS: Input during CPU mode (for register programming), HiZ during DMA
     // to break DAG cycle (U35 -> DACK/addr -> decode chain -> U66 -> ~DMA_CS -> U35).
     declare_bidir_block({pin_cs_},
         BidirDir::Input | BidirDir::HiZ,
         [this]() { return (state_ != State::SI) ? BidirDir::HiZ : BidirDir::Input; });
     declare_async_input(pin_clk_);   // DCLK: clock input, no combinational dependency
+    declare_async_input(pin_ready_); // READY: sampled during S3, no combinational path
     declare_input(pin_reset_);
     declare_async_input(pin_hlda_);  // HLDA: clocked by U67, no same-cycle feedback from HRQ
     for (int i = 0; i < 4; ++i) declare_async_input(pin_dreq_[i]);  // async DMA requests
@@ -107,7 +111,11 @@ void IC_8237A::install(Socket& socket) {
     declare_bidir_block({pin_a_[0], pin_a_[1], pin_a_[2], pin_a_[3],
                          pin_a_[4], pin_a_[5], pin_a_[6], pin_a_[7]},
         BidirDir::Input | BidirDir::Output,
-        [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::Input; });
+        [this]() {
+            // BusRequested falls through to S1 (drives addr) in the same cycle.
+            return (is_dma_active() || state_ == State::BusRequested)
+                ? BidirDir::Output : BidirDir::Input;
+        });
 
     // Data bus: output during CPU reads of DMA registers (~CS+~IOR active),
     // or S1 (upper addr on DB).  During DMA S2-S4 the 8237A reads device data
@@ -117,7 +125,8 @@ void IC_8237A::install(Socket& socket) {
                          pin_db_[4], pin_db_[5], pin_db_[6], pin_db_[7]},
         BidirDir::Input | BidirDir::Output | BidirDir::HiZ,
         [this]() {
-            if (state_ == State::S1) return BidirDir::Output;
+            // BusRequested falls through to S1 (drives upper addr on DB).
+            if (state_ == State::S1 || state_ == State::BusRequested) return BidirDir::Output;
             if (is_dma_active()) return BidirDir::HiZ;  // async read during DMA
             return (pin_cs_.level() == Level::Low && pin_ior_.level() == Level::Low)
                 ? BidirDir::Output : BidirDir::Input;
@@ -132,13 +141,26 @@ void IC_8237A::install(Socket& socket) {
 
 void IC_8237A::on_signal_change(Fiber /*caller*/) {
     Level reset_cur = pin_reset_.level();
-    Level iow_cur = pin_iow_.level();
-    Level cs_cur = pin_cs_.level();
-    Level ior_cur = pin_ior_.level();
+
+    Level iow_cur = iow_prev_;
+    Level cs_cur = cs_prev_;
+    Level ior_cur = ior_prev_;
+    
+    if (state_ == State::SI) {
+        iow_cur = pin_iow_.level();
+        cs_cur = pin_cs_.level();
+        ior_cur = pin_ior_.level();
+    }
+
     Level clk_cur = pin_clk_.level();
 
-    // DACKs are always driven High (inactive) when DMA is not active.
-    // Must re-drive every cycle since declare_output doesn't set a value.
+    // DACKs have declare_output (not bidir-gated). Re-drive High every
+    // cycle when DMA is inactive so U48 G1 sees a stable High.
+    if (!is_dma_active()) {
+        for (int i = 0; i < 4; ++i)
+            pin_dack_[i].drive(Level::High);
+    }
+
     // RESET rising edge
     if (reset_cur == Level::High && reset_prev_ != Level::High)
         on_reset();
@@ -187,6 +209,7 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     iow_prev_ = iow_cur;
     cs_prev_ = cs_cur;
     ior_prev_ = ior_cur;
+    iow_prev_ = iow_cur;
     clk_prev_ = clk_cur;
     hlda_prev_ = pin_hlda_.level();
 }
@@ -495,12 +518,8 @@ void IC_8237A::on_clk_falling() {
         u18_->set_dma_output(true);
         u19_->set_dma_output(true);
 
-        spdlog::debug("[8237A] S1 ch{}: addr={:#06x} upper={:#04x} A0-7=[{}{}{}{}{}{}{}{}]",
-                      active_ch_, ch.current_address, upper,
-                      int(pin_a_[7].level()), int(pin_a_[6].level()),
-                      int(pin_a_[5].level()), int(pin_a_[4].level()),
-                      int(pin_a_[3].level()), int(pin_a_[2].level()),
-                      int(pin_a_[1].level()), int(pin_a_[0].level()));
+        spdlog::debug("[8237A] S1 ch{}: addr={:#06x} upper={:#04x}",
+                      active_ch_, ch.current_address, upper);
 
         state_ = State::S2;
         break;

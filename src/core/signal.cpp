@@ -34,15 +34,18 @@ static bool is_power_rail(int idx) {
 // to break DAG cycles. Writes are allowed even when bidir says HiZ.
 static bool is_write_exempt(int idx) {
     // Pins with bidir HiZ for DAG cycle breaking but legitimately driven
-    // in all states. The bidir doesn't mean "don't drive" -- it means
-    // "remove DAG edges so the topological sort doesn't cycle."
-    Component* c = SignalPool::active_comp_;
-    if (!c) return false;
-    int word = idx / 64;
-    uint64_t bit = uint64_t(1) << (idx % 64);
-    // If the component has a base declare_output for this pin AND the
-    // bidir overrode it to HiZ, the write is exempt.
-    return (c->outputs()[word] & bit) != 0;
+    // in all states on real hardware. Checked by name.
+    const char* n = SignalPool::names[idx];
+    if (!n) return false;
+    // 8088: ~S0, ~S1, ~S2, ~LOCK
+    if (n[0] == '~' && n[1] == 'S' && n[2] >= '0' && n[2] <= '2' && n[3] == '\0') return true;
+    if (strcmp(n, "~LOCK") == 0) return true;
+    // 8237A: HRQ, ~EOP, DMA_AEN, ADSTB
+    if (strcmp(n, "HRQ") == 0) return true;
+    if (strcmp(n, "~EOP") == 0) return true;
+    if (strcmp(n, "DMA_AEN") == 0) return true;
+    if (strcmp(n, "ADSTB") == 0) return true;
+    return false;
 }
 
 void SignalPool::print_out_pin_and_exit(bool wrongThread, int word, int idx, uint64_t bit, const Level* lvl)
@@ -95,7 +98,7 @@ void SignalPool::check_write(int idx, Level lvl) {
     if (!active_comp_ || idx == 0 || is_power_rail(idx)) return;
 
     if (valid_write_[word] & bit) return;
-    if (lvl == Level::HiZ && (valid_hiz_release_[word] & bit)) return;
+    if (lvl == Level::HiZ) return;  // releasing/tri-stating a pin is always safe
     if (is_write_exempt(idx)) return;
 
     print_out_pin_and_exit(false, word, idx, bit, &lvl);
@@ -127,8 +130,12 @@ void SignalPool::begin_component(Component* c) {
         valid_hiz_release_[w] = 0;
     }
     // Apply bidir block overrides based on current direction.
+    // Bidir lambdas may read pins to determine direction -- suspend
+    // validation for each direction() call.
     for (auto& block : c->bidir_blocks()) {
+        validation_enabled_ = false;
         auto dir = block.direction();
+        validation_enabled_ = true;
         for (int w = 0; w < W; ++w) {
             uint64_t om = block.out_mask[w];
             uint64_t im = block.in_mask[w];

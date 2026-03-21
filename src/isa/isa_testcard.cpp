@@ -136,6 +136,8 @@ void ISA_TestCard::on_power_on() {
 // =========================================================================
 
 void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
+    // Capture DMA state at entry -- matches what the bidir lambda saw.
+    bool dma_active_at_entry_ = dma_active();
     Level ior_cur = ior_.level();
     Level iow_cur = iow_.level();
     Level tc_cur = tc_.level();
@@ -163,12 +165,12 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
         dack_prev_[ch] = dack_cur;
     }
 
-    // Block/demand mode: ~DACK stays Low, 8237A pulses ~IOR for each byte.
-    // Skip the first IOR (overlaps with DACK-driven byte in single mode).
-    // Subsequent IOR falling edges advance to the next byte.
+    // Block/demand mode: ~DACK stays Low across multiple bytes, 8237A
+    // pulses ~IOR for each byte. Only active when DACK was already Low
+    // on the previous cycle (not a fresh DACK assertion = single mode).
     if (dma_active() && ior_cur == Level::Low && ior_prev_ != Level::Low) {
         int ch = dma_active_ch_;
-        if (dack_[ch].level() == Level::Low) {
+        if (dack_[ch].level() == Level::Low && dack_prev_[ch] == Level::Low) {
             if (dma_ior_count_ > 0) {
                 uint8_t byte = dma_buf_[dma_ptr_ % DMA_BUF_SIZE];
                 spdlog::debug("[{}] DMA IOR ch{}: driving byte [{}]=0x{:02X}", name(), ch, dma_ptr_, byte);
@@ -196,6 +198,10 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
     tc_prev_ = tc_cur;
 
     // --- CPU I/O ---
+    // Skip if SA0-SA3 bidir returned HiZ (DMA was active at bidir time).
+    // dma_active() may have changed mid-cycle -- use the state at entry.
+    bool addr_readable = !dma_active_at_entry_;
+    if (addr_readable) {
     if (write_pending_) {
         uint16_t port = static_cast<uint16_t>(read_address());
         uint8_t val = read_sd();
@@ -267,6 +273,11 @@ void ISA_TestCard::on_signal_change(Fiber /*caller*/) {
         if (data_driven_) release_sd();
     }
     memr_prev_ = memr_cur;
+    } else {
+        // DMA active: still update prev trackers so edges aren't stale.
+        ior_prev_ = ior_cur;
+        iow_prev_ = iow_cur;
+    }
 }
 
 // =========================================================================
