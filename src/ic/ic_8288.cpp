@@ -177,6 +177,12 @@ void IC_8288::on_clk_rising() {
     // While bus_hold_ > 0, DMA re-inhibit is blocked.
     // bus_hold() (checked by 8284A) returns true when bus_hold_ > 0.
     if (bus_hold_ > 0) {
+        // Don't advance bus recovery until CEN goes High (AEN_BRD dropped,
+        // CPU address latches enabled). Stall at current count.
+        if (pin_cen_.level() != Level::High) {
+            spdlog::trace("[{}] bus recovery stalled: CEN={} bus_hold={}", name(), int(pin_cen_.level()), bus_hold_);
+            return;
+        }
         bus_hold_--;
         if (bus_hold_ == 2) {
             // B1: un-inhibit, re-assert commands, nudge transceivers.
