@@ -420,13 +420,13 @@ struct TestBoard {
         bc_socket.wire(3, s1);
         bc_socket.wire(4, den);
         bc_socket.wire(5, ale);
-        bc_socket.wire(6, vcc);    // CEN = always enabled
+        bc_socket.wire(6, aen_bar);  // CEN = ~AEN (U98 ~1Q, Low=DMA active)
         bc_socket.wire(7, memr);
         bc_socket.wire(8, memw);
         bc_socket.wire(12, iow_sig);
         bc_socket.wire(13, ior_sig);
         bc_socket.wire(14, inta_sig);
-        bc_socket.wire(15, aen_bar);  // ~AEN from U98 (High=CPU, Low=DMA disables cmds)
+        bc_socket.wire(15, rdy_wait_bar);  // ~AEN = ~RDY/WAIT (U82 FF2 Q, synced with 8284A ~AEN1)
         bc_socket.wire(16, dtr);
         bc_socket.wire(18, s2);
         bc_socket.wire(19, s0);

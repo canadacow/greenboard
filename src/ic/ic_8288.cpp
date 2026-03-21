@@ -53,9 +53,10 @@ void IC_8288::install(Socket& socket) {
     declare_input(pin_clk_);
     declare_input(pin_s0_); declare_input(pin_s1_);
     declare_input(pin_s2_);
-    // CEN/AEN come from U98 (clocked FF). The 8288 sees the previous
-    // cycle's value, breaking the U98 -> U6 -> ... -> U98 feedback cycle.
-    declare_async_input(pin_cen_); declare_async_input(pin_aen_);
+    // CEN/AEN come from U98 (clocked FF). Sync input so 8288 evaluates
+    // after U98 and sees the current cycle's AEN_BRD/~AEN state.
+    // No DAG cycle: U98's inputs (HOLDA, AEN_BRD, etc.) don't come from 8288.
+    declare_async_input(pin_cen_); declare_input(pin_aen_);
     declare_output(pin_ale_); declare_output(pin_den_); declare_output(pin_dtr_);
     declare_output(pin_memr_); declare_output(pin_memw_);
     declare_output(pin_ior_); declare_output(pin_iow_); declare_output(pin_inta_);
@@ -148,8 +149,20 @@ void IC_8288::on_clk_rising() {
     // Per 82C88 datasheet: CEN LOW forces command outputs inactive but
     // does NOT reset the internal state machine.  Preserve state_/cycle_
     // so the command re-asserts when DMA releases the bus.
-    if (pin_aen_.level() == Level::Low) {
+    // pin_aen_ (pin 15) = ~RDY/WAIT from U82 FF2 Q (synced with 8284A ~AEN1).
+    // pin_cen_ (pin 6)  = AEN_BRD from U98 1Q (DMA bus ownership).
+    // Inhibit when DMA owns bus (AEN_BRD High) AND wait state active (~RDY/WAIT Low).
+    // When U82 Q goes High, ~RDY/WAIT=High, un-inhibit so 8288 can re-assert
+    // commands in the same cycle READY goes High.
+    bool dma_owns_bus = pin_cen_.level() == Level::Low;   // ~AEN=Low (U98 ~1Q) = DMA active
+    bool wait_active  = pin_aen_.level() == Level::Low;   // ~RDY/WAIT=Low
+    bool should_inhibit = dma_owns_bus && wait_active;
+    spdlog::trace("[{}] entry: ~AEN={} CEN={} dma={} wait={} inhibited={} commanding={} cycle={}",
+                  name(), int(pin_aen_.level()), int(pin_cen_.level()),
+                  dma_owns_bus, wait_active, inhibited_, commanding_, int(cycle_));
+    if (should_inhibit) {
         if (!inhibited_) {
+            spdlog::debug("[{}] ~AEN Low -> inhibiting (was commanding={})", name(), commanding_);
             release_command();
             pin_ale_.drive(Level::Low);
             pin_den_.drive(Level::High);  // ~DEN deasserted
@@ -163,8 +176,13 @@ void IC_8288::on_clk_rising() {
     // preserved bus cycle so the CPU's suspended read/write completes.
     if (inhibited_) {
         inhibited_ = false;
-        if (commanding_) {
-            // Re-assert the command that was forced inactive during DMA.
+        spdlog::debug("[{}] ~AEN High -> un-inhibiting, commanding={}", name(), commanding_);
+        if (cycle_ != BusCycle::Passive && cycle_ != BusCycle::Halt) {
+            // Re-assert the command for the stored bus cycle.
+            // DMA may have interrupted at T1 (before T2 asserted commands),
+            // so commanding_ might be false. Assert anyway -- the CPU needs
+            // the read/write to complete when READY goes High.
+            commanding_ = true;
             switch (cycle_) {
                 case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
                 case BusCycle::IOR:   pin_ior_.drive(Level::Low);  break;
@@ -176,7 +194,7 @@ void IC_8288::on_clk_rising() {
             }
             pin_den_.drive(Level::Low);
             nudge_xcvr();
-            spdlog::trace("[{}] DMA released, re-asserting cmd cycle={}", name(),
+            spdlog::debug("[{}] re-asserting cmd cycle={}", name(),
                           cycle_ == BusCycle::MemR ? "MemR" :
                           cycle_ == BusCycle::Fetch ? "Fetch" : "other");
         }
