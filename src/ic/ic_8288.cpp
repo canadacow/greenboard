@@ -181,7 +181,7 @@ void IC_8288::on_clk_rising() {
         if (bus_hold_ == 2) {
             // B1: un-inhibit, re-assert commands, nudge transceivers.
             inhibited_ = false;
-            spdlog::info("[{}] *** B1: un-inhibit, re-assert {} -- READY held Low ***", name(), cyc_str());
+            spdlog::trace("[{}] *** B1: un-inhibit, re-assert {} -- READY held Low ***", name(), cyc_str());
             if (cycle_ != BusCycle::Passive && cycle_ != BusCycle::Halt) {
                 commanding_ = true;
                 switch (cycle_) {
@@ -199,12 +199,12 @@ void IC_8288::on_clk_rising() {
             return;
         } else if (bus_hold_ == 1) {
             // B2: CAS falls. Nudge transceivers again.
-            spdlog::info("[{}] *** B3: CAS settling, nudge again -- READY held Low ***", name());
+            spdlog::trace("[{}] *** B3: CAS settling, nudge again -- READY held Low ***", name());
             nudge_xcvr();
             return;
         } else {
             // B3: bus_hold_==0. DRAM reads. CPU reads. DMA unblocked.
-            spdlog::info("[{}] *** B4: bus settled, READY+DMA released ***", name());
+            spdlog::trace("[{}] *** B4: bus settled, READY+DMA released ***", name());
             // Fall through to normal processing.
         }
     }
@@ -216,7 +216,7 @@ void IC_8288::on_clk_rising() {
         bool should_inhibit = dma_owns_bus && wait_active;
         if (should_inhibit) {
             if (!inhibited_) {
-                spdlog::info("[{}] *** INHIBIT: DMA taking bus (commanding={} cycle={}) ***", name(), commanding_, cyc_str());
+                spdlog::trace("[{}] *** INHIBIT: DMA taking bus (commanding={} cycle={}) ***", name(), commanding_, cyc_str());
                 release_command();
                 pin_ale_.drive(Level::Low);
                 pin_den_.drive(Level::High);
@@ -234,7 +234,7 @@ void IC_8288::on_clk_rising() {
         // Release DMA address latches so their bidirs revert to pin-driven
         u18_->set_dma_output(false);
         u19_->set_dma_output(false);
-        spdlog::info("[{}] *** B0: bus recovery STARTED (cycle={}) -- DMA write finishing ***", name(), cyc_str());
+        spdlog::trace("[{}] *** B0: bus recovery STARTED (cycle={}) -- DMA write finishing ***", name(), cyc_str());
         return;
     }
 
