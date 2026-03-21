@@ -155,7 +155,8 @@ struct TestBoard {
     // Separate signal from ~AEN (U98 ~1Q) -- they track differently during transitions.
     Signal dma_aen_bar{"~DMA_AEN"};
     Signal dma_wait_bar{"~DMA_WAIT"};   // U98 ~2Q (pin 6)
-    Signal rdy_wait_bar{"~RDY~/WAIT"};  // U82 -> U98 3D (pin 12) -> U11
+    Signal rdy_wait_bar{"~RDY~/WAIT"};  // U82 -> U98 3D (pin 12)
+    Signal io_ch_rdy{"I/O_CH_RDY"};    // ISA bus -> U82 ~PRE2 -> 8284A ~AEN1
 
     // Glue logic intermediate signals (U84, U97, U27, U101)
     Signal u97_y2_nc{"U97_Y2", u97_block_ + 1};          // U97 gate 2 unused
@@ -387,8 +388,8 @@ struct TestBoard {
 
         // U11: 8284A Clock Generator
         clk_socket.wire(2, pclk);    // PCLK output
-        clk_socket.wire(3, rdy_wait_bar);  // ~AEN1 = ~RDY/WAIT (from U82 FF2)
-        clk_socket.wire(4, dma_wait_bar);  // RDY1 = ~DMA_WAIT (from U98 ~Q2)
+        clk_socket.wire(3, io_ch_rdy);  // ~AEN1 = I/O_CH_RDY (directly, bypassing U82 noise)
+        clk_socket.wire(4, aen_bar);  // RDY1 = ~AEN (U98 ~1Q) -- Low when DMA active, High when CPU
         clk_socket.wire(5, ready);   // READY output
         clk_socket.wire(8, clk);     // CLK output
         clk_socket.wire(9, gnd);     // GND
@@ -1053,7 +1054,7 @@ struct TestBoard {
         //   Q = ~RDY/WAIT -> U11 pin 3, ~Q = N-000237 -> U97 pin 9
         ff82_socket.wire(8, n_000237);         // ~Q2 = N-000237
         ff82_socket.wire(9, rdy_wait_bar);     // Q2 = ~RDY/WAIT
-        ff82_socket.wire(10, vcc);             // ~PRE2 = I/O_CH_RDY (High = no preset)
+        ff82_socket.wire(10, io_ch_rdy);       // ~PRE2 = I/O_CH_RDY
         ff82_socket.wire(11, n_000240);        // CLK2 = N-000240 (from U64)
         ff82_socket.wire(12, dack0_brd);       // D2 = ~DACK_0_BRD
         ff82_socket.wire(13, n_000244);        // ~CLR2 = N-000244 (from U98)
