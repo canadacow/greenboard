@@ -70,13 +70,14 @@ public:
         declare_async_input(pin_a18_); declare_async_input(pin_a19_);
     }
 
-    // Bus recovery state machine (B0-B3):
-    //   B0: detected, do nothing (DMA write still finishing)
-    //   B1: un-inhibit, re-assert commands, nudge transceivers
-    //   B2: bus settled, release READY for CPU (DMA still blocked)
-    //   B3: unblock DMA, fully normal
-    // bus_hold() keeps READY Low during B0 and B1.
-    bool bus_hold() const { return bus_hold_ > 1; }
+    // Bus recovery state machine (B0-B4):
+    //   B0 (hold=4): detected, do nothing (DMA write finishing)
+    //   B1 (hold=3): un-inhibit, re-assert commands, nudge xcvrs
+    //   B2 (hold=2): RAS falls, row latched, CAS settling
+    //   B3 (hold=1): CAS falls, nudge again
+    //   B4 (hold=0): DRAM reads, CPU reads, DMA unblocked
+    // bus_hold() keeps READY Low during B0-B3 (hold > 0).
+    bool bus_hold() const { return bus_hold_ > 0; }
 
 protected:
     void on_power_on() override;

@@ -168,12 +168,12 @@ void IC_8288::on_clk_rising() {
                   name(), int(pin_aen_.level()), int(pin_cen_.level()),
                   inhibited_, commanding_, bus_hold_, cyc_str());
 
-    // --- Bus recovery state machine (B0-B3) ---
+    // --- Bus recovery state machine (B0-B4) ---
     // While bus_hold_ > 0, DMA re-inhibit is blocked.
-    // bus_hold() (checked by 8284A) returns true when bus_hold_ > 1.
+    // bus_hold() (checked by 8284A) returns true when bus_hold_ > 0.
     if (bus_hold_ > 0) {
         bus_hold_--;
-        if (bus_hold_ == 2) {
+        if (bus_hold_ == 3) {
             // B1: un-inhibit, re-assert commands, nudge transceivers.
             inhibited_ = false;
             spdlog::info("[{}] *** B1: un-inhibit, re-assert {} -- READY held Low ***", name(), cyc_str());
@@ -192,13 +192,18 @@ void IC_8288::on_clk_rising() {
                 nudge_xcvr();
             }
             return;
+        } else if (bus_hold_ == 2) {
+            // B2: RAS falls, row latched. CAS settling.
+            spdlog::info("[{}] *** B2: RAS/row latch, CAS settling -- READY held Low ***", name());
+            return;
         } else if (bus_hold_ == 1) {
-            // B2: bus settled, READY released for CPU. DMA still blocked.
-            spdlog::info("[{}] *** B2: bus settled, READY released for CPU -- DMA blocked ***", name());
-            // Fall through to normal status processing.
+            // B3: CAS falls. Nudge transceivers again.
+            spdlog::info("[{}] *** B3: CAS settling, nudge again -- READY held Low ***", name());
+            nudge_xcvr();
+            return;
         } else {
-            // B3: bus_hold_==0, fully normal. DMA unblocked.
-            spdlog::info("[{}] *** B3: DMA unblocked, fully normal ***", name());
+            // B4: bus_hold_==0. DRAM reads. CPU reads. DMA unblocked.
+            spdlog::info("[{}] *** B4: bus settled, READY+DMA released ***", name());
             // Fall through to normal processing.
         }
     }
@@ -224,7 +229,7 @@ void IC_8288::on_clk_rising() {
     // Detect un-inhibit trigger: inhibited but should_inhibit is false.
     // Start B0 of bus recovery.
     if (inhibited_ && bus_hold_ == 0) {
-        bus_hold_ = 3;  // B0: do nothing this cycle, start recovery next
+        bus_hold_ = 4;  // B0: do nothing this cycle, 4 cycles to full recovery
         spdlog::info("[{}] *** B0: bus recovery STARTED (cycle={}) -- DMA write finishing ***", name(), cyc_str());
         return;
     }

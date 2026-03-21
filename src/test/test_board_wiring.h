@@ -1493,6 +1493,7 @@ struct TestBoard {
         scheduler.register_fiber(cpu);
         scheduler.register_visual(clk_gen);
         clk_gen->set_scheduler(&scheduler);
+        clk_gen->set_bus_controller(bc);
         cpu->set_scheduler(&scheduler);
     }
 };
