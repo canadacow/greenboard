@@ -1311,6 +1311,7 @@ struct TestBoard {
         // U83->U84->U64->U27->U66->U101.  In CPU mode ~DMA_CS is High,
         // so OR(High, ~XIOW) = High (constant).  Sense ~DMA_CS externally:
         // HiZ when inactive, Output when DMA chip-selected.
+        #if 0
         {
             Pin dma_cs_pin = dma_cs.pin();
             Pin y4_pin = u101_y4.pin();
@@ -1322,6 +1323,7 @@ struct TestBoard {
                         ? BD::Output : BD::HiZ;
                 });
         }
+        #endif
 
         // U50: 74S02 Quad NOR (~DMA_AEN, ~WRT_DMA_PG_REG path)
         // BRD: Gate 1 (2,3->1): NOR(N-000246, N-000246) = ~N-000246 -> ~DMA_AEN

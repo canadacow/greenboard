@@ -30,6 +30,21 @@ static bool is_power_rail(int idx) {
     return (n[0] == '+' || (n[0] == 'G' && n[1] == 'N' && n[2] == 'D'));
 }
 
+// Pins that are always driven on real hardware but use bidir HiZ
+// to break DAG cycles. Writes are allowed even when bidir says HiZ.
+static bool is_write_exempt(int idx) {
+    // Pins with bidir HiZ for DAG cycle breaking but legitimately driven
+    // in all states. The bidir doesn't mean "don't drive" -- it means
+    // "remove DAG edges so the topological sort doesn't cycle."
+    Component* c = SignalPool::active_comp_;
+    if (!c) return false;
+    int word = idx / 64;
+    uint64_t bit = uint64_t(1) << (idx % 64);
+    // If the component has a base declare_output for this pin AND the
+    // bidir overrode it to HiZ, the write is exempt.
+    return (c->outputs()[word] & bit) != 0;
+}
+
 void SignalPool::print_out_pin_and_exit(bool wrongThread, int word, int idx, uint64_t bit, const Level* lvl)
 {
     auto comp_name = active_comp_ ? active_comp_->name() : "Unknown";
@@ -81,6 +96,7 @@ void SignalPool::check_write(int idx, Level lvl) {
 
     if (valid_write_[word] & bit) return;
     if (lvl == Level::HiZ && (valid_hiz_release_[word] & bit)) return;
+    if (is_write_exempt(idx)) return;
 
     print_out_pin_and_exit(false, word, idx, bit, &lvl);
 }

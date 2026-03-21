@@ -92,8 +92,11 @@ void IC_8237A::install(Socket& socket) {
         BidirDir::HiZ | BidirDir::Output,
         [this]() { return state_ == State::BusRequested ? BidirDir::Output : BidirDir::HiZ; });
     // DACKs, ADSTB, AEN: Output during active DMA transfers.
-    declare_bidir_block({pin_dack_[0], pin_dack_[1],
-                         pin_dack_[2], pin_dack_[3], pin_adstb_, pin_aen_},
+    // DACKs are always driven (High=inactive, Low=active). ADSTB and AEN
+    // are only driven during DMA transfers.
+    for (int i = 0; i < 4; ++i)
+        declare_output(pin_dack_[i]);
+    declare_bidir_block({pin_adstb_, pin_aen_},
         BidirDir::HiZ | BidirDir::Output,
         [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::HiZ; });
 
@@ -134,6 +137,8 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     Level ior_cur = pin_ior_.level();
     Level clk_cur = pin_clk_.level();
 
+    // DACKs are always driven High (inactive) when DMA is not active.
+    // Must re-drive every cycle since declare_output doesn't set a value.
     // RESET rising edge
     if (reset_cur == Level::High && reset_prev_ != Level::High)
         on_reset();
@@ -176,13 +181,7 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     on_clk_falling();
     spdlog::debug("[8237A] CLK post: state={}", int(state_));
 
-    // Re-drive DACKs after bidir HiZ release so they don't float.
-    // The bidir block removes DAG edges in CPU mode (HiZ), but downstream
-    // enables (e.g. U48 G1 = ~DACK_0_BRD) need a stable High.
-    if (!is_dma_active()) {
-        for (int i = 0; i < 4; ++i)
-            pin_dack_[i].drive(Level::High);
-    }
+    // DACKs are declare_output (always driven), so no re-drive needed.
 
     reset_prev_ = reset_cur;
     iow_prev_ = iow_cur;

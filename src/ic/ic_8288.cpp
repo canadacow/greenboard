@@ -120,7 +120,7 @@ void IC_8288::disable_xcvr() {
 void IC_8288::nudge_xcvr() {
     // Pre-set transceiver directions so they copy on the correct eval,
     // before the bidir lambda catches up.
-    bool is_write = (pin_dtr_.level() == Level::High);
+    bool is_write = (cycle_ == BusCycle::IOW || cycle_ == BusCycle::MemW);
     auto dir = is_write ? IC_74S245::Driving::B : IC_74S245::Driving::A;
     xcvr_->set_driving(dir);
     xcvr_x_->set_driving(dir);

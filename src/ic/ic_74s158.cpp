@@ -91,7 +91,7 @@ void IC_74S158::update_outputs() {
                   int(muxes_[0].i1.level()), int(muxes_[1].i1.level()),
                   int(muxes_[2].i1.level()), int(muxes_[3].i1.level()));
 
-    // Log combined row/col bytes when partnered (low mux only)
+#if 0  // reads partner's pins without declaration -- triggers pin validation
     if (partner_) {
         auto to_byte = [](const Mux* lo, const Mux* hi, bool use_i1) -> uint8_t {
             uint8_t v = 0;
@@ -110,6 +110,7 @@ void IC_74S158::update_outputs() {
         spdlog::debug("[MUX] ADDR_SEL={} row_src(A0-A7)=0x{:02X} col_src(A8-A15)=0x{:02X}",
                       sel ? "COL" : "ROW", row_src, col_src);
     }
+#endif
 }
 
 } // namespace bench
