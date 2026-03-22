@@ -124,6 +124,7 @@ add_executable(test_8088
     src/isa/isa_adapter.cpp
     src/isa/isa_testcard.cpp
     src/isa/isa_fdc.cpp
+    src/isa/isa_mda.cpp
     src/test/test_keyboard.cpp
     ${BENCH_HEADERS}
 )

@@ -1,8 +1,8 @@
 ; test_mmio.asm -- Memory-mapped I/O test via ISA Test Card
 ; Loaded at 0100:0100 (physical 0x01100). DS=0 after reset.
 ;
-; Tests read/write to 16KB MMIO region at 0xB8000-0xBBFFF provided
-; by the ISA Test Card (CGA video RAM region).
+; Tests read/write to 4KB MMIO region at 0xB0000-0xB0FFF provided
+; by the ISA Test Card (MDA framebuffer region).
 ;
 ; Tests:
 ;   1. Write byte, read it back
@@ -11,7 +11,7 @@
 ;   4. Read-modify-write (OR a bit in)
 ;   5. Verify non-MMIO RAM is unaffected
 ;
-; @name MMIO (ISA Test Card)
+; @name MMIO (MDA region)
 ; @expect 0500 0001 Byte write/read
 ; @expect 0502 0001 Word write/read
 ; @expect 0504 0001 Pattern fill (8 bytes)
@@ -21,7 +21,7 @@
 cpu 8086
 org 0x0100
 
-MMIO_SEG    equ 0xB800      ; segment for 0xB8000
+MMIO_SEG    equ 0xB000      ; segment for 0xB0000
 RESULT_BASE equ 0x0500
 
 mov ax, 0x0000
@@ -43,7 +43,7 @@ mov es, ax
 ; =====================================================================
 ; Test 1: Byte write/read
 ; =====================================================================
-mov byte [es:0x0000], 0xA5      ; write 0xA5 to 0xB8000
+mov byte [es:0x0000], 0xA5      ; write 0xA5 to 0xB0000
 mov al, [es:0x0000]             ; read it back
 cmp al, 0xA5
 jne .skip1
@@ -53,7 +53,7 @@ mov word [RESULT_BASE + 0], 0x0001
 ; =====================================================================
 ; Test 2: Word write/read
 ; =====================================================================
-mov word [es:0x0010], 0xBEEF    ; write 0xBEEF to 0xB8010
+mov word [es:0x0010], 0xBEEF    ; write 0xBEEF to 0xB0010
 mov ax, [es:0x0010]             ; read it back
 cmp ax, 0xBEEF
 jne .skip2
@@ -63,7 +63,7 @@ mov word [RESULT_BASE + 2], 0x0001
 ; =====================================================================
 ; Test 3: Pattern fill -- write 8 bytes, verify all
 ; =====================================================================
-mov di, 0x0100                  ; start at 0xB8100
+mov di, 0x0100                  ; start at 0xB0100
 mov cx, 8
 mov al, 0x41                   ; 'A'
 .fill:

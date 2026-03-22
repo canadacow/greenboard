@@ -21,10 +21,6 @@ bool ISA_TestCard::claims_port(uint16_t port) {
     return (port & 0xFF80) == 0x0080;   // ports 0x80-0xFF
 }
 
-bool ISA_TestCard::claims_mmio(uint32_t addr) {
-    return addr >= MMIO_BASE && addr < MMIO_BASE + MMIO_SIZE;
-}
-
 // =========================================================================
 // I/O handlers
 // =========================================================================
@@ -72,18 +68,6 @@ void ISA_TestCard::on_io_write(uint16_t port, uint8_t val) {
     } else {
         io_[port] = val;
     }
-}
-
-// =========================================================================
-// MMIO handlers
-// =========================================================================
-
-uint8_t ISA_TestCard::on_mmio_read(uint32_t addr) {
-    return mmio_[addr - MMIO_BASE];
-}
-
-void ISA_TestCard::on_mmio_write(uint32_t addr, uint8_t val) {
-    mmio_[addr - MMIO_BASE] = val;
 }
 
 // =========================================================================

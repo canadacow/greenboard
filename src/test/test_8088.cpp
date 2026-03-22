@@ -18,6 +18,7 @@
 #include "test_board_wiring.h"
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
+#include "isa/isa_mda.h"
 #include "test_keyboard.h"
 #include "core/signal.h"
 #include "core/callback_component.h"
@@ -234,6 +235,10 @@ int main() {
     ISA_FloppyController fdc(std::move(floppy_img), 9, 2);
     fdc.install(board.isa_slots[1]);
 
+    // MDA card: plugs into J3, provides 4KB framebuffer at 0xB0000.
+    ISA_MDA mda;
+    mda.install(board.isa_slots[2]);
+
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
     // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.
     // All fiber components run cooperatively on the 8284A's thread.
@@ -242,6 +247,7 @@ int main() {
     board.register_all(scheduler);
     scheduler.register_callback(&testcard);
     scheduler.register_callback(&fdc);
+    scheduler.register_callback(&mda);
 
     // Keyboard: bypasses U24 serial shift register, drives PA0-PA7 + IRQ1 directly.
     // Armed by test program writing to testcard port 0xFC.

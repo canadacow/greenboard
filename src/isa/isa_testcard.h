@@ -17,8 +17,6 @@ namespace bench {
 //     Port 0xF5: write channel (1-3) = deassert DRQn
 //     Port 0xF6: write IRQ number (2-7) for DMA completion notification
 //     The card drives sequential bytes from dma_buf_ on each ~DACKn pulse.
-//   - MMIO: 16KB at 0xB8000-0xBBFFF (CGA-style video RAM region)
-//     Responds to ~MEMR/~MEMW when address is in range.
 class ISA_TestCard final : public ISA_Adapter {
 public:
     ISA_TestCard();
@@ -39,21 +37,17 @@ public:
     static constexpr int DMA_BUF_SIZE = 256;
     uint8_t* dma_buf() { return dma_buf_; }
 
-    // MMIO: 16KB at 0xB8000-0xBBFFF (test harness can preload).
-    uint8_t* mmio_data() { return mmio_; }
-    static constexpr uint32_t MMIO_BASE = 0xB8000;
-    static constexpr uint32_t MMIO_SIZE = 16 * 1024;
 
 protected:
     void on_power_on() override;
 
     // ISA_Adapter virtual overrides
     bool claims_port(uint16_t port) override;
-    bool claims_mmio(uint32_t addr) override;
+    bool claims_mmio(uint32_t addr) override { return false; }
     uint8_t on_io_read(uint16_t port) override;
     void    on_io_write(uint16_t port, uint8_t val) override;
-    uint8_t on_mmio_read(uint32_t addr) override;
-    void    on_mmio_write(uint32_t addr, uint8_t val) override;
+    uint8_t on_mmio_read(uint32_t addr) override { return 0xFF; }
+    void    on_mmio_write(uint32_t addr, uint8_t val) override {}
     uint8_t on_dma_read() override;
     void    on_dma_complete(int channel) override;
 
@@ -71,8 +65,6 @@ private:
     Signal* kbd_ack_ = nullptr;     // pulsed on port 0xFD write
     TestKeyboard* keyboard_ = nullptr;  // for port 0xFB scancode enqueue
 
-    // MMIO storage
-    uint8_t mmio_[MMIO_SIZE] = {};
 };
 
 } // namespace bench
