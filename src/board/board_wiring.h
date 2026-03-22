@@ -1307,7 +1307,7 @@ struct Board {
 
             // Control signals: system-side per BRD (J5 nets are ~IOR/~IOW/~MEMR/~MEMW,
             // not the X-side versions).  U14 routes DMA commands to system side.
-            slot.wire_pin(11, &gnd);       // AEN (A11) = Low (no DMA)
+            slot.wire_pin(11, &isa_aen);   // AEN (A11) = buffered AEN from U15
             slot.wire_pin(42, &memw);      // ~MEMW (B11)
             slot.wire_pin(43, &memr);      // ~MEMR (B12)
             slot.wire_pin(44, &iow_sig);   // ~IOW (B13)

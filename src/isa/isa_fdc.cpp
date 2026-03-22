@@ -158,9 +158,12 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                         case 0x0F:  // SEEK
                             cmd_expected_ = 3;
                             break;
+                        case 0x0A:  // READ_ID
+                            cmd_expected_ = 2;
+                            break;
                         default:
                             cmd_expected_ = 1;  // unknown: just eat 1 byte
-                            spdlog::warn("[{}] unknown FDC command 0x{:02X}", name(), val);
+                            spdlog::warn("[{}] unknown FDC command 0x{:02X} (raw=0x{:02X})", name(), cmd_id, val);
                             break;
                     }
                 }

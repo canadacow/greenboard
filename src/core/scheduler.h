@@ -120,9 +120,6 @@ public:
         wave_plans_.clear();
 
         unified_resolved_ = true;
-
-        // Dump DOT/SVG for each permutation.
-        //dump_permutation_dots(evals, n);
     }
 
     // Dump one DOT/SVG per DAG permutation, same style as dump_cycle_dot.

@@ -136,12 +136,22 @@ void IC_8255A::on_bus_write() {
             if (!pa_input_) write_port_a(data);
             break;
 
-        case 1:  // Port B
+        case 1: { // Port B
+            uint8_t old_b = latch_b_;
             latch_b_ = data;
             if (!pb_input_) {
                 write_port_b(data);
                 spdlog::debug("[8255A] Port B write: 0x{:02X} (PB7={})", data, (data >> 7) & 1);
+                // Speaker: PB0 gates timer 2, PB1 is speaker data.
+                // Log when speaker is turned on or off.
+                bool spk_now = (data & 0x03) == 0x03;
+                bool spk_was = (old_b & 0x03) == 0x03;
+                if (spk_now && !spk_was)
+                    spdlog::info("[BEEP] speaker on");
+                else if (!spk_now && spk_was)
+                    spdlog::info("[BEEP] speaker off");
             }
+        }
             break;
 
         case 2:  // Port C

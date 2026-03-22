@@ -99,6 +99,8 @@ int main() {
         board.sw2.drive(sw2_out);
     }
 
+    spdlog::set_level(spdlog::level::info);
+
     // --- Power on ---
     spdlog::info("=== Power on ===");
     spdlog::info("SW1: floppy={} 8087={} RAM={}K video={} drives={}",

@@ -555,6 +555,7 @@ void IC_8088::execute() {
     prefetch_len_ = 0;
 
     uint8_t opbyte = fetch_byte(0);
+    spdlog::info("[8088] {:04X}:{:04X} op={:02X}", regs16()[REG_CS], reg_ip_, opbyte);
     set_opcode(opbyte);
     i_w_ = (i_reg4bit_ = raw_opcode_id_ & 7) & 1;
     i_d_ = i_reg4bit_ / 2 & 1;

@@ -119,6 +119,8 @@ void ISA_Adapter::install(IsaSlot& slot) {
 void ISA_Adapter::on_power_on() {
     ior_prev_ = Level::HiZ;
     iow_prev_ = Level::HiZ;
+    memr_prev_ = Level::HiZ;
+    memw_prev_ = Level::HiZ;
     for (int ch = 0; ch < 4; ++ch)
         dack_prev_[ch] = Level::HiZ;
     tc_prev_ = Level::HiZ;
@@ -139,7 +141,6 @@ void ISA_Adapter::on_power_on() {
 
 void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     // Capture DMA state at entry -- matches what the bidir lambda saw.
-    bool dma_active_at_entry = dma_active();
     Level ior_cur = ior_.level();
     Level iow_cur = iow_.level();
     Level tc_cur = tc_.level();
@@ -198,7 +199,7 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
 
     // --- CPU I/O ---
     // Skip if DMA is active (either our channel or bus-wide AEN).
-    bool addr_readable = !dma_active_at_entry && aen_.level() != Level::High;
+    bool addr_readable = aen_.level() != Level::High;
     if (addr_readable) {
     if (write_pending_) {
         uint16_t port = static_cast<uint16_t>(read_address());
