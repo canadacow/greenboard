@@ -344,9 +344,9 @@ out 0x07, al              ; ch3 count high
 mov al, 0x47
 out 0x0B, al
 
-; Page register ch3 = 0 (port 0x82)
+; Page register ch3 = 0 (port 0x81, BRD: U19 reg1 maps to ch3)
 mov al, 0x00
-out 0x82, al
+out 0x81, al
 
 ; Unmask ch3: bits [1:0]=11 (ch3), bit 2=0 (unmask) = 0x03
 mov al, 0x03
@@ -416,9 +416,9 @@ out 0x07, al              ; ch3 count high
 mov al, 0x87
 out 0x0B, al
 
-; Page register ch3 = 0 (port 0x82)
+; Page register ch3 = 0 (port 0x81, BRD: U19 reg1 maps to ch3)
 mov al, 0x00
-out 0x82, al
+out 0x81, al
 
 ; Unmask ch3: bits [1:0]=11 (ch3), bit 2=0 (unmask) = 0x03
 mov al, 0x03

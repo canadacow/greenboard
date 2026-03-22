@@ -178,6 +178,7 @@ int main() {
         "pit",
         "mmio",
         "floppy",
+        "io_floppy",
     };
 
     std::vector<TestCase> tests;

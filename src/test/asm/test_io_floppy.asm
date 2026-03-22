@@ -48,7 +48,7 @@ org 0x0100
 ; DMA channel 2 ports
 FDC_DMA_ADDR equ 0x04
 FDC_DMA_CNT  equ 0x05
-FDC_DMA_PAGE equ 0x81
+FDC_DMA_PAGE equ 0x82      ; channel 2 page register (BRD: U19 RA=~DACK3, RB=~DACK2)
 DMA_MASK     equ 0x0A
 DMA_MODE     equ 0x0B
 DMA_FLIPFLOP equ 0x0C
