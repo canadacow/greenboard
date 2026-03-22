@@ -296,8 +296,13 @@ void IC_8288::on_clk_rising() {
         spdlog::trace("[{}] T2 cycle={} cmd asserted CEN={}", name(), cyc_name(cycle_), cen);
 
     } else if (prev_active_ && !active) {
-        // active->passive: entering T3. Commands stay active, nudge xcvrs.
-        nudge_xcvr();
+        // active->passive: entering T3. Commands stay active.
+        // The T2 nudge already committed transceiver directions for this cycle's
+        // bidir lambda (driving_ was set from pending_driving_ at bidir time).
+        // Queue transceivers to disable for the NEXT evaluation's bidir lambda.
+        // This ensures U8/U13 go HiZ before T1 of the next bus cycle, so they
+        // don't drive stale data over the CPU's fresh address on AD0-7.
+        disable_xcvr();
         spdlog::trace("[{}] T3 cycle={}", name(), cyc_name(cycle_));
 
     } else {
