@@ -183,11 +183,11 @@ int main() {
         "io_floppy",
         "speaker",
         "post_cpu",
-        /*"post_dma",
+        "post_cass",
+        "post_dma",
+        "post_pic",
         "post_kbd",
         "post_fdc",
-        "post_pic",
-        "post_cass",*/
     };
 
     std::vector<TestCase> tests;
@@ -248,6 +248,7 @@ int main() {
     testcard.set_kbd_ready_signal(&board.kbd_ready);
     testcard.set_kbd_ack_signal(&board.kbd_ack);
     TestKeyboard keyboard;
+    testcard.set_keyboard(&keyboard);
     {
         Signal* pa_ptrs[8];
         for (int i = 0; i < 8; ++i) pa_ptrs[i] = &board.ppi_pa[i];
@@ -276,11 +277,6 @@ int main() {
             std::memcpy(testcard.dma_buf(), lorem, sizeof(lorem) - 1);
         }
 
-        // Preload keyboard scancodes for the keyboard test.
-        if (tc.bin_file.find("keyboard") != std::string::npos) {
-            keyboard.enqueue_string("Hello world");
-        }
-
         // Load binary into DRAM at 0100:0100 (physical 0x01100)
         std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;
         if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) { ++failed; continue; }
@@ -298,6 +294,7 @@ int main() {
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::enable_validation();
 #endif
+
         clk_gen->power_on();
         clk_gen->psu_power_on();
 

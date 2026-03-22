@@ -49,6 +49,7 @@ private:
     bool waiting_ack_ = false;
     bool deliver_pending_ = false;  // deliver next scancode on next cycle
     bool reset_pending_ = false;    // PB6 went Low -- waiting for release
+    int  reset_delay_ = 0;          // cycles to wait before delivering 0xAA
     Level ready_prev_ = Level::HiZ;
     Level ack_prev_ = Level::HiZ;
     Level pb6_prev_ = Level::HiZ;

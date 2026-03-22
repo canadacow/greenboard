@@ -83,6 +83,42 @@ mov al, 0xFD                    ; unmask IRQ1 only (clear bit 1)
 out 0x21, al
 
 ; =====================================================================
+; Enqueue "Hello world" scancodes via testcard port 0xFB.
+; Each character needs make + break. Shift keys for uppercase.
+; H=0x23, e=0x12, l=0x26, o=0x18, space=0x39, w=0x11, r=0x13, d=0x20
+; Left Shift make=0x2A, break=0xAA
+; =====================================================================
+%macro KEY 1
+    mov al, %1
+    out 0xFB, al            ; make
+    mov al, %1 | 0x80
+    out 0xFB, al            ; break
+%endmacro
+
+%macro SHIFT_KEY 1
+    mov al, 0x2A
+    out 0xFB, al            ; shift make
+    mov al, %1
+    out 0xFB, al            ; key make
+    mov al, %1 | 0x80
+    out 0xFB, al            ; key break
+    mov al, 0xAA
+    out 0xFB, al            ; shift break
+%endmacro
+
+SHIFT_KEY 0x23              ; H
+KEY 0x12                    ; e
+KEY 0x26                    ; l
+KEY 0x26                    ; l
+KEY 0x18                    ; o
+KEY 0x39                    ; space
+KEY 0x11                    ; w
+KEY 0x18                    ; o
+KEY 0x13                    ; r
+KEY 0x26                    ; l
+KEY 0x20                    ; d
+
+; =====================================================================
 ; Arm keyboard: signal readiness via testcard port 0xFC.
 ; The TestKeyboard waits for this before delivering scancodes.
 ; =====================================================================

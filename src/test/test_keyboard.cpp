@@ -57,11 +57,13 @@ void TestKeyboard::connect(Signal* pa[8], Signal& irq1, Signal& pb6,
 }
 
 void TestKeyboard::on_power_on() {
+    queue_.clear();
     queue_pos_ = 0;
     armed_ = false;
     waiting_ack_ = false;
     deliver_pending_ = false;
     reset_pending_ = false;
+    reset_delay_ = 0;
     ready_prev_ = Level::HiZ;
     ack_prev_ = Level::HiZ;
     pb6_prev_ = Level::HiZ;
@@ -106,9 +108,17 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
         // Insert 0xAA self-test response at current queue position.
         queue_.insert(queue_.begin() + static_cast<ptrdiff_t>(queue_pos_), 0xAA);
         armed_ = true;
-        spdlog::trace("[{}] reset: CLK released, queued 0xAA self-test", name());
-        // Deliver on next cycle (need one cycle for PIC to be ready).
-        deliver_pending_ = true;
+        // Delay delivery so the CPU has time to unmask IRQ1 and STI.
+        // Real keyboard takes ~20ms; we just need enough cycles for
+        // the BIOS to execute the unmask + STI instructions.
+        reset_delay_ = 200;
+        spdlog::trace("[{}] reset: CLK released, queued 0xAA (delay={})", name(), reset_delay_);
+    }
+
+    // Countdown for delayed reset delivery.
+    if (reset_delay_ > 0) {
+        if (--reset_delay_ == 0)
+            deliver_pending_ = true;
     }
 
     // Wait for test program to arm us (non-reset path).

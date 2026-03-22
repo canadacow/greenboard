@@ -1,5 +1,6 @@
 #pragma once
 #include "isa/isa_adapter.h"
+#include "test/test_keyboard.h"
 #include <cstring>
 #include <memory>
 
@@ -30,6 +31,9 @@ public:
 
     // Keyboard ACK signal: pulsed when IRQ handler writes scancode to port 0xFD.
     void set_kbd_ack_signal(Signal* sig) { kbd_ack_ = sig; }
+
+    // Keyboard component: port 0xFB enqueues a scancode, port 0xFA enqueues an ASCII string.
+    void set_keyboard(TestKeyboard* kbd) { keyboard_ = kbd; }
 
     // DMA buffer: test harness preloads data here before starting DMA.
     static constexpr int DMA_BUF_SIZE = 256;
@@ -62,9 +66,10 @@ private:
     uint16_t dma_ptr_ = 0;
     uint8_t dma_irq_ = 5;  // IRQ to fire on DMA completion (default IRQ5)
 
-    // Keyboard signals (optional)
+    // Keyboard signals and component (optional)
     Signal* kbd_ready_ = nullptr;   // driven High on port 0xFC write
     Signal* kbd_ack_ = nullptr;     // pulsed on port 0xFD write
+    TestKeyboard* keyboard_ = nullptr;  // for port 0xFB scancode enqueue
 
     // MMIO storage
     uint8_t mmio_[MMIO_SIZE] = {};
