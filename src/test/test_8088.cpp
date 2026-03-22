@@ -15,7 +15,7 @@
 // Each test is a flat binary assembled by NASM, loaded at 0100:0100
 // (physical 0x01100) in DRAM. DS=SS=0 after reset. Results checked at 0x0500+.
 
-#include "test_board_wiring.h"
+#include "board/board_wiring.h"
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
@@ -205,7 +205,7 @@ int main() {
     std::string basic_u30 = std::string(ASSETS_DIR) + "/IBM 5150 - Cassette BASIC version C1.10 - U30 - 5000021.bin";
     std::string basic_u31 = std::string(ASSETS_DIR) + "/IBM 5150 - Cassette BASIC version C1.10 - U31 - 5000022.bin";
     std::string basic_u32 = std::string(ASSETS_DIR) + "/IBM 5150 - Cassette BASIC version C1.10 - U32 - 5000023.bin";
-    TestBoard board;
+    Board board;
     board.wire(bios_path, basic_u29, basic_u30, basic_u31, basic_u32);
 
     // Convenience aliases for test code below.

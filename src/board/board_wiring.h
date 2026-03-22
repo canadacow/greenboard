@@ -1,8 +1,6 @@
 #pragma once
-// Test board wiring -- signals, sockets, IC emplacement.
-// This is the "official motherboard schematic" for the test bench,
-// minus BusGlue (which is test-bench-specific).
-// Cut/pasted from test_8088.cpp main() for reuse.
+// IBM PC 5150 motherboard wiring -- signals, sockets, IC emplacement.
+// All wiring matches the real 64KB-256KB Model B board (BRD file).
 
 #include "core/signal.h"
 #include "core/scheduler.h"
@@ -40,7 +38,7 @@
 
 using namespace bench;
 
-struct TestBoard {
+struct Board {
     bool dma_enabled = true;
 
     // --- Signals (copper traces) ---
@@ -80,7 +78,7 @@ struct TestBoard {
 
     // U66 I/O decode outputs
     Signal dma_cs{"~DMA_CS"}, intr_cs{"~INTR_CS"}, pit_cs{"~PIT_CS"}, ppi_cs{"~PPI_CS"};
-    Signal aen_bar{"~AEN"};  // No DMA in test bench, always High
+    Signal aen_bar{"~AEN"};
 
     // System data bus (B side of 74S245 transceiver)
     Signal d0{"D0", d_block_},     d1{"D1", d_block_ + 1};
@@ -89,14 +87,14 @@ struct TestBoard {
     Signal d6{"D6", d_block_ + 6}, d7{"D7", d_block_ + 7};
     Signal* d_arr[8] = {&d0, &d1, &d2, &d3, &d4, &d5, &d6, &d7};
 
-    // IRQ lines (BusGlue drives these via test trigger port 0xF0)
+    // IRQ lines
     Signal irq0{"IRQ0"}, irq1{"IRQ1"}, irq2{"IRQ2"}, irq3{"IRQ3"};
     Signal irq4{"IRQ4"}, irq5{"IRQ5"}, irq6{"IRQ6"}, irq7{"IRQ7"};
     Signal* irq_arr[8] = {&irq0, &irq1, &irq2, &irq3, &irq4, &irq5, &irq6, &irq7};
 
-    // Keyboard signals (testcard-mediated)
-    Signal kbd_ready{"KBD_READY"};    // port 0xFC: test program arms keyboard
-    Signal kbd_ack{"KBD_ACK"};        // port 0xFD: IRQ handler confirms scancode processed
+    // Keyboard signals
+    Signal kbd_ready{"KBD_READY"};
+    Signal kbd_ack{"KBD_ACK"};
 
     // 8255A PPI signals (Port A = keyboard scancode input, Port B = control output)
     // Indexed by PA bit number (verified against BRD + 8255A datasheet):
@@ -291,7 +289,7 @@ struct TestBoard {
         .expansion_ram_banks = 6,   // (256K - 64K planar) / 32K = 6
     };
 
-    // All traces on this test board. On power loss, every trace discharges.
+    // All traces on the board. On power loss, every trace discharges.
     std::vector<Signal*> all_traces;
 
     // --- Sockets ---
@@ -1030,7 +1028,7 @@ struct TestBoard {
         inv99_socket.wire(4, tc);              // Y2 = T/C
         inv99_socket.wire(7, gnd);
         inv99_socket.wire(8, nclk88);          // Y4 = N-000247 (~CLK88)
-        inv99_socket.wire(9, clk);             // A4 = CLK88 (= CLK in test bench)
+        inv99_socket.wire(9, clk);             // A4 = CLK88
         inv99_socket.wire(14, vcc);
         inv99_ic = inv99_socket.emplace<IC_74S04>();
 
@@ -1480,7 +1478,7 @@ struct TestBoard {
 
         // U26: 74S175 Quad D Flip-Flop (PCLK divider)
         // FF2: ~Q->D feedback creates toggle FF. CLK=PCLK -> Q=PCLK/2=1.193 MHz.
-        // FF0+FF1: keyboard sync (not used in test bench).
+        // FF0+FF1: keyboard sync (directly driven by TestKeyboard for now).
         // FF3: unused.
         ff26_socket.wire(1, reset_drv_bar);    // ~MR = ~RESET_DRV
         ff26_socket.wire(8, gnd);              // GND
