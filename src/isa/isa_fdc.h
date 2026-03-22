@@ -61,10 +61,11 @@ private:
     int result_len_ = 0;       // total result bytes
     int result_pos_ = 0;       // next result byte to return
 
-    // Execution state (sector read)
+    // Execution state (sector read -- shared by DMA and PIO)
     uint32_t sector_offset_ = 0;  // byte offset into image for current sector
     uint16_t sector_size_ = 512;
-    uint16_t dma_ptr_ = 0;        // bytes transferred so far
+    uint16_t xfer_ptr_ = 0;       // bytes transferred so far (DMA or PIO)
+    bool pio_mode_ = false;        // true when DOR bit 3 is clear (no DMA)
 
     // Interrupt pending
     bool irq_pending_ = false;
@@ -75,6 +76,7 @@ private:
     // Command dispatch
     void start_command();
     void execute_read_data();
+    void build_result_ok();
 
     // CHS -> byte offset
     uint32_t chs_to_offset(int cyl, int head, int sector) const;

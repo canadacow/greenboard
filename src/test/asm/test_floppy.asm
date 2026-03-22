@@ -50,13 +50,15 @@
 ;   [0504] = 0x0001   IRQ 6 fired (execution phase complete)
 ;   [0506] = 0x0001   DMA buffer has non-zero data (sector read)
 
-; @name Floppy (FDC read sector)
+; @name Floppy (DMA + PIO read)
 ; @expect 0500 0080 MSR shows RQM after reset
-; @expect 0502 0001 Command phase complete
-; @expect 0504 0001 IRQ 6 fired
+; @expect 0502 0001 DMA command phase complete
+; @expect 0504 0001 DMA IRQ 6 fired
 ; @expect 0506 0001 DMA buffer non-zero
-; @dump 0508 First word of DMA buffer
-; @dump 050A Boot signature location (0x3000+510)
+; @expect 0510 0001 PIO command phase complete
+; @expect 0512 0200 PIO bytes read (512)
+; @expect 0514 FFFD PIO first word (FAT ID 0xFD)
+; @expect 0516 AD1F PIO sector 2 checksum
 ;
 cpu 8086
 org 0x0100
@@ -79,6 +81,9 @@ FDC_FIFO equ 0x3F5         ; Data / FIFO Register
 DMA_BUF_PAGE   equ 0x00
 DMA_BUF_OFFSET equ 0x3000
 DMA_BUF_LEN    equ 512     ; one sector
+
+; PIO buffer (physical 0x04000)
+PIO_BUF_OFFSET equ 0x4000
 
 ; =====================================================================
 ; Initialize
@@ -283,18 +288,135 @@ mov cx, 9
     mov word [0x0506], 0x0001   ; buffer has data
 .buf_empty:
 
-    ; Dump first word of DMA buffer and boot signature
-    mov ax, [DMA_BUF_OFFSET]
-    mov [0x0508], ax
-    mov ax, [DMA_BUF_OFFSET + 510]
-    mov [0x050A], ax
+; #####################################################################
+; PART 2: PIO MODE -- read boot sector again without DMA
+; #####################################################################
 
+; Zero PIO results
+mov word [0x0510], 0x0000
+mov word [0x0512], 0x0000
+mov word [0x0514], 0x0000
+mov word [0x0516], 0x0000
+
+; Zero PIO buffer
+mov di, PIO_BUF_OFFSET
+mov cx, DMA_BUF_LEN / 2
+xor ax, ax
+rep stosw
+
+; Reset FDC
+mov dx, FDC_DOR
+mov al, 0x00
+out dx, al
+mov cx, 10
+.pio_reset_delay:
+    nop
+    loop .pio_reset_delay
+
+; Enable FDC + motor, but DMA/IRQ DISABLED (bit 3 clear = PIO mode)
+mov dx, FDC_DOR
+mov al, 0x14                    ; motor A on + FDC enable, NO DMA (bit 3=0)
+out dx, al
+mov cx, 10
+.pio_post_reset:
+    nop
+    loop .pio_post_reset
+
+; Send READ DATA command for sector 2 (C=0 H=0 R=2)
+push ds
+mov ax, 0x0100
+mov ds, ax
+mov si, read_cmd_s2
+mov cx, 9
+
+.pio_send_cmd:
+    push cx
+    mov cx, 50
+.pio_poll_cmd:
+    mov dx, FDC_MSR
+    in al, dx
+    test al, 0x80
+    jnz .pio_rqm_cmd
+    loop .pio_poll_cmd
+    pop cx
+    jmp .pio_cmd_fail
+.pio_rqm_cmd:
+    pop cx
+    test al, 0x40               ; DIO=0 for command phase
+    jnz .pio_cmd_fail_ds
+
+    lodsb
+    mov dx, FDC_FIFO
+    out dx, al
+    loop .pio_send_cmd
+
+    pop ds
+    mov word [0x0510], 0x0001   ; command phase complete
+    jmp .pio_read_data
+
+.pio_cmd_fail_ds:
+.pio_cmd_fail:
+    pop ds
+    jmp .pio_done
+
+; Read 512 bytes from FIFO by polling MSR for RQM+DIO
+.pio_read_data:
+    mov di, PIO_BUF_OFFSET
+    mov cx, DMA_BUF_LEN
+    xor bx, bx                  ; byte counter
+
+.pio_read_loop:
+    push cx
+    mov cx, 200                  ; timeout per byte
+.pio_poll_data:
+    mov dx, FDC_MSR
+    in al, dx
+    test al, 0x80               ; RQM?
+    jz .pio_poll_next
+    test al, 0x40               ; DIO=1? (FDC has data)
+    jnz .pio_got_byte
+.pio_poll_next:
+    loop .pio_poll_data
+    pop cx
+    jmp .pio_read_done          ; timeout -- done early
+.pio_got_byte:
+    pop cx
+    ; Check NDMA bit (0x20) -- if clear, execution phase ended
+    test al, 0x20
+    jz .pio_read_done
+
+    mov dx, FDC_FIFO
+    in al, dx
+    stosb                       ; [ES:DI++] = AL
+    inc bx
+    loop .pio_read_loop
+
+.pio_read_done:
+    ; Store byte count
+    mov [0x0512], bx
+
+    ; Store first word of sector 2 (expect 0xFFFD = FAT ID)
+    mov ax, [PIO_BUF_OFFSET]
+    mov [0x0514], ax
+
+    ; Compute 16-bit checksum of PIO buffer (expect 0xAD1F)
+    mov si, PIO_BUF_OFFSET
+    mov cx, DMA_BUF_LEN
+    xor dx, dx
+.pio_cksum:
+    lodsb
+    xor ah, ah
+    add dx, ax
+    loop .pio_cksum
+    mov [0x0516], dx
+
+.pio_done:
     hlt
 
 ; =====================================================================
-; READ DATA command bytes (loaded via CS-relative LODSB)
+; Command tables (loaded via CS-relative LODSB)
 ; =====================================================================
-read_cmd:
+read_cmd:                       ; DMA: read sector 1
     db 0x46                     ; MFM + skip deleted + READ DATA
     db 0x00                     ; head 0, drive 0
     db 0x00                     ; cylinder 0
@@ -304,6 +426,17 @@ read_cmd:
     db 0x09                     ; end of track (9 sectors for 360K)
     db 0x2A                     ; gap length (5.25" standard)
     db 0xFF                     ; data length (unused when size=2)
+
+read_cmd_s2:                    ; PIO: read sector 2
+    db 0x46                     ; MFM + skip deleted + READ DATA
+    db 0x00                     ; head 0, drive 0
+    db 0x00                     ; cylinder 0
+    db 0x00                     ; head 0
+    db 0x02                     ; sector 2 (1-based)
+    db 0x02                     ; 512 bytes/sector
+    db 0x09                     ; end of track
+    db 0x2A                     ; gap length
+    db 0xFF                     ; data length
 
 ; =====================================================================
 ; IRQ 6 handler (INT 14)

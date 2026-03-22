@@ -29,7 +29,8 @@ void ISA_FloppyController::on_power_on() {
     result_len_ = 0;
     result_pos_ = 0;
     sector_offset_ = 0;
-    dma_ptr_ = 0;
+    xfer_ptr_ = 0;
+    pio_mode_ = false;
     irq_pending_ = false;
 }
 
@@ -57,7 +58,10 @@ uint8_t ISA_FloppyController::read_msr() const {
             msr = 0x80;  // RQM=1, DIO=0 (host->FDC)
             break;
         case Phase::Execution:
-            msr = 0x10;  // BUSY, non-DMA execution in progress
+            if (pio_mode_)
+                msr = 0xF0;  // RQM=1, DIO=1, NDMA=1, BUSY=1 (PIO: byte ready)
+            else
+                msr = 0x10;  // BUSY (DMA execution in progress)
             break;
         case Phase::Result:
             msr = 0xC0;  // RQM=1, DIO=1 (FDC->host)
@@ -75,9 +79,22 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
         case 0x3F4:  // MSR
             return read_msr();
 
-        case 0x3F5:  // FIFO (result phase)
+        case 0x3F5:  // FIFO
+            // PIO execution phase: return next sector byte.
+            if (phase_ == Phase::Execution && pio_mode_) {
+                uint8_t val = 0x00;
+                if (sector_offset_ + xfer_ptr_ < image_.size())
+                    val = image_[sector_offset_ + xfer_ptr_];
+                xfer_ptr_++;
+                if (xfer_ptr_ >= sector_size_) {
+                    // All bytes read -- transition to result phase.
+                    spdlog::info("[{}] PIO complete: {} bytes transferred", name(), xfer_ptr_);
+                    build_result_ok();
+                }
+                return val;
+            }
+            // Result phase: return status bytes.
             if (phase_ == Phase::Result && result_pos_ < result_len_) {
-                // First result byte read: deassert IRQ (real FDC behavior).
                 if (result_pos_ == 0)
                     lower_irq(6);
                 uint8_t val = result_buf_[result_pos_++];
@@ -220,7 +237,7 @@ void ISA_FloppyController::execute_read_data() {
 
     sector_size_ = (n == 0) ? 128 : (128u << n);
     sector_offset_ = chs_to_offset(cyl, head, sector);
-    dma_ptr_ = 0;
+    xfer_ptr_ = 0;
 
     spdlog::info("[{}] READ DATA: C={} H={} R={} N={} size={} offset=0x{:05X}",
                  name(), cyl, head, sector, n, sector_size_, sector_offset_);
@@ -237,9 +254,16 @@ void ISA_FloppyController::execute_read_data() {
         return;
     }
 
-    // Enter execution phase: start DMA transfer.
+    // Enter execution phase.
     phase_ = Phase::Execution;
-    assert_drq(2);
+    pio_mode_ = !(dor_ & 0x08);  // DOR bit 3 clear = PIO mode
+
+    if (pio_mode_) {
+        spdlog::info("[{}] PIO mode: {} bytes to transfer", name(), sector_size_);
+        // CPU will poll MSR and read bytes from FIFO.
+    } else {
+        assert_drq(2);
+    }
 }
 
 // =========================================================================
@@ -247,18 +271,21 @@ void ISA_FloppyController::execute_read_data() {
 // =========================================================================
 
 uint8_t ISA_FloppyController::on_dma_read() {
-    if (sector_offset_ + dma_ptr_ < image_.size()) {
-        uint8_t byte = image_[sector_offset_ + dma_ptr_];
-        dma_ptr_++;
+    if (sector_offset_ + xfer_ptr_ < image_.size()) {
+        uint8_t byte = image_[sector_offset_ + xfer_ptr_];
+        xfer_ptr_++;
         return byte;
     }
-    dma_ptr_++;
+    xfer_ptr_++;
     return 0x00;
 }
 
 void ISA_FloppyController::on_dma_complete(int /*channel*/) {
-    spdlog::info("[{}] DMA complete: {} bytes transferred", name(), dma_ptr_);
+    spdlog::info("[{}] DMA complete: {} bytes transferred", name(), xfer_ptr_);
+    build_result_ok();
+}
 
+void ISA_FloppyController::build_result_ok() {
     // Build result phase (7 bytes): ST0, ST1, ST2, C, H, R, N
     int cyl    = cmd_buf_[2];
     int head   = cmd_buf_[3];
@@ -276,7 +303,7 @@ void ISA_FloppyController::on_dma_complete(int /*channel*/) {
     result_pos_ = 0;
     phase_ = Phase::Result;
 
-    // Fire IRQ 6.
+    // Fire IRQ 6 (if DMA/IRQ enabled in DOR).
     if (dor_ & 0x08)
         raise_irq(6);
 }
