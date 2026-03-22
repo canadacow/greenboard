@@ -53,6 +53,11 @@ add_executable(bench
     src/ic/ic_74ls670.cpp
     src/ic/ic_74s10.cpp
     src/ic/ic_dram_256k.cpp
+    src/isa/isa_adapter.cpp
+    src/isa/isa_testcard.cpp
+    src/isa/isa_fdc.cpp
+    src/isa/isa_mda.cpp
+    src/test/test_keyboard.cpp
     ${BENCH_HEADERS}
 )
 

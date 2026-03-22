@@ -469,7 +469,7 @@ struct Board {
         cpu_socket.wire(29, cpu_lock); cpu_socket.wire(30, rqgt0);
         cpu_socket.wire(24, qs1); cpu_socket.wire(25, qs0);
         cpu_socket.wire(26, s0); cpu_socket.wire(27, s1); cpu_socket.wire(28, s2);
-        cpu = cpu_socket.emplace<IC_8088>(0x0100, 0x0100);
+        cpu = cpu_socket.emplace<IC_8088>(0xF000, 0xFFF0);
 
         // U6: 8288 Bus Controller
         bc_socket.wire(1, gnd);

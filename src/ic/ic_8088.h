@@ -292,6 +292,7 @@ private:
 public:
     bool halted() const { return halted_; }
     void clear_halt() { halted_ = false; }
+    void set_reset_vector(uint16_t cs, uint16_t ip) { start_cs_ = cs; start_ip_ = ip; }
 private:
 
     // Start address (set via constructor, applied in cpu_reset)
