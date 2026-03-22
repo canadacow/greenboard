@@ -26,7 +26,8 @@ namespace bench {
 // captures `this` and calls virtual methods at runtime.
 class ISA_Adapter : public CallbackComponent {
 public:
-    explicit ISA_Adapter(std::string name, uint8_t dma_channels = 0x0E);
+    explicit ISA_Adapter(std::string name, uint8_t dma_channels = 0x0E,
+                         uint8_t irq_lines = 0xFC);
 
     void install(IsaSlot& slot);
 
@@ -36,6 +37,11 @@ public:
     // different slot to own them.
     void set_dma_channels(uint8_t mask) { dma_channel_mask_ = mask; }
     uint8_t dma_channels() const { return dma_channel_mask_; }
+
+    // Reconfigure which IRQ lines this card can drive (bitmask, bits 2-7).
+    // Must be called BEFORE install(). Default 0xFC = IRQ2-IRQ7.
+    void set_irq_lines(uint8_t mask) { irq_line_mask_ = mask; }
+    uint8_t irq_lines() const { return irq_line_mask_; }
 
 protected:
     // --- Subclass contract (pure virtual) ---
@@ -105,7 +111,9 @@ private:
     // DMA state
     int dma_active_ch_ = -1;
     uint8_t dma_channel_mask_ = 0x0E;  // default: channels 1-3
+    uint8_t irq_line_mask_ = 0xFC;    // default: IRQ2-IRQ7
     bool owns_dma(int ch) const { return (dma_channel_mask_ & (1 << ch)) != 0; }
+    bool owns_irq(int n) const { return (irq_line_mask_ & (1 << n)) != 0; }
 
     // Edge tracking
     Level ior_prev_ = Level::HiZ;

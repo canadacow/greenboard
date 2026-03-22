@@ -3,8 +3,8 @@
 
 namespace bench {
 
-ISA_Adapter::ISA_Adapter(std::string name, uint8_t dma_channels)
-    : CallbackComponent(std::move(name)), dma_channel_mask_(dma_channels) {}
+ISA_Adapter::ISA_Adapter(std::string name, uint8_t dma_channels, uint8_t irq_lines)
+    : CallbackComponent(std::move(name)), dma_channel_mask_(dma_channels), irq_line_mask_(irq_lines) {}
 
 void ISA_Adapter::install(IsaSlot& slot) {
     // Data bus: SD0-SD7 from ISA slot pins A2-A9.
@@ -44,14 +44,12 @@ void ISA_Adapter::install(IsaSlot& slot) {
     // T/C (terminal count): rising edge = DMA transfer complete.
     if (slot.tc) { tc_ = slot.tc->pin(); slot.tc->connect(this); }
 
-    // IRQ lines: ISA slot provides IRQ2-IRQ7.
-    irq_sig_[2] = slot.irq2;
-    irq_sig_[3] = slot.irq3;
-    irq_sig_[4] = slot.irq4;
-    irq_sig_[5] = slot.irq5;
-    irq_sig_[6] = slot.irq6;
-    irq_sig_[7] = slot.irq7;
+    // IRQ lines: only wire lines in irq_line_mask_.
+    Signal* irq_sigs[] = { nullptr, nullptr, slot.irq2, slot.irq3,
+                           slot.irq4, slot.irq5, slot.irq6, slot.irq7 };
     for (int i = 2; i < 8; ++i) {
+        if (!owns_irq(i)) continue;
+        irq_sig_[i] = irq_sigs[i];
         if (irq_sig_[i])
             irq_pin_[i] = irq_sig_[i]->pin();
     }

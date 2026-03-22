@@ -43,10 +43,10 @@
 ; @expect 0516 0001 Run2: Bytes 4-7 "m ip"
 ; @expect 0518 0001 Run2: Last 4 bytes "et, "
 ; @expect 051A 001C Run2: Byte count (28)
-; @expect 0520 0001 Ch2: DMA TC reached
-; @expect 0522 0001 Ch2: IRQ5 completion fired
-; @expect 0524 0001 Ch2: First 4 bytes "Lore"
-; @expect 052A 001C Ch2: Byte count (28)
+; @expect 0520 0001 Ch3 single: DMA TC reached
+; @expect 0522 0001 Ch3 single: IRQ5 completion fired
+; @expect 0524 0001 Ch3 single: First 4 bytes "Lore"
+; @expect 052A 001C Ch3 single: Byte count (28)
 ; @expect 0530 0001 Ch3 block: DMA TC reached
 ; @expect 0532 0001 Ch3 block: IRQ5 completion fired
 ; @expect 0534 0001 Ch3 block: First 4 bytes "Lore"
@@ -314,7 +314,8 @@ mov word [0x0518], 0x0001
 mov word [0x051A], DMA_COUNT
 
 ; =====================================================================
-; RUN 3: DMA channel 2, single transfer mode to 0x4000
+; RUN 3: DMA channel 3, single transfer mode to 0x4000
+; (Channel 2 is reserved for the floppy disk controller)
 ; =====================================================================
 mov word [0x0522], 0x0000
 mov word [0x0034], irq5_handler3
@@ -324,35 +325,35 @@ mov word [0x0036], 0x0100
 mov al, 0x00
 out 0x0D, al
 
-; Clear flip-flop, set ch2 address = 0x4000
+; Clear flip-flop, set ch3 address = 0x4000
 out 0x0C, al
 mov al, 0x00
-out 0x04, al              ; ch2 addr low
+out 0x06, al              ; ch3 addr low
 mov al, 0x40
-out 0x04, al              ; ch2 addr high
+out 0x06, al              ; ch3 addr high
 
-; Clear flip-flop, set ch2 count = DMA_COUNT - 1
+; Clear flip-flop, set ch3 count = DMA_COUNT - 1
 mov al, 0x00
 out 0x0C, al
 mov al, ((DMA_COUNT - 1) & 0xFF)
-out 0x05, al              ; ch2 count low
+out 0x07, al              ; ch3 count low
 mov al, ((DMA_COUNT - 1) >> 8)
-out 0x05, al              ; ch2 count high
+out 0x07, al              ; ch3 count high
 
-; Mode: single transfer, write (IO->mem), ch2 = 0x45 but ch2 = 0100_0110 = 0x46
-mov al, 0x46
+; Mode: single transfer, write (IO->mem), ch3 = 0100_0111 = 0x47
+mov al, 0x47
 out 0x0B, al
 
-; Page register ch2 = 0 (port 0x81)
+; Page register ch3 = 0 (port 0x82)
 mov al, 0x00
-out 0x81, al
+out 0x82, al
 
-; Unmask ch2: bits [1:0]=10 (ch2), bit 2=0 (unmask) = 0x02
-mov al, 0x02
+; Unmask ch3: bits [1:0]=11 (ch3), bit 2=0 (unmask) = 0x03
+mov al, 0x03
 out 0x0A, al
 
-; Start DMA on ch2 via test card
-mov al, 0x02
+; Start DMA on ch3 via test card
+mov al, 0x03
 out 0xF4, al
 
 ; Wait for completion
@@ -366,7 +367,7 @@ mov cx, 0xFFFF
 
 ; Check TC
 in al, 0x08
-test al, 0x04             ; bit 2 = ch2 TC
+test al, 0x08             ; bit 3 = ch3 TC
 jz .no_tc3
 mov word [0x0520], 0x0001
 .no_tc3:

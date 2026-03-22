@@ -17,6 +17,7 @@
 
 #include "test_board_wiring.h"
 #include "isa/isa_testcard.h"
+#include "isa/isa_fdc.h"
 #include "core/signal.h"
 #include "core/callback_component.h"
 #include "core/fiber_component.h"
@@ -195,8 +196,29 @@ int main() {
     auto& all_traces = board.all_traces;
 
     // ISA Test Card: plugs into J1, handles I/O ports > 0x7F and test IRQ triggers.
+    // DMA channels 1+3 only -- channel 2 belongs to the FDC.
     ISA_TestCard testcard;
+    testcard.set_dma_channels(0x0A);  // bits 1,3 = channels 1 and 3
+    testcard.set_irq_lines(0xBC);     // IRQ2-5,7 (not IRQ6 -- FDC owns it)
     testcard.install(board.isa_slots[0]);
+
+    // Floppy Disk Controller: plugs into J2, uses DMA channel 2, IRQ 6.
+    std::string dos_disk = std::string(ASSETS_DIR) + "/IBM DOS 3.30 360K Disks - Disk 01.img";
+    std::vector<uint8_t> floppy_img;
+    {
+        std::ifstream f(dos_disk, std::ios::binary | std::ios::ate);
+        if (f) {
+            auto sz = f.tellg();
+            floppy_img.resize(static_cast<size_t>(sz));
+            f.seekg(0);
+            f.read(reinterpret_cast<char*>(floppy_img.data()), sz);
+            spdlog::info("[FDC] loaded {} bytes from {}", floppy_img.size(), dos_disk);
+        } else {
+            spdlog::warn("[FDC] disk image not found: {}", dos_disk);
+        }
+    }
+    ISA_FloppyController fdc(std::move(floppy_img), 9, 2);
+    fdc.install(board.isa_slots[1]);
 
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
     // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.
@@ -205,6 +227,7 @@ int main() {
     Signal::set_scheduler(&scheduler);
     board.register_all(scheduler);
     scheduler.register_callback(&testcard);
+    scheduler.register_callback(&fdc);
     // Resolve callback dependency graph.
     // Must be called after all register_*() calls so dump_dot sees everything.
     scheduler.resolve();

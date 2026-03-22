@@ -303,9 +303,6 @@ read_cmd:
 irq6_handler:
     push ax
     mov word [0x0504], 0x0001   ; flag: IRQ 6 fired
-    ; Clear IRQ6 line on ISA test card
-    mov al, 0x40                ; bit 6
-    out 0xF1, al
     ; Send EOI to PIC
     mov al, 0x20
     out 0x20, al
