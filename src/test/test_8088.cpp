@@ -181,6 +181,7 @@ int main() {
         "mmio",
         "floppy",
         "io_floppy",
+        "speaker",
     };
 
     std::vector<TestCase> tests;

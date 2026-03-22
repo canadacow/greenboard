@@ -112,8 +112,12 @@ struct TestBoard {
     };
     Signal ppi_pc[8] = {
         Signal("N-000364"), Signal("N-000359"), Signal("N-000366"), Signal("N-000353"),
-        Signal("CASS_DATA_IN"), Signal("T/C_2_OUT_PC5"), Signal("I/O_CH_CK"), Signal("PCK")
+        Signal("CASS_DATA_IN"), Signal("T/C_2_OUT"), Signal("I/O_CH_CK"), Signal("PCK")
     };
+
+    // Speaker path: U63 (74S38 quad OC NAND)
+    Signal spkr_filter{"N-000336"};   // U63 gate 1 output (T/C_2_OUT inverted)
+    Signal spkr_mix{"N-000325"};      // U63 gate 4 output (SPKR_DATA NAND T/C_2_OUT)
 
     // DRAM signals
     Signal dram_ma0{"MA0"}, dram_ma1{"MA1"}, dram_ma2{"MA2"}, dram_ma3{"MA3"};
@@ -313,6 +317,7 @@ struct TestBoard {
     Socket ff26_socket{"U26", "74S175", 16};       // Quad D FF (PCLK divider)
     Socket pit_socket{"U34", "8253", 24};           // PIT (timer)
     Socket ppi_socket{"U36", "8255A", 40};          // PPI (keyboard, speaker, config)
+    Socket spkr_socket{"U63", "74S38", 14};         // Speaker OC NAND (uses 74S00 logic)
     std::vector<Socket> ram_bank0, ram_bank1, ram_bank2, ram_bank3;
 
     // --- IC pointers (set by wire()) ---
@@ -355,6 +360,7 @@ struct TestBoard {
     IC_74S175* ff26_ic = nullptr;               // U26
     IC_8253* pit_ic = nullptr;                  // U34
     IC_8255A* ppi_ic = nullptr;                 // U36
+    IC_74S00* spkr_ic = nullptr;                // U63 (74S38, same logic as 74S00)
     IC_74S245* xcvr13_ic = nullptr;     // U13: D <-> XD
     IC_74S245* xcvr14_ic = nullptr;     // U14: cmd buffer
     IC_74S244* buf15_ic = nullptr;      // U15: address buffer
@@ -1464,8 +1470,8 @@ struct TestBoard {
         pit_socket.wire(13, n_000328);         // OUT1 -> U67 FF2 CLK (DRQ0 latch)
         pit_socket.wire(14, vcc);              // GATE1 = +5V (always enabled)
         pit_socket.wire(15, pit_clk);          // CLK1 = 1.193 MHz
-        pit_socket.wire(16, vcc);              // GATE2 = +5V (stub, real: PPI PB0)
-        // Pin 17 (OUT2) left unwired -- speaker output, not used in test bench.
+        pit_socket.wire(16, ppi_pb[0]);         // GATE2 = PPI PB0 (TIM_2_GATE_SPK)
+        pit_socket.wire(17, ppi_pc[5]);         // OUT2 = T/C_2_OUT -> PPI PC5, U63
         pit_socket.wire(18, pit_clk);          // CLK2 = 1.193 MHz
         pit_socket.wire(19, xa[0]);            // A0 = XA0
         pit_socket.wire(20, xa[1]);            // A1 = XA1
@@ -1520,6 +1526,28 @@ struct TestBoard {
         ppi_socket.wire(39, ppi_pa[5]);         // PA5
         ppi_socket.wire(40, ppi_pa[4]);         // PA4
         ppi_ic = ppi_socket.emplace<IC_8255A>();
+
+        // U63: 74S38 Quad OC NAND (speaker mixing)
+        // Gate 1 (pins 1,2->3): NAND(T/C_2_OUT, T/C_2_OUT) -> N-000336 (speaker filter)
+        // Gate 2 (pins 4,5->6): NAND(MOTOR_OFF, MOTOR_OFF) -> N-000340 (cassette, stub)
+        // Gate 3 (pins 9,10->8): NAND(PB2, VCC) -> N-000382 (SW2 sense, stub)
+        // Gate 4 (pins 12,13->11): NAND(SPKR_DATA, T/C_2_OUT) -> N-000325 (speaker mix)
+        // Using IC_74S00 -- same logic, we don't model open-collector.
+        spkr_socket.wire(1, ppi_pc[5]);         // 1A = T/C_2_OUT
+        spkr_socket.wire(2, ppi_pc[5]);         // 1B = T/C_2_OUT
+        spkr_socket.wire(3, spkr_filter);       // 1Y = N-000336
+        spkr_socket.wire(4, ppi_pb[3]);         // 2A = MOTOR_OFF
+        spkr_socket.wire(5, ppi_pb[3]);         // 2B = MOTOR_OFF
+        // pin 6: N-000340 (cassette driver, not wired)
+        spkr_socket.wire(7, gnd);               // GND
+        // pin 8: N-000382 (SW2 sense, not wired)
+        spkr_socket.wire(9, ppi_pb[2]);         // 3A = PB2 (N-000363)
+        spkr_socket.wire(10, vcc);              // 3B = +5V
+        spkr_socket.wire(11, spkr_mix);         // 4Y = N-000325 (speaker output)
+        spkr_socket.wire(12, ppi_pb[1]);        // 4A = SPKR_DATA
+        spkr_socket.wire(13, ppi_pc[5]);        // 4B = T/C_2_OUT
+        spkr_socket.wire(14, vcc);              // VCC
+        spkr_ic = spkr_socket.emplace<IC_74S00>();
     }
 
     void register_all(Scheduler& scheduler) {
@@ -1568,6 +1596,7 @@ struct TestBoard {
         scheduler.register_callback(ff26_ic);
         scheduler.register_callback(pit_ic);
         scheduler.register_callback(ppi_ic);
+        scheduler.register_callback(spkr_ic);
         scheduler.register_callback(&dram);
         scheduler.register_callback(bc);
         scheduler.register_callback(pic);
