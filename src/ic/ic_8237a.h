@@ -66,6 +66,7 @@ public:
     void set_bus_ctrl(class IC_8288* bc) { bus_ctrl_ = bc; }
 
 protected:
+    void on_power_on() override;
     void on_signal_change(Fiber caller) override;
 
 private:

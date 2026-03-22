@@ -55,6 +55,8 @@
 ; @expect 0502 0001 Command phase complete
 ; @expect 0504 0001 IRQ 6 fired
 ; @expect 0506 0001 DMA buffer non-zero
+; @dump 0508 First word of DMA buffer
+; @dump 050A Boot signature location (0x3000+510)
 ;
 cpu 8086
 org 0x0100
@@ -280,6 +282,12 @@ mov cx, 9
     jz .buf_empty
     mov word [0x0506], 0x0001   ; buffer has data
 .buf_empty:
+
+    ; Dump first word of DMA buffer and boot signature
+    mov ax, [DMA_BUF_OFFSET]
+    mov [0x0508], ax
+    mov ax, [DMA_BUF_OFFSET + 510]
+    mov [0x050A], ax
 
     hlt
 

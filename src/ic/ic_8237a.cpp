@@ -9,6 +9,45 @@ namespace bench {
 
 IC_8237A::IC_8237A() : CallbackComponent("8237A") { set_description("DMA"); }
 
+void IC_8237A::on_power_on() {
+    // Full reset of all internal state (real chip powers up undefined,
+    // but the simulation reuses the object across power cycles).
+    command_ = 0;
+    status_ = 0;
+    temp_ = 0;
+    flip_flop_ = false;
+    disabled_ = false;
+    state_ = State::SI;
+    active_ch_ = -1;
+    prev_upper_addr_ = 0;
+    eop_pending_ = false;
+    write_pending_ = false;
+    read_pending_ = false;
+    db_driving_ = false;
+    hrq_driven_ = false;
+    a_driving_ = false;
+    mem2mem_write_ = false;
+
+    for (int i = 0; i < 4; ++i) {
+        ch_[i].base_address = 0;
+        ch_[i].base_count = 0;
+        ch_[i].current_address = 0;
+        ch_[i].current_count = 0;
+        ch_[i].mode = 0;
+        ch_[i].masked = true;
+        ch_[i].request = false;
+        ch_[i].tc_reached = false;
+    }
+
+    // Reset edge trackers
+    reset_prev_ = Level::HiZ;
+    iow_prev_ = Level::HiZ;
+    cs_prev_ = Level::HiZ;
+    ior_prev_ = Level::HiZ;
+    clk_prev_ = Level::HiZ;
+    hlda_prev_ = Level::HiZ;
+}
+
 void IC_8237A::set_xcvr(IC_74S245* u8, IC_74S245* u12, IC_74S245* u13, IC_74S245* u14) {
     xcvr_ = u8;
     xcvr_m_ = u12;

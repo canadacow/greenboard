@@ -91,6 +91,7 @@ private:
     Pin iow_{};         // ~IOW (input)
     Pin memr_{};        // ~MEMR (input)
     Pin memw_{};        // ~MEMW (input)
+    Pin aen_{};         // AEN (input, High = DMA cycle, Low = CPU cycle)
 
     // IRQ output pins (directly driven by raise_irq/lower_irq)
     Pin irq_pin_[8]{};

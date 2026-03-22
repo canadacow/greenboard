@@ -26,6 +26,7 @@ void ISA_Adapter::install(IsaSlot& slot) {
     if (slot.iow) { iow_ = slot.iow->pin(); slot.iow->connect(this); }
     if (slot.memr) { memr_ = slot.memr->pin(); slot.memr->connect(this); }
     if (slot.memw) { memw_ = slot.memw->pin(); slot.memw->connect(this); }
+    if (slot.aen) { aen_ = slot.aen->pin(); slot.aen->connect(this); }
 
     // DMA channels 1-3: only wire channels in dma_channel_mask_.
     Signal* dack_sigs[] = { slot.dack0, slot.dack1, slot.dack2, slot.dack3 };
@@ -55,10 +56,16 @@ void ISA_Adapter::install(IsaSlot& slot) {
     }
 
     // Pin directions for DAG.
-    // SA0-SA3: HiZ during DMA to break DAG cycle.
+    // SA0-SA3: HiZ during any DMA cycle (AEN High) to break DAG cycle.
+    // AEN is bus-wide -- even cards that don't own the active channel must
+    // release SA0-3 so the DMA controller's address drives cleanly.
+    declare_async_input(aen_);
     declare_bidir_block({sa_[0], sa_[1], sa_[2], sa_[3]},
         BidirDir::Input | BidirDir::HiZ,
-        [this]() { return dma_active() ? BidirDir::HiZ : BidirDir::Input; });
+        [this]() {
+            return (dma_active() || aen_.level() == Level::High)
+                   ? BidirDir::HiZ : BidirDir::Input;
+        });
     for (int i = 4; i < 20; ++i) declare_input(sa_[i]);
     declare_input(ior_);
     declare_input(iow_);
@@ -147,6 +154,7 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
         dma_ior_count_ = 0;
     }
     for (int ch = 1; ch <= 3; ++ch) {
+        if (!owns_dma(ch)) continue;
         Level dack_cur = dack_[ch].level();
         // ~DACKn falling edge: defer data drive to next cycle.
         if (dack_cur == Level::Low && dack_prev_[ch] != Level::Low && dma_active_ch_ == ch) {
@@ -189,8 +197,8 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     tc_prev_ = tc_cur;
 
     // --- CPU I/O ---
-    // Skip if SA0-SA3 bidir returned HiZ (DMA was active at bidir time).
-    bool addr_readable = !dma_active_at_entry;
+    // Skip if DMA is active (either our channel or bus-wide AEN).
+    bool addr_readable = !dma_active_at_entry && aen_.level() != Level::High;
     if (addr_readable) {
     if (write_pending_) {
         uint16_t port = static_cast<uint16_t>(read_address());
