@@ -305,6 +305,19 @@ int main() {
         SignalPool::enable_validation();
 #endif
 
+        // Drive DIP switch values onto signals (reset clears them each cycle).
+        {
+            Signal* sw1_out[8] = {
+                &board.ppi_pa[0], &board.ppi_pa[1], &board.ppi_pa[2], &board.ppi_pa[3],
+                &board.ppi_pa[4], &board.ppi_pa[5], &board.ppi_pa[6], &board.ppi_pa[7]
+            };
+            board.sw1.drive(sw1_out);
+            Signal* sw2_out[4] = {
+                &board.ppi_pc[0], &board.ppi_pc[1], &board.ppi_pc[2], &board.ppi_pc[3]
+            };
+            board.sw2.drive(sw2_out);
+        }
+
         clk_gen->power_on();
         clk_gen->psu_power_on();
 

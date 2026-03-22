@@ -11,11 +11,15 @@
 ;   [0500] = 0x0001   RAM pattern 0xFF verified
 ;   [0502] = 0x0001   RAM pattern 0x00 verified
 ;   [0504] = 0x0001   8259 PIC initialized (ICW1-4, ISR readable)
+;   [0506] = 0x0001   SW1 DIP switches (Port A = 0x3D)
+;   [0508] = 0x0001   SW2 DIP switches (Port C low nibble = 0x06)
 
 ; @name POST RAM/PIC (TEST.04)
 ; @expect 0500 0001 RAM pattern FF
 ; @expect 0502 0001 RAM pattern 00
 ; @expect 0504 0001 PIC init
+; @expect 0506 0001 SW1 switches
+; @expect 0508 0001 SW2 switches
 ;
 cpu 8086
 org 0x0100
@@ -35,6 +39,13 @@ org 0x0100
     mov word [0x0500], 0x0000
     mov word [0x0502], 0x0000
     mov word [0x0504], 0x0000
+    mov word [0x0506], 0x0000
+    mov word [0x0508], 0x0000
+
+    ; Initialize PPI (Port A=input, Port B=output, Port C=input)
+    ; Must be done before reading switches.
+    mov al, 0x99
+    out 0x63, al
 
 ; =====================================================================
 ; Test 1: Write 0xFF pattern, read back (REP STOSB + LODSB)
@@ -98,6 +109,27 @@ org 0x0100
     cmp al, 0x00            ; no interrupts in service
     jne .done
     mov word [0x0504], 0x0001
+
+; =====================================================================
+; Test 4: SW1 DIP switches via Port A (PCBIOS.ASM TEST.04 line 453)
+; Expect 0x3D: floppy=1, no 8087=0, 64K RAM=11, MDA=11, 1 drive=00
+; =====================================================================
+.test4:
+    in al, 0x60             ; read PPI Port A (switches)
+    cmp al, 0x3D
+    jne .test5
+    mov word [0x0506], 0x0001
+
+; =====================================================================
+; Test 5: SW2 DIP switches via Port C lower nibble (PCBIOS.ASM line 888)
+; Expect 0x06: 6 expansion RAM banks (bits 0-3)
+; =====================================================================
+.test5:
+    in al, 0x62             ; read PPI Port C
+    and al, 0x0F            ; isolate lower nibble (SW2)
+    cmp al, 0x06
+    jne .done
+    mov word [0x0508], 0x0001
 
 .done:
     hlt

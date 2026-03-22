@@ -60,6 +60,8 @@ void TestKeyboard::on_power_on() {
     queue_.clear();
     queue_pos_ = 0;
     armed_ = false;
+    // Don't drive PA pins on power-on -- leave them for DIP switches.
+    // We only start driving PA (Low = idle) after being armed.
     waiting_ack_ = false;
     deliver_pending_ = false;
     reset_pending_ = false;
@@ -69,7 +71,6 @@ void TestKeyboard::on_power_on() {
     pb6_prev_ = Level::HiZ;
     pb7_prev_ = Level::HiZ;
     pin_irq1_.drive(Level::Low);
-    release_scancode();
 }
 
 void TestKeyboard::enqueue(uint8_t scancode) {
@@ -180,6 +181,7 @@ void TestKeyboard::drive_scancode(uint8_t sc) {
 }
 
 void TestKeyboard::release_scancode() {
+    // Drive 0x00 -- idle keyboard outputs zero (U24 shift register cleared).
     for (int i = 0; i < 8; ++i)
         pin_pa_[i].drive(Level::Low);
 }

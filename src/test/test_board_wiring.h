@@ -7,6 +7,7 @@
 #include "core/signal.h"
 #include "core/scheduler.h"
 #include "board/socket.h"
+#include "board/dip_switch.h"
 #include "ic/ic_8088.h"
 #include "ic/ic_8288.h"
 #include "ic/ic_74s245.h"
@@ -276,6 +277,18 @@ struct TestBoard {
     // ISA bus slots
     IsaSlot isa_slots[5] = {
         IsaSlot("J1"), IsaSlot("J2"), IsaSlot("J3"), IsaSlot("J4"), IsaSlot("J5"),
+    };
+
+    // DIP switch configuration
+    SW1Config sw1 {
+        .floppy_present   = true,
+        .math_coprocessor = false,
+        .planar_ram_kb    = 64,
+        .video_mode       = SW1Config::MDA,
+        .floppy_count     = 1,
+    };
+    SW2Config sw2 {
+        .expansion_ram_banks = 6,   // (256K - 64K planar) / 32K = 6
     };
 
     // All traces on this test board. On power loss, every trace discharges.
@@ -1579,6 +1592,16 @@ struct TestBoard {
         spkr_socket.wire(13, ppi_pc[5]);        // 4B = T/C_2_OUT
         spkr_socket.wire(14, vcc);              // VCC
         spkr_ic = spkr_socket.emplace<IC_74S00>();
+
+        // DIP switches -- configure for our machine state.
+        // SW1: floppy present, no 8087, 64K planar RAM, MDA video, 1 floppy drive
+        //   bit 0 = 1 (floppy present, ON = grounded = 0)
+        //   bit 1 = 0 (no 8087)
+        //   bit 2-3 = 11 (64K planar)
+        //   bit 4-5 = 11 (MDA 80x25)
+        //   bit 6-7 = 00 (1 floppy drive)
+        // ON = grounded = bit is 0.  OFF = pull-up = bit is 1.
+        // value byte: 0 = ON, 1 = OFF.
     }
 
     void register_all(Scheduler& scheduler) {
