@@ -118,9 +118,11 @@ add_executable(test_8088
     src/ic/ic_74ls02.cpp
     src/ic/ic_74ls32.cpp
     src/ic/ic_8253.cpp
+    src/ic/ic_8255a.cpp
     src/isa/isa_adapter.cpp
     src/isa/isa_testcard.cpp
     src/isa/isa_fdc.cpp
+    src/test/test_keyboard.cpp
     ${BENCH_HEADERS}
 )
 target_include_directories(test_8088 PRIVATE ${CMAKE_SOURCE_DIR}/src)

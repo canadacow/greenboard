@@ -56,6 +56,15 @@ void ISA_TestCard::on_io_write(uint16_t port, uint8_t val) {
         // Set DMA completion IRQ number (2-7).
         if (val >= 2 && val <= 7)
             dma_irq_ = val;
+    } else if (port == 0xFC) {
+        // Keyboard ready: drive signal High to arm the keyboard.
+        if (kbd_ready_)
+            kbd_ready_->drive(val ? Level::High : Level::Low);
+    } else if (port == 0xFD) {
+        // Keyboard ACK: IRQ handler writes the scancode it just processed.
+        // Pulse the ACK signal so the keyboard delivers the next key.
+        if (kbd_ack_)
+            kbd_ack_->drive(Level::High);
     } else {
         io_[port] = val;
     }

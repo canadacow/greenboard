@@ -98,6 +98,7 @@ private:
     Level wr_prev_ = Level::HiZ;
     Level cs_prev_ = Level::HiZ;
     Level rd_prev_ = Level::HiZ;
+    bool write_pending_ = false;   // deferred write: data settles one cycle after ~WR falls
 };
 
 } // namespace bench

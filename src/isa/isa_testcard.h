@@ -25,6 +25,12 @@ public:
     // Public accessors for test harness.
     uint8_t* io_data() { return io_.get(); }
 
+    // Keyboard ready signal: driven High when test program writes to port 0xFC.
+    void set_kbd_ready_signal(Signal* sig) { kbd_ready_ = sig; }
+
+    // Keyboard ACK signal: pulsed when IRQ handler writes scancode to port 0xFD.
+    void set_kbd_ack_signal(Signal* sig) { kbd_ack_ = sig; }
+
     // DMA buffer: test harness preloads data here before starting DMA.
     static constexpr int DMA_BUF_SIZE = 256;
     uint8_t* dma_buf() { return dma_buf_; }
@@ -55,6 +61,10 @@ private:
     uint8_t dma_buf_[DMA_BUF_SIZE] = {};
     uint16_t dma_ptr_ = 0;
     uint8_t dma_irq_ = 5;  // IRQ to fire on DMA completion (default IRQ5)
+
+    // Keyboard signals (optional)
+    Signal* kbd_ready_ = nullptr;   // driven High on port 0xFC write
+    Signal* kbd_ack_ = nullptr;     // pulsed on port 0xFD write
 
     // MMIO storage
     uint8_t mmio_[MMIO_SIZE] = {};

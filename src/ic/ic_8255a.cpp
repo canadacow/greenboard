@@ -73,11 +73,14 @@ void IC_8255A::on_signal_change(Fiber /*caller*/) {
     if (reset_cur == Level::High && reset_prev_ != Level::High)
         on_reset();
 
-    // Bus write: ~WR falling while ~CS active
-    if (wr_cur == Level::Low && wr_prev_ != Level::Low && cs_cur == Level::Low)
+    // Bus write: deferred pattern -- data settles one cycle after ~WR+~CS assert.
+    if (write_pending_) {
+        write_pending_ = false;
         on_bus_write();
-    if (cs_cur == Level::Low && cs_prev_ != Level::Low && wr_cur == Level::Low)
-        on_bus_write();
+    } else if ((wr_cur == Level::Low && wr_prev_ != Level::Low && cs_cur == Level::Low) ||
+               (cs_cur == Level::Low && cs_prev_ != Level::Low && wr_cur == Level::Low)) {
+        write_pending_ = true;
+    }
 
     // Bus read: ~RD falling while ~CS active
     if (rd_cur == Level::Low && rd_prev_ != Level::Low && cs_cur == Level::Low)
@@ -107,6 +110,8 @@ void IC_8255A::on_reset() {
     pc_upper_input_ = true;
     pc_lower_input_ = true;
 
+    write_pending_ = false;
+
     // Release all port pins (go HiZ since all are now inputs)
     for (int i = 0; i < 8; ++i) {
         pin_pa_[i].release();
@@ -123,6 +128,8 @@ void IC_8255A::on_bus_write() {
     bool a1 = pin_a1_.level() == Level::High;
     int port = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
+    spdlog::debug("[8255A] on_bus_write: port={} A0={} A1={} data=0x{:02X}", port, a0, a1, data);
+
     switch (port) {
         case 0:  // Port A
             latch_a_ = data;
@@ -131,7 +138,10 @@ void IC_8255A::on_bus_write() {
 
         case 1:  // Port B
             latch_b_ = data;
-            if (!pb_input_) write_port_b(data);
+            if (!pb_input_) {
+                write_port_b(data);
+                spdlog::debug("[8255A] Port B write: 0x{:02X} (PB7={})", data, (data >> 7) & 1);
+            }
             break;
 
         case 2:  // Port C
@@ -189,7 +199,12 @@ void IC_8255A::on_bus_read() {
     int port = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
     switch (port) {
-        case 0:  drive_data(pa_input_ ? read_port_a() : latch_a_); break;
+        case 0: {
+            uint8_t val = pa_input_ ? read_port_a() : latch_a_;
+            spdlog::debug("[8255A] Port A read: 0x{:02X} (input={})", val, pa_input_);
+            drive_data(val);
+            break;
+        }
         case 1:  drive_data(pb_input_ ? read_port_b() : latch_b_); break;
         case 2:  drive_data(read_port_c()); break;
         case 3:  drive_data(control_); break;  // some 8255 variants allow reading control

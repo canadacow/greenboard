@@ -32,6 +32,7 @@
 #include "ic/ic_74ls02.h"
 #include "ic/ic_74ls32.h"
 #include "ic/ic_8253.h"
+#include "ic/ic_8255a.h"
 #include "board/isa_slot.h"
 #include <string>
 #include <vector>
@@ -91,6 +92,28 @@ struct TestBoard {
     Signal irq0{"IRQ0"}, irq1{"IRQ1"}, irq2{"IRQ2"}, irq3{"IRQ3"};
     Signal irq4{"IRQ4"}, irq5{"IRQ5"}, irq6{"IRQ6"}, irq7{"IRQ7"};
     Signal* irq_arr[8] = {&irq0, &irq1, &irq2, &irq3, &irq4, &irq5, &irq6, &irq7};
+
+    // Keyboard signals (testcard-mediated)
+    Signal kbd_ready{"KBD_READY"};    // port 0xFC: test program arms keyboard
+    Signal kbd_ack{"KBD_ACK"};        // port 0xFD: IRQ handler confirms scancode processed
+
+    // 8255A PPI signals (Port A = keyboard scancode input, Port B = control output)
+    // Indexed by PA bit number (verified against BRD + 8255A datasheet):
+    //   PA0=pin4->N-000381  PA1=pin3->N-000375  PA2=pin2->N-000380  PA3=pin1->N-000374
+    //   PA4=pin40->N-000379 PA5=pin39->N-000373 PA6=pin38->N-000378 PA7=pin37->N-000372
+    Signal ppi_pa[8] = {
+        Signal("N-000381"), Signal("N-000375"), Signal("N-000380"), Signal("N-000374"),
+        Signal("N-000379"), Signal("N-000373"), Signal("N-000378"), Signal("N-000372")
+    };
+    Signal ppi_pb[8] = {
+        Signal("TIM_2_GATE_SPK"), Signal("SPKR_DATA"), Signal("N-000363"),
+        Signal("MOTOR_OFF"), Signal("~ENB_RAM_PCK"), Signal("~ENABLE_I/O_CK"),
+        Signal("N-000347"), Signal("N-000365")
+    };
+    Signal ppi_pc[8] = {
+        Signal("N-000364"), Signal("N-000359"), Signal("N-000366"), Signal("N-000353"),
+        Signal("CASS_DATA_IN"), Signal("T/C_2_OUT_PC5"), Signal("I/O_CH_CK"), Signal("PCK")
+    };
 
     // DRAM signals
     Signal dram_ma0{"MA0"}, dram_ma1{"MA1"}, dram_ma2{"MA2"}, dram_ma3{"MA3"};
@@ -289,6 +312,7 @@ struct TestBoard {
     Socket nor50_socket{"U50", "74S02", 14};    // Quad NOR (~DMA_AEN, ~WRT_DMA_PG_REG path)
     Socket ff26_socket{"U26", "74S175", 16};       // Quad D FF (PCLK divider)
     Socket pit_socket{"U34", "8253", 24};           // PIT (timer)
+    Socket ppi_socket{"U36", "8255A", 40};          // PPI (keyboard, speaker, config)
     std::vector<Socket> ram_bank0, ram_bank1, ram_bank2, ram_bank3;
 
     // --- IC pointers (set by wire()) ---
@@ -330,6 +354,7 @@ struct TestBoard {
     IC_74LS02* nor50_ic = nullptr;              // U50
     IC_74S175* ff26_ic = nullptr;               // U26
     IC_8253* pit_ic = nullptr;                  // U34
+    IC_8255A* ppi_ic = nullptr;                 // U36
     IC_74S245* xcvr13_ic = nullptr;     // U13: D <-> XD
     IC_74S245* xcvr14_ic = nullptr;     // U14: cmd buffer
     IC_74S244* buf15_ic = nullptr;      // U15: address buffer
@@ -1449,6 +1474,52 @@ struct TestBoard {
         pit_socket.wire(23, pit_wr);           // ~WR = OR(~XIOW, ~PIT_CS) from U101 gate 1
         pit_socket.wire(24, vcc);              // VCC
         pit_ic = pit_socket.emplace<IC_8253>();
+
+        // U36: 8255A PPI (Programmable Peripheral Interface)
+        // Port A = input (keyboard scancode from U24, or SW1 via U23)
+        // Port B = output (speaker, cassette, keyboard control)
+        // Port C upper = input, lower = output (stubs)
+        ppi_socket.wire(1, ppi_pa[3]);          // PA3 (pin 1 per 8255A datasheet)
+        ppi_socket.wire(2, ppi_pa[2]);          // PA2
+        ppi_socket.wire(3, ppi_pa[1]);          // PA1
+        ppi_socket.wire(4, ppi_pa[0]);          // PA0
+        ppi_socket.wire(5, xior);               // ~RD = ~XIOR
+        ppi_socket.wire(6, ppi_cs);             // ~CS = ~PPI_CS (from U66)
+        ppi_socket.wire(7, gnd);                // GND
+        ppi_socket.wire(8, xa[1]);              // A1 = XA1
+        ppi_socket.wire(9, xa[0]);              // A0 = XA0
+        ppi_socket.wire(10, ppi_pc[7]);         // PC7 = PCK (stub)
+        ppi_socket.wire(11, ppi_pc[6]);         // PC6 = I/O_CH_CK (stub)
+        ppi_socket.wire(12, ppi_pc[5]);         // PC5 = T/C_2_OUT (stub)
+        ppi_socket.wire(13, ppi_pc[4]);         // PC4 = CASS_DATA_IN (stub)
+        ppi_socket.wire(14, ppi_pc[0]);         // PC0
+        ppi_socket.wire(15, ppi_pc[1]);         // PC1
+        ppi_socket.wire(16, ppi_pc[2]);         // PC2
+        ppi_socket.wire(17, ppi_pc[3]);         // PC3
+        ppi_socket.wire(18, ppi_pb[0]);         // PB0 = TIM_2_GATE_SPK
+        ppi_socket.wire(19, ppi_pb[1]);         // PB1 = SPKR_DATA
+        ppi_socket.wire(20, ppi_pb[2]);         // PB2
+        ppi_socket.wire(21, ppi_pb[3]);         // PB3 = MOTOR_OFF
+        ppi_socket.wire(22, ppi_pb[4]);         // PB4 = ~ENB_RAM_PCK
+        ppi_socket.wire(23, ppi_pb[5]);         // PB5 = ~ENABLE_I/O_CK
+        ppi_socket.wire(24, ppi_pb[6]);         // PB6 = KBD CLK inhibit
+        ppi_socket.wire(25, ppi_pb[7]);         // PB7 = KBD acknowledge
+        ppi_socket.wire(26, vcc);               // VCC
+        ppi_socket.wire(27, xd7);               // D7
+        ppi_socket.wire(28, xd6);               // D6
+        ppi_socket.wire(29, xd5);               // D5
+        ppi_socket.wire(30, xd4);               // D4
+        ppi_socket.wire(31, xd3);               // D3
+        ppi_socket.wire(32, xd2);               // D2
+        ppi_socket.wire(33, xd1);               // D1
+        ppi_socket.wire(34, xd0);               // D0
+        ppi_socket.wire(35, reset);             // RESET
+        ppi_socket.wire(36, xiow);              // ~WR = ~XIOW
+        ppi_socket.wire(37, ppi_pa[7]);         // PA7 (pin 37 per 8255A datasheet)
+        ppi_socket.wire(38, ppi_pa[6]);         // PA6
+        ppi_socket.wire(39, ppi_pa[5]);         // PA5
+        ppi_socket.wire(40, ppi_pa[4]);         // PA4
+        ppi_ic = ppi_socket.emplace<IC_8255A>();
     }
 
     void register_all(Scheduler& scheduler) {
@@ -1496,6 +1567,7 @@ struct TestBoard {
         scheduler.register_callback(nor50_ic);
         scheduler.register_callback(ff26_ic);
         scheduler.register_callback(pit_ic);
+        scheduler.register_callback(ppi_ic);
         scheduler.register_callback(&dram);
         scheduler.register_callback(bc);
         scheduler.register_callback(pic);

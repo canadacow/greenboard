@@ -18,6 +18,7 @@
 #include "test_board_wiring.h"
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
+#include "test_keyboard.h"
 #include "core/signal.h"
 #include "core/callback_component.h"
 #include "core/fiber_component.h"
@@ -171,6 +172,7 @@ int main() {
         "string",
         "mul",
         "bcd",
+        "keyboard",
         "farcall",
         "div",
         "dos",
@@ -229,6 +231,20 @@ int main() {
     board.register_all(scheduler);
     scheduler.register_callback(&testcard);
     scheduler.register_callback(&fdc);
+
+    // Keyboard: bypasses U24 serial shift register, drives PA0-PA7 + IRQ1 directly.
+    // Armed by test program writing to testcard port 0xFC.
+    testcard.set_kbd_ready_signal(&board.kbd_ready);
+    testcard.set_kbd_ack_signal(&board.kbd_ack);
+    TestKeyboard keyboard;
+    {
+        Signal* pa_ptrs[8];
+        for (int i = 0; i < 8; ++i) pa_ptrs[i] = &board.ppi_pa[i];
+        keyboard.connect(pa_ptrs, board.irq1, board.ppi_pb[7],
+                         board.kbd_ready, board.kbd_ack);
+    }
+    scheduler.register_callback(&keyboard);
+
     // Resolve callback dependency graph.
     // Must be called after all register_*() calls so dump_dot sees everything.
     scheduler.resolve();
@@ -247,6 +263,11 @@ int main() {
         {
             static const char lorem[] = "Lorem ipsum dolor sit amet, ";
             std::memcpy(testcard.dma_buf(), lorem, sizeof(lorem) - 1);
+        }
+
+        // Preload keyboard scancodes for the keyboard test.
+        if (tc.bin_file.find("keyboard") != std::string::npos) {
+            keyboard.enqueue_string("Hello world");
         }
 
         // Load binary into DRAM at 0100:0100 (physical 0x01100)
