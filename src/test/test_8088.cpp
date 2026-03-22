@@ -182,6 +182,11 @@ int main() {
         "floppy",
         "io_floppy",
         "speaker",
+        "post_cpu",
+        "post_dma",
+        "post_kbd",
+        "post_fdc",
+        "post_pic",
     };
 
     std::vector<TestCase> tests;
@@ -241,8 +246,8 @@ int main() {
     {
         Signal* pa_ptrs[8];
         for (int i = 0; i < 8; ++i) pa_ptrs[i] = &board.ppi_pa[i];
-        keyboard.connect(pa_ptrs, board.irq1, board.ppi_pb[7],
-                         board.kbd_ready, board.kbd_ack);
+        keyboard.connect(pa_ptrs, board.irq1, board.ppi_pb[6],
+                         board.ppi_pb[7], board.kbd_ready, board.kbd_ack);
     }
     scheduler.register_callback(&keyboard);
 

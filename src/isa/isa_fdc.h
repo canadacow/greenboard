@@ -67,6 +67,9 @@ private:
     uint16_t xfer_ptr_ = 0;       // bytes transferred so far (DMA or PIO)
     bool pio_mode_ = false;        // true when DOR bit 3 is clear (no DMA)
 
+    // Current cylinder per drive (for SENSE INTERRUPT STATUS)
+    uint8_t pcn_[4] = {};
+
     // Interrupt pending
     bool irq_pending_ = false;
 

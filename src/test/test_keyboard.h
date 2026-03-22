@@ -20,7 +20,7 @@ class TestKeyboard : public CallbackComponent {
 public:
     TestKeyboard();
 
-    void connect(Signal* pa[8], Signal& irq1, Signal& pb7,
+    void connect(Signal* pa[8], Signal& irq1, Signal& pb6, Signal& pb7,
                  Signal& ready, Signal& ack);
 
     void enqueue(uint8_t scancode);
@@ -38,6 +38,7 @@ private:
 
     Pin pin_pa_[8]{};
     Pin pin_irq1_{};
+    Pin pin_pb6_{};       // KBD CLK inhibit (PPI Port B bit 6)
     Pin pin_pb7_{};       // real hardware ACK (PPI Port B bit 7)
     Pin pin_ready_{};     // testcard port 0xFC
     Pin pin_ack_{};       // testcard port 0xFD (failsafe ACK)
@@ -47,8 +48,10 @@ private:
     bool armed_ = false;
     bool waiting_ack_ = false;
     bool deliver_pending_ = false;  // deliver next scancode on next cycle
+    bool reset_pending_ = false;    // PB6 went Low -- waiting for release
     Level ready_prev_ = Level::HiZ;
     Level ack_prev_ = Level::HiZ;
+    Level pb6_prev_ = Level::HiZ;
     Level pb7_prev_ = Level::HiZ;
 
     static const uint8_t ascii_to_make_[128];

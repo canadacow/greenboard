@@ -30,6 +30,7 @@ void ISA_FloppyController::on_power_on() {
     result_pos_ = 0;
     sector_offset_ = 0;
     xfer_ptr_ = 0;
+    std::memset(pcn_, 0, sizeof(pcn_));
     pio_mode_ = false;
     irq_pending_ = false;
 }
@@ -193,20 +194,32 @@ void ISA_FloppyController::start_command() {
             break;
 
         case 0x08: {  // SENSE INTERRUPT STATUS
-            // Return ST0 + current cylinder.
-            result_buf_[0] = 0x20;  // ST0: seek end
-            result_buf_[1] = 0x00;  // PCN (current cylinder)
+            // Return ST0 + current cylinder for the selected drive.
+            uint8_t drive = dor_ & 0x03;
+            result_buf_[0] = 0x20 | drive;  // ST0: seek end + drive
+            result_buf_[1] = pcn_[drive];   // PCN (current cylinder)
             result_len_ = 2;
             result_pos_ = 0;
             phase_ = Phase::Result;
-            spdlog::debug("[{}] SENSE INTERRUPT -> ST0=0x{:02X}", name(), result_buf_[0]);
+            spdlog::debug("[{}] SENSE INTERRUPT -> ST0=0x{:02X} PCN={}", name(), result_buf_[0], pcn_[drive]);
             break;
         }
 
         case 0x03:   // SPECIFY
         case 0x07:   // RECALIBRATE
         case 0x0F: { // SEEK
-            // These complete immediately (no result phase for SPECIFY/RECALIBRATE).
+            if (cmd_id == 0x07) {
+                // Recalibrate: move to cylinder 0.
+                uint8_t drive = cmd_buf_[1] & 0x03;
+                pcn_[drive] = 0;
+                spdlog::debug("[{}] RECALIBRATE drive {} -> cyl 0", name(), drive);
+            }
+            if (cmd_id == 0x0F) {
+                // Seek: move to specified cylinder.
+                uint8_t drive = cmd_buf_[1] & 0x03;
+                pcn_[drive] = cmd_buf_[2];
+                spdlog::debug("[{}] SEEK drive {} -> cyl {}", name(), drive, pcn_[drive]);
+            }
             if (cmd_id == 0x07 || cmd_id == 0x0F) {
                 // Fire IRQ for seek completion (real FDC does this).
                 if (dor_ & 0x08) {  // DMA/IRQ enabled

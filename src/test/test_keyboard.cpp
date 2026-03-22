@@ -30,14 +30,18 @@ TestKeyboard::TestKeyboard()
     set_description("Keyboard");
 }
 
-void TestKeyboard::connect(Signal* pa[8], Signal& irq1, Signal& pb7,
-                           Signal& ready, Signal& ack) {
+void TestKeyboard::connect(Signal* pa[8], Signal& irq1, Signal& pb6,
+                           Signal& pb7, Signal& ready, Signal& ack) {
     for (int i = 0; i < 8; ++i) {
         pin_pa_[i] = pa[i]->pin();
         declare_output(pin_pa_[i]);
     }
     pin_irq1_ = irq1.pin();
     declare_output(pin_irq1_);
+
+    pb6.connect(this);
+    pin_pb6_ = pb6.pin();
+    declare_input(pin_pb6_);
 
     pb7.connect(this);
     pin_pb7_ = pb7.pin();
@@ -57,8 +61,10 @@ void TestKeyboard::on_power_on() {
     armed_ = false;
     waiting_ack_ = false;
     deliver_pending_ = false;
+    reset_pending_ = false;
     ready_prev_ = Level::HiZ;
     ack_prev_ = Level::HiZ;
+    pb6_prev_ = Level::HiZ;
     pb7_prev_ = Level::HiZ;
     pin_irq1_.drive(Level::Low);
     release_scancode();
@@ -85,9 +91,27 @@ void TestKeyboard::enqueue_string(const char* text) {
 void TestKeyboard::on_signal_change(Fiber /*caller*/) {
     Level ready_cur = pin_ready_.level();
     Level ack_cur = pin_ack_.level();
+    Level pb6_cur = pin_pb6_.level();
     Level pb7_cur = pin_pb7_.level();
 
-    // Wait for test program to arm us.
+    // Detect keyboard reset protocol via PB6 (KBD CLK inhibit):
+    // PB6 Low = CLK pulled low (reset start).
+    // PB6 High after Low = CLK released (reset complete) -> send 0xAA.
+    if (pb6_cur == Level::Low && pb6_prev_ != Level::Low) {
+        reset_pending_ = true;
+        spdlog::trace("[{}] reset: CLK pulled low", name());
+    }
+    if (reset_pending_ && pb6_cur == Level::High && pb6_prev_ != Level::High) {
+        reset_pending_ = false;
+        // Insert 0xAA self-test response at current queue position.
+        queue_.insert(queue_.begin() + static_cast<ptrdiff_t>(queue_pos_), 0xAA);
+        armed_ = true;
+        spdlog::trace("[{}] reset: CLK released, queued 0xAA self-test", name());
+        // Deliver on next cycle (need one cycle for PIC to be ready).
+        deliver_pending_ = true;
+    }
+
+    // Wait for test program to arm us (non-reset path).
     if (!armed_) {
         if (ready_cur == Level::High && ready_prev_ != Level::High) {
             armed_ = true;
@@ -96,6 +120,7 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
         }
         ready_prev_ = ready_cur;
         ack_prev_ = ack_cur;
+        pb6_prev_ = pb6_cur;
         pb7_prev_ = pb7_cur;
         return;
     }
@@ -118,6 +143,7 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
 
     ready_prev_ = ready_cur;
     ack_prev_ = ack_cur;
+    pb6_prev_ = pb6_cur;
     pb7_prev_ = pb7_cur;
 }
 
