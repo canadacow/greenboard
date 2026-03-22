@@ -1524,7 +1524,11 @@ struct TestBoard {
         ppi_socket.wire(10, ppi_pc[7]);         // PC7 = PCK (stub)
         ppi_socket.wire(11, ppi_pc[6]);         // PC6 = I/O_CH_CK (stub)
         ppi_socket.wire(12, ppi_pc[5]);         // PC5 = T/C_2_OUT (stub)
-        ppi_socket.wire(13, ppi_pc[4]);         // PC4 = CASS_DATA_IN (stub)
+        // PC4 = CASS_DATA_IN. On real 5150, T/C_2_OUT goes through U63 NAND
+        // (inverts), R8, cassette relay/connector, LM339 comparator U1
+        // (inverts again) -> R1 -> PC4. Double inversion = same polarity.
+        // Wire PC4 to same signal as PC5 (T/C_2_OUT) to model the loopback.
+        ppi_socket.wire(13, ppi_pc[5]);         // PC4 = CASS_DATA_IN = T/C_2_OUT (loopback)
         ppi_socket.wire(14, ppi_pc[0]);         // PC0
         ppi_socket.wire(15, ppi_pc[1]);         // PC1
         ppi_socket.wire(16, ppi_pc[2]);         // PC2

@@ -11,6 +11,7 @@ void IC_8253::on_power_on() {
     data_bus_driven_ = false;
     write_pending_ = false;
     read_pending_ = false;
+    pit_timer_ = 0;
 }
 
 void IC_8253::install(Socket& socket) {
@@ -109,13 +110,17 @@ void IC_8253::on_signal_change(Fiber /*caller*/) {
     wr_prev_ = wr_low;
     rd_prev_ = rd_low;
 
-    // Gate levels -- sample once per cycle.
-    for (int i = 0; i < 3; ++i)
-        channels_[i].gate = pin_gate_[i].level() == Level::High;
+    // PIT runs at 1/4 system CLK
+    if (pit_timer_ % 4 == 0)
+    {
+        for (int i = 0; i < 3; ++i)
+            channels_[i].gate = pin_gate_[i].level() == Level::High;
 
-    // Tick all channels.
-    for (int i = 0; i < 3; ++i)
-        tick(i);
+        for (int i = 0; i < 3; ++i)
+            tick(i);
+    }
+
+    ++pit_timer_;
 }
 
 // =========================================================================
@@ -212,23 +217,26 @@ void IC_8253::write_counter(int ch, uint8_t value) {
 
     switch (c.rw_mode) {
         case 1:
-            c.reload = value;
+            c.reload = value ? value : 256;
             c.loaded = true;
             c.null_count = true;
             c.counting = true;
             break;
-        case 2:
-            c.reload = static_cast<uint16_t>(value) << 8;
+        case 2: {
+            uint16_t raw = static_cast<uint16_t>(value) << 8;
+            c.reload = raw ? raw : 65536;
             c.loaded = true;
             c.null_count = true;
             c.counting = true;
             break;
+        }
         case 3:
             if (!c.load_lsb_pending) {
                 c.load_lsb_value = value;
                 c.load_lsb_pending = true;
             } else {
-                c.reload = (static_cast<uint16_t>(value) << 8) | c.load_lsb_value;
+                uint16_t raw = (static_cast<uint16_t>(value) << 8) | c.load_lsb_value;
+                c.reload = raw ? raw : 65536;
                 c.load_lsb_pending = false;
                 c.loaded = true;
                 c.null_count = true;
@@ -335,13 +343,12 @@ void IC_8253::tick(int ch) {
                 if (!c.out) { c.out = true; update_out(ch); }
                 return;
             }
-            // Decrements by 2 each tick. Toggles OUT when count expires.
-            if (c.count <= 2) {
+            // Decrements by 2 each tick. Toggle OUT when count expires.
+            c.count -= 2;
+            if (static_cast<int32_t>(c.count) <= 0) {
                 c.out = !c.out;
                 c.count = c.reload;
                 update_out(ch);
-            } else {
-                c.count -= 2;
             }
             break;
 
@@ -380,7 +387,7 @@ void IC_8253::tick(int ch) {
 // Helpers
 // =========================================================================
 
-uint16_t IC_8253::decrement(uint16_t val, bool bcd) {
+uint32_t IC_8253::decrement(uint32_t val, bool bcd) {
     if (!bcd)
         return val - 1;
     if (val == 0) return 0x9999;

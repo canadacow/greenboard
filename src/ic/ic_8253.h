@@ -40,8 +40,8 @@ private:
         uint8_t rw_mode = 0;       // 1=LSB, 2=MSB, 3=LSB+MSB
         bool programmed = false;
 
-        uint16_t count = 0;        // Current counting element
-        uint16_t reload = 0;       // Reload value
+        uint32_t count = 0;        // Current counting element
+        uint32_t reload = 0;       // Reload value (0 from software = 65536)
         uint16_t latch = 0;        // Latched count for reading
         bool latched = false;
 
@@ -65,7 +65,7 @@ private:
     void update_out(int ch);
     void drive_data_bus(uint8_t value);
     void release_data_bus();
-    uint16_t decrement(uint16_t val, bool bcd);
+    uint32_t decrement(uint32_t val, bool bcd);
 
     Channel channels_[3];
 
@@ -82,6 +82,8 @@ private:
     bool read_pending_ = false;
     bool wr_prev_ = false;  // ~WR was low last cycle
     bool rd_prev_ = false;  // ~RD was low last cycle
+
+    uint64_t pit_timer_ = 0;
 };
 
 } // namespace bench
