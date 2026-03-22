@@ -176,6 +176,7 @@ int main() {
         "irq",
         "pit",
         "mmio",
+        "floppy",
     };
 
     std::vector<TestCase> tests;
