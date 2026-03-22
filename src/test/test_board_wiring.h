@@ -15,7 +15,7 @@
 #include "ic/ic_74s373.h"
 #include "ic/ic_74s138.h"
 #include "ic/ic_74s20.h"
-#include "ic/ic_rom_8k.h"
+#include "ic/ic_rom_40k.h"
 #include "ic/ic_dram_256k.h"
 #include "ic/ic_74s158.h"
 #include "ic/ic_74s00.h"
@@ -260,7 +260,11 @@ struct TestBoard {
 
     // ROM-specific signals
     Signal rom_addr_sel{"~ROM_ADDR_SEL"};
-    Signal cs7{"~CS7"};
+    Signal cs3{"~CS3"};   // U46 ~Y3 -> U29 (F6000-F7FFF)
+    Signal cs4{"~CS4"};   // U46 ~Y4 -> U30 (F8000-F9FFF)
+    Signal cs5{"~CS5"};   // U46 ~Y5 -> U31 (FA000-FBFFF)
+    Signal cs6{"~CS6"};   // U46 ~Y6 -> U32 (FC000-FDFFF)
+    Signal cs7{"~CS7"};   // U46 ~Y7 -> U33 (FE000-FFFFF)
 
     // ISA bus buffer sockets
     Socket xcvr13_socket{"U13", "74S245", 20};   // D <-> XD data transceiver
@@ -290,7 +294,11 @@ struct TestBoard {
     Socket pic_socket{"U2", "8259A", 28};
     Socket nand_socket{"U64", "74S20", 14};
     Socket rom_decode{"U46", "74S138", 16};
-    Socket rom_socket{"U33", "8K_X_8ROS", 24};
+    Socket rom_u29{"U29", "8K_X_8ROS", 24};
+    Socket rom_u30{"U30", "8K_X_8ROS", 24};
+    Socket rom_u31{"U31", "8K_X_8ROS", 24};
+    Socket rom_u32{"U32", "8K_X_8ROS", 24};
+    Socket rom_u33{"U33", "8K_X_8ROS", 24};
     Socket nand81_socket{"U81", "74S00", 14};
     Socket ram_range{"U48", "74S138", 16};
     Socket ras_decode{"U65", "74S138", 16};
@@ -332,8 +340,8 @@ struct TestBoard {
     IC_74S138<0x1F>* io_dec = nullptr;      // U66: Y0-Y4
     IC_8259A* pic = nullptr;
     IC_74S20<0x03>* nand_ic = nullptr;
-    IC_74S138<0x80>* rom_dec = nullptr;     // U46: Y7
-    IC_ROM_8K* rom_ic = nullptr;
+    IC_74S138<0xF8>* rom_dec = nullptr;     // U46: Y3-Y7
+    IC_ROM_40K rom;
     IC_74S00_U81* nand81_ic = nullptr;
     IC_74S138<0x01>* ram_range_ic = nullptr; // U48: Y0
     IC_74S138<0xF0>* ras_dec = nullptr;     // U65: Y4-Y7
@@ -368,7 +376,11 @@ struct TestBoard {
     IC_74S244* buf17_ic = nullptr;      // U17: address buffer
     IC_DRAM_256K dram;
 
-    void wire(const std::string& bios_path) {
+    void wire(const std::string& bios_path,
+              const std::string& basic_u29 = "",
+              const std::string& basic_u30 = "",
+              const std::string& basic_u31 = "",
+              const std::string& basic_u32 = "") {
         // Power rails never create dependency edges.
         vcc.set_power_rail();
         gnd.set_power_rail();
@@ -415,6 +427,8 @@ struct TestBoard {
         all_traces.push_back(&bank_sel_y4); all_traces.push_back(&bank_sel_y5);
         all_traces.push_back(&bank_sel_y6); all_traces.push_back(&bank_sel_y7);
         all_traces.push_back(&rom_addr_sel);
+        all_traces.push_back(&cs3); all_traces.push_back(&cs4);
+        all_traces.push_back(&cs5); all_traces.push_back(&cs6);
         all_traces.push_back(&cs7);
 
         // U11: 8284A Clock Generator
@@ -672,7 +686,7 @@ struct TestBoard {
         nand_ic = nand_socket.emplace<IC_74S20<0x03>>();
 
         // U46: 74S138 ROM Chip Select Decoder
-        // Decodes A15:A13 into ~CS2-~CS7 when ~ROM_ADDR_SEL=Low and ~MEMR=Low.
+        // Decodes A15:A13 into ~CS3-~CS7 when ~ROM_ADDR_SEL=Low and ~MEMR=Low.
         // G1 = VCC (always enabled -- on real board this is ~RESET_DRV,
         //           but 8288 doesn't issue ~MEMR during reset, so safe).
         rom_decode.wire(1, la[13]);             // A = A13 (pre-buffer)
@@ -681,40 +695,53 @@ struct TestBoard {
         rom_decode.wire(4, xmemr);              // ~G2A = ~XMEMR (active during memory read)
         rom_decode.wire(5, rom_addr_sel);       // ~G2B = ~ROM_ADDR_SEL
         rom_decode.wire(6, vcc);                // G1 = VCC (see note above)
-        rom_decode.wire(7, cs7);                // ~Y7 = ~CS7 -> U33 (FE000-FFFFF)
-        // ~Y0-~Y6 unconnected (no other ROM chips installed in test bench)
+        rom_decode.wire(7, cs7);                // ~Y7 -> U33 (FE000-FFFFF)
         rom_decode.wire(8, gnd);
+        rom_decode.wire(9, cs6);                // ~Y6 -> U32 (FC000-FDFFF)
+        rom_decode.wire(10, cs5);               // ~Y5 -> U31 (FA000-FBFFF)
+        rom_decode.wire(11, cs4);               // ~Y4 -> U30 (F8000-F9FFF)
+        rom_decode.wire(12, cs3);               // ~Y3 -> U29 (F6000-F7FFF)
         rom_decode.wire(16, vcc);
-        rom_dec = rom_decode.emplace<IC_74S138<0x80>>();
+        rom_dec = rom_decode.emplace<IC_74S138<0xF8>>();
 
-        // U33: 8K x 8 BIOS ROM (FE000-FFFFF)
-        // Address pins wired to XA0-XA12, data pins to XD0-XD7.
-        // XD reaches D through U13 (74S245 system data bus transceiver).
-        rom_socket.wire(1, xa[7]);              // A7
-        rom_socket.wire(2, xa[6]);              // A6
-        rom_socket.wire(3, xa[5]);              // A5
-        rom_socket.wire(4, xa[4]);              // A4
-        rom_socket.wire(5, xa[3]);              // A3
-        rom_socket.wire(6, xa[2]);              // A2
-        rom_socket.wire(7, xa[1]);              // A1
-        rom_socket.wire(8, xa[0]);              // A0
-        rom_socket.wire(9, xd0);                // XD0
-        rom_socket.wire(10, xd1);               // XD1
-        rom_socket.wire(11, xd2);               // XD2
-        rom_socket.wire(12, gnd);               // GND
-        rom_socket.wire(13, xd3);               // XD3
-        rom_socket.wire(14, xd4);               // XD4
-        rom_socket.wire(15, xd5);               // XD5
-        rom_socket.wire(16, xd6);               // XD6
-        rom_socket.wire(17, xd7);               // XD7
-        rom_socket.wire(18, xa[11]);            // A11
-        rom_socket.wire(19, xa[10]);            // A10
-        rom_socket.wire(20, cs7);               // ~CS
-        rom_socket.wire(21, xa[12]);            // A12
-        rom_socket.wire(22, xa[9]);             // A9
-        rom_socket.wire(23, xa[8]);             // A8
-        rom_socket.wire(24, vcc);               // VCC
-        rom_ic = rom_socket.emplace<IC_ROM_8K>("BIOS_U33", bios_path);
+        // U29-U33: 8K x 8 ROM (5 banks, 40KB total)
+        // All share XA0-XA12 (address) and XD0-XD7 (data).
+        // Each has its own ~CS from U46 decoder.
+        Signal* rom_cs_arr[5] = {&cs3, &cs4, &cs5, &cs6, &cs7};
+        Socket* rom_sockets[5] = {&rom_u29, &rom_u30, &rom_u31, &rom_u32, &rom_u33};
+        for (int r = 0; r < 5; ++r) {
+            auto& s = *rom_sockets[r];
+            s.wire(1, xa[7]);               // A7
+            s.wire(2, xa[6]);               // A6
+            s.wire(3, xa[5]);               // A5
+            s.wire(4, xa[4]);               // A4
+            s.wire(5, xa[3]);               // A3
+            s.wire(6, xa[2]);               // A2
+            s.wire(7, xa[1]);               // A1
+            s.wire(8, xa[0]);               // A0
+            s.wire(9, xd0);                // XD0
+            s.wire(10, xd1);               // XD1
+            s.wire(11, xd2);               // XD2
+            s.wire(12, gnd);               // GND
+            s.wire(13, xd3);               // XD3
+            s.wire(14, xd4);               // XD4
+            s.wire(15, xd5);               // XD5
+            s.wire(16, xd6);               // XD6
+            s.wire(17, xd7);               // XD7
+            s.wire(18, xa[11]);            // A11
+            s.wire(19, xa[10]);            // A10
+            s.wire(20, *rom_cs_arr[r]);    // ~CS (per-bank from U46)
+            s.wire(21, xa[12]);            // A12
+            s.wire(22, xa[9]);             // A9
+            s.wire(23, xa[8]);             // A8
+            s.wire(24, vcc);               // VCC
+        }
+        rom.install(rom_u29, rom_u30, rom_u31, rom_u32, rom_u33);
+        rom.load(0, basic_u29);   // U29: BASIC C1.10
+        rom.load(1, basic_u30);   // U30: BASIC C1.10
+        rom.load(2, basic_u31);   // U31: BASIC C1.10
+        rom.load(3, basic_u32);   // U32: BASIC C1.10
+        rom.load(4, bios_path);   // U33: BIOS
 
         // --- DRAM: 4 banks x 9 chips = 36 sockets (IC_DRAM_256K) ---
         auto make_dram_bank = [](int start_u) -> std::vector<Socket> {
@@ -1569,7 +1596,7 @@ struct TestBoard {
         scheduler.register_callback(io_dec);
         scheduler.register_callback(nand_ic);
         scheduler.register_callback(rom_dec);
-        scheduler.register_callback(rom_ic);
+        scheduler.register_callback(&rom);
         scheduler.register_callback(mux_lo_ic);
         scheduler.register_callback(mux_hi_ic);
         scheduler.register_callback(nand81_ic);

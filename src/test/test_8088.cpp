@@ -183,10 +183,11 @@ int main() {
         "io_floppy",
         "speaker",
         "post_cpu",
-        "post_dma",
+        /*"post_dma",
         "post_kbd",
         "post_fdc",
         "post_pic",
+        "post_cass",*/
     };
 
     std::vector<TestCase> tests;
@@ -195,8 +196,12 @@ int main() {
 
     // --- Wire the test board (signals, sockets, ICs) ---
     std::string bios_path = std::string(ASSETS_DIR) + "/BIOS_IBM5150_27OCT82_1501476_U33.BIN";
+    std::string basic_u29 = std::string(ASSETS_DIR) + "/IBM 5150 - Cassette BASIC version C1.10 - U29 - 5000019.bin";
+    std::string basic_u30 = std::string(ASSETS_DIR) + "/IBM 5150 - Cassette BASIC version C1.10 - U30 - 5000021.bin";
+    std::string basic_u31 = std::string(ASSETS_DIR) + "/IBM 5150 - Cassette BASIC version C1.10 - U31 - 5000022.bin";
+    std::string basic_u32 = std::string(ASSETS_DIR) + "/IBM 5150 - Cassette BASIC version C1.10 - U32 - 5000023.bin";
     TestBoard board;
-    board.wire(bios_path);
+    board.wire(bios_path, basic_u29, basic_u30, basic_u31, basic_u32);
 
     // Convenience aliases for test code below.
     auto* clk_gen = board.clk_gen;

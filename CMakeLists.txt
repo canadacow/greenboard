@@ -34,6 +34,7 @@ add_executable(bench
     src/ic/ic_8237a.cpp
     src/ic/ic_8088.cpp
     src/ic/ic_rom_8k.cpp
+    src/ic/ic_rom_40k.cpp
     src/ic/ic_74s373.cpp
     src/ic/ic_74s245.cpp
     src/ic/ic_74s138.cpp
@@ -113,6 +114,7 @@ add_executable(test_8088
     src/ic/ic_74ls30.cpp
     src/ic/ic_74ls670.cpp
     src/ic/ic_rom_8k.cpp
+    src/ic/ic_rom_40k.cpp
     src/ic/ic_dram_256k.cpp
     src/ic/ic_74s10.cpp
     src/ic/ic_74ls02.cpp
