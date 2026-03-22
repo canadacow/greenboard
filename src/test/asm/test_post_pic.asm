@@ -86,19 +86,16 @@ org 0x0100
 .test2:
     ; Install temp ISR at INT 8-15 (IRQ 0-7)
     cld
+    xor ax, ax
+    mov es, ax              ; ES = 0 (IVT segment)
     mov cx, 8
-    mov di, 8*4             ; INT 8 vector
-    mov ax, 0x0100
-    mov es, ax
+    mov di, 8*4             ; INT 8 vector = 0x0020
 .vec_loop:
     mov ax, temp_isr
     stosw                   ; offset
     mov ax, 0x0100
     stosw                   ; segment
     loop .vec_loop
-
-    xor ax, ax
-    mov es, ax              ; restore ES=0
 
     ; All interrupts masked (already 0xFF from test 1)
     mov al, 0xFF
