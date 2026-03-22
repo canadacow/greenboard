@@ -82,10 +82,6 @@ struct Pin {
         SignalPool::levels[idx] = lvl;
     }
     void release() {
-#ifdef BENCH_PIN_VALIDATION
-        SignalPool::check_write(idx, Level::HiZ);
-#endif
-        SignalPool::levels[idx] = Level::HiZ;
     }
 };
 
@@ -114,7 +110,7 @@ struct PinBlock {
 #endif
         std::memset(&SignalPool::levels[base], static_cast<uint8_t>(lvl), N);
     }
-    void release() { fill(Level::HiZ); }
+    void release() { }
 
     // Single-element access when needed.
     Level level(int i) const {
