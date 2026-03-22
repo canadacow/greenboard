@@ -61,7 +61,10 @@ void IC_74LS670::install(Socket& socket) {
                         [this]() { return (dma_output_ || pin_re_.level() == Level::Low) ? BidirDir::Output : BidirDir::HiZ; });
 }
 
-void IC_74LS670::on_power_on() { driving_ = false; }
+void IC_74LS670::on_power_on() {
+    driving_ = false;
+    for (auto& r : regs_) r = 0;
+}
 
 void IC_74LS670::on_power_off() {
     if (driving_) {
