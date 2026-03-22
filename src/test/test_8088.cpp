@@ -185,6 +185,8 @@ int main() {
         "speaker",
         "post_cpu",
         "post_cass",
+        "post_rom",
+        "post_ram",
         "post_dma",
         "post_pic",
         "post_kbd",
