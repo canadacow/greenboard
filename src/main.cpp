@@ -8,6 +8,7 @@
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
+#include "display/mda_display.h"
 #include "test/test_keyboard.h"
 #include "core/signal.h"
 #include "core/scheduler.h"
@@ -88,6 +89,10 @@ int main() {
 
     spdlog::set_level(spdlog::level::info);
 
+    // --- MDA display (render thread, reads framebuffer directly) ---
+    MdaDisplay mda_display;
+    mda_display.start(mda.framebuffer());
+
     // --- Power on ---
     spdlog::info("=== Power on ===");
     spdlog::info("SW1: 0x{:02X}  SW2: 0x{:02X}",
@@ -96,14 +101,15 @@ int main() {
     board.clk_gen->power_on();
     board.clk_gen->psu_power_on();
 
-    // Run until the CPU halts (e.g. POST failure) or the process is killed.
-    while (!board.cpu->halted())
+    // Run until the CPU halts or the display window is closed.
+    while (!board.cpu->halted() && mda_display.running())
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // --- Power off ---
     spdlog::info("=== Power off ===");
     board.clk_gen->psu_power_off();
     board.clk_gen->power_off();
+    mda_display.stop();
 
     spdlog::info("CLK cycles: {}", board.clk_gen->clk_cycles());
     spdlog::info("Done.");

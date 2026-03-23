@@ -58,12 +58,13 @@ add_executable(bench
     src/isa/isa_testcard.cpp
     src/isa/isa_fdc.cpp
     src/isa/isa_mda.cpp
+    src/display/mda_display.cpp
     src/test/test_keyboard.cpp
     ${BENCH_HEADERS}
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt)
+target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt d3d11 d2d1 dwrite dxgi)
 target_compile_definitions(bench PRIVATE
     PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
 )
