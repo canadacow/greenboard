@@ -1,13 +1,15 @@
 ; test_post_kbd.asm -- BIOS POST TEST.12: Keyboard reset + stuck key check
-; Mirrors the real IBM PC BIOS TEST.12 / KBD_RESET from PCBIOS.ASM.
-; Requires: 8255A PPI, 8259A PIC, TestKeyboard harness
-; Loaded at 0100:0100 (physical 0x01100). DS=0 after reset.
+; Exact reproduction of PCBIOS.ASM TEST.12 / KBD_RESET (lines 1282-1304)
+; and stuck key check (lines 1012-1021).
 ;
 ; The KBD_RESET procedure:
 ;   1. Pull KBD CLK low via PPI PB6 (port 0x61 = 0x0C) for ~20ms
 ;   2. Release CLK high (0xCC), then enable keyboard (0x4C)
-;   3. Unmask IRQ1, STI, wait for interrupt
+;   3. Unmask IRQ1, STI, wait for interrupt (AH flag)
 ;   4. Read scancode from port 0x60 -- expect 0xAA (self-test passed)
+;
+; The ISR (D11 in BIOS) just sets AH=1, masks all IRQs, sends EOI.
+; It does NOT read Port A or toggle PB7.
 ;
 ; Stuck key check:
 ;   After 0xAA, clear keyboard (0xCC), enable (0x4C), delay, read port 0x60.
@@ -43,15 +45,12 @@ org 0x0100
     mov word [0x0500], 0x0000
     mov word [0x0502], 0x0000
 
-    ; Working variable: interrupt indicator
-    mov byte [0x05E0], 0
-
     ; Initialize PPI: Port A=input, Port B=output
     mov al, 0x99
     out 0x63, al
 
-    ; Install IRQ1 handler (INT 9, PIC base 8)
-    mov word [9*4],   irq1_handler
+    ; Install temporary ISR at INT 9 (matches BIOS D11 proc)
+    mov word [9*4],   temp_isr
     mov word [9*4+2], 0x0100
 
     ; Initialize PIC
@@ -65,68 +64,64 @@ org 0x0100
     out INTA01, al
 
 ; =====================================================================
-; KBD_RESET -- mirrors PCBIOS.ASM KBD_RESET proc (lines 1282-1305)
+; KBD_RESET -- exact copy of PCBIOS.ASM lines 1282-1304
 ; =====================================================================
 
     ; Pull KBD CLK low via PB6
-    mov al, 0x0C            ; PB3=1 (enable), PB2=1 (clr kbd), PB6 stays 0
-    out PORT_B, al
-
-    ; Hold CLK low for ~20ms (BIOS uses CX=10582 loop)
-    mov cx, 10582
+    mov al, 0x0C            ; SET KBD CLK LINE LOW
+    out PORT_B, al          ; WRITE 8255 PORT B
+    mov cx, 10582           ; HOLD KBD CLK LOW FOR 20 MS
 .hold_clk:
-    loop .hold_clk
+    loop .hold_clk          ; LOOP FOR 20 MS
 
-    ; Release: set CLK and ENABLE lines high
-    mov al, 0xCC            ; PB7=1, PB6=1, PB3=1, PB2=1
+    mov al, 0xCC            ; SET CLK, ENABLE LINES HIGH
     out PORT_B, al
 
-    ; Enable keyboard: CLK high, enable low
-    mov al, 0x4C            ; PB6=1, PB3=1, PB2=1
+    mov al, 0x4C            ; SET KBD CLK HIGH, ENABLE LOW
     out PORT_B, al
 
-    ; Unmask IRQ1
-    mov al, 0xFD            ; mask all except IRQ1
-    out INTA01, al
+    mov al, 0xFD            ; ENABLE KEYBOARD INTERRUPTS
+    out INTA01, al          ; WRITE 8259 IMR
 
-    ; Enable interrupts and wait for keyboard interrupt
-    sti
-    mov byte [0x05E0], 0    ; clear interrupt indicator
-    xor cx, cx              ; timeout loop (65536 iterations)
+    sti                     ; ENABLE SYSTEM INTERRUPTS
+    mov ah, 0               ; RESET INTERRUPT INDICATOR
+    sub cx, cx              ; SETUP INTERRUPT TIMEOUT CNT
 .wait_irq:
-    cmp byte [0x05E0], 0
-    jne .got_irq
-    loop .wait_irq
-    jmp .no_irq             ; timeout -- no interrupt received
+    test ah, 0xFF           ; DID A KEYBOARD INTR OCCUR?
+    jnz .got_irq            ; YES - READ SCAN CODE RETURNED
+    loop .wait_irq          ; NO - LOOP TILL TIMEOUT
+    jmp .no_irq             ; timeout
 
 .got_irq:
-    ; Read scancode from PPI Port A
-    in al, PORT_A
-    xor ah, ah
-    mov [0x0500], ax        ; expect 0x00AA
+    in al, PORT_A           ; READ KEYBOARD SCAN CODE
+    mov bl, al              ; SAVE SCAN CODE JUST READ
+    mov al, 0xCC            ; CLEAR KEYBOARD
+    out PORT_B, al
 
-    ; Clear keyboard
-    mov al, 0xCC
+    ; Store result (BIOS compares BL to 0xAA at line 1007)
+    xor bh, bh
+    mov [0x0500], bx        ; expect 0x00AA
+
+    ; Enable keyboard (BIOS line 1005-1006)
+    mov al, 0x4D            ; ENABLE KEYBOARD
     out PORT_B, al
 
 ; =====================================================================
-; Stuck key check -- mirrors PCBIOS.ASM TEST.12 (lines 1012-1021)
+; Stuck key check -- exact copy of PCBIOS.ASM lines 1012-1021
 ; =====================================================================
-    ; Enable keyboard for next byte
-    mov al, 0x4C
+    mov al, 0xCC            ; CLR KBD, SET CLK LINE HIGH
     out PORT_B, al
-
-    ; Delay (BIOS uses SUB CX,CX / LOOP)
-    xor cx, cx
+    mov al, 0x4C            ; ENABLE KBD, CLK IN NEXT BYTE
+    out PORT_B, al
+    sub cx, cx              ; DELAY FOR A WHILE
 .stuck_delay:
     loop .stuck_delay
-
-    ; Read port 0x60 -- should be 0x00 (no stuck key)
-    in al, PORT_A
-    cmp al, 0x00
+    in al, PORT_A           ; CHECK FOR STUCK KEYS
+    cmp al, 0               ; SCAN CODE = 0?
     jne .stuck_fail
     mov word [0x0502], 0x0001
     jmp .done
+
 .stuck_fail:
     mov word [0x0502], 0x0000
 
@@ -136,22 +131,15 @@ org 0x0100
     hlt
 
 ; =====================================================================
-; IRQ1 handler -- just sets the interrupt indicator flag
-; Mirrors how BIOS KBD_RESET uses AH as interrupt indicator.
+; Temporary ISR -- exact copy of BIOS D11 proc (lines 651-660)
+; Sets AH=1, masks all IRQs, sends EOI. Does NOT read PA or toggle PB7.
 ; =====================================================================
-irq1_handler:
+temp_isr:
+    mov ah, 1               ; signal interrupt occurred
     push ax
-
-    ; Signal interrupt occurred
-    mov byte [0x05E0], 0xFF
-
-    ; ACK to testcard (port 0xFD) so TestKeyboard advances queue
-    in al, PORT_A
-    out 0xFD, al
-
-    ; EOI
-    mov al, 0x20
+    mov al, 0xFF            ; MASK ALL INTERRUPTS OFF
+    out INTA01, al
+    mov al, 0x20            ; EOI
     out INTA00, al
-
     pop ax
     iret

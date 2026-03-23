@@ -100,7 +100,12 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
     // Detect keyboard reset protocol via PB6 (KBD CLK inhibit):
     // PB6 Low = CLK pulled low (reset start).
     // PB6 High after Low = CLK released (reset complete) -> send 0xAA.
+    if (pb6_cur != pb6_prev_)
+        spdlog::info("[TestKBD] PB6: {} -> {}", int(pb6_prev_), int(pb6_cur));
+    if (pb7_cur != pb7_prev_)
+        spdlog::info("[TestKBD] PB7: {} -> {} waiting_ack={}", int(pb7_prev_), int(pb7_cur), waiting_ack_);
     if (pb6_cur == Level::Low && pb6_prev_ != Level::Low) {
+        spdlog::info("[TestKBD] reset_pending = true");
         reset_pending_ = true;
     }
     if (reset_pending_ && pb6_cur == Level::High && pb6_prev_ != Level::High) {
@@ -137,15 +142,20 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
     // This ensures the PIC sees a clean Low->High edge.
     if (deliver_pending_) {
         deliver_pending_ = false;
+        spdlog::info("[TestKBD] delivering next scancode");
         deliver_next();
     }
 
-    // ACK: PB7 rising edge (real hardware acknowledge).
-    if (pb7_cur == Level::High && pb7_prev_ != Level::High && waiting_ack_) {
-        handle_ack("PB7");
-    }
-    if (ack_cur == Level::High && ack_prev_ != Level::High) {
-        // port 0xFD diagnostic ack
+    // ACK: port 0xFD write from IRQ handler.
+    // PB7 is NOT used for ACK -- on the real 5150, PB7 High clears U24
+    // (keyboard shift register) but doesn't trigger the next scancode.
+    // The IRQ handler toggles PB7 as part of the keyboard protocol,
+    // which would cause spurious ACKs if we listened to it here.
+    if (ack_cur == Level::High && ack_prev_ != Level::High && waiting_ack_) {
+        spdlog::info("[TestKBD] handle_ack via 0xFD");
+        handle_ack("0xFD");
+        // Reset the ack signal so we can detect the next rising edge.
+        pin_ack_.drive(Level::Low);
     }
 
     ready_prev_ = ready_cur;
