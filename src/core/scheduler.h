@@ -366,14 +366,23 @@ public:
     void pause()  { paused_.store(true, std::memory_order_relaxed); }
     void resume() {
         paused_.store(false, std::memory_order_relaxed);
-        // Poke control word to wake umwait.
         dbg_wake_.store(1, std::memory_order_release);
     }
-    void step() {
+    // Step one CLK cycle.
+    void step_cycle() {
         steps_.fetch_add(1, std::memory_order_relaxed);
-        // Poke control word to wake umwait.
         dbg_wake_.store(1, std::memory_order_release);
     }
+    // Step one instruction: run cycles until IP changes, then pause.
+    // ip_ptr must point to the CPU's reg_ip_ (stable across cycles).
+    void step_instruction(const uint16_t* ip_ptr) {
+        dbg_ip_ptr_ = ip_ptr;
+        dbg_ip_start_ = *ip_ptr;
+        step_instr_.store(true, std::memory_order_relaxed);
+        dbg_wake_.store(1, std::memory_order_release);
+    }
+    // Give the scheduler a pointer to the CPU's IP for instruction stepping.
+    void set_cpu_ip(const uint16_t* ip_ptr) { dbg_ip_ptr_ = ip_ptr; }
 
     // Set the pool base index for the 20-bit address bus (LA0-LA19).
     // Called by board wiring so evaluate() can pre-compute bus_address.
@@ -383,24 +392,37 @@ private:
     // Debugger state -- atomic so the render thread can poke them.
     std::atomic<bool> paused_{false};
     std::atomic<int>  steps_{0};
+    std::atomic<bool> step_instr_{false};
     std::atomic<int>  dbg_wake_{0};   // written by UI to break umwait
+    const uint16_t*   dbg_ip_ptr_ = nullptr;
+    uint16_t          dbg_ip_start_ = 0;
 
     // Block the clock thread while paused, using umwait to sleep efficiently.
     // Called at the top of evaluate(); predicted-not-taken when running normally.
     void pause_gate() {
+        // Instruction stepping: let cycles through until IP changes.
+        if (step_instr_.load(std::memory_order_relaxed)) {
+            if (dbg_ip_ptr_ && *dbg_ip_ptr_ != dbg_ip_start_) {
+                step_instr_.store(false, std::memory_order_relaxed);
+                // IP changed -- fall through to the sleep loop below.
+            } else {
+                return;  // same instruction, keep running
+            }
+        }
+
         for (;;) {
-            // Consume a pending step if available.
+            // Consume a pending cycle step if available.
             int s = steps_.load(std::memory_order_relaxed);
             if (s > 0 && steps_.compare_exchange_weak(s, s - 1, std::memory_order_relaxed))
-                return;  // allow one evaluate() through
+                return;
             if (!paused_.load(std::memory_order_relaxed))
-                return;  // resumed
+                return;
+            // Instruction step requested -- start running.
+            if (step_instr_.load(std::memory_order_relaxed))
+                return;
 
             // Sleep until the UI thread writes to dbg_wake_.
             _umonitor(const_cast<int*>(reinterpret_cast<volatile int*>(&dbg_wake_)));
-            // C0.2 state, ~100us timeout (TSC ticks). The actual duration
-            // doesn't matter much -- umwait wakes instantly on a store to
-            // the monitored address. The timeout is just a backstop.
             uint64_t deadline = __rdtsc() + 500000;
             _umwait(1, deadline);
             dbg_wake_.store(0, std::memory_order_relaxed);

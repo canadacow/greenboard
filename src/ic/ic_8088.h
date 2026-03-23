@@ -46,6 +46,11 @@ class Scheduler;
 //            Each instruction step drives bus signals for memory/IO access.
 class IC_8088 : public FiberComponent {
 public:
+    // Bus cycle phase (actual T-state visible to debugger)
+    enum class TState : uint8_t { Ti, T1, T2, T3, Tw, T4 };
+    // Bidir direction hint (for DAG permutation selection, internal)
+    enum class BusT : uint8_t { T1, T2_Read, T2_Write };
+
     IC_8088(uint16_t start_cs = 0xF000, uint16_t start_ip = 0x0100);
 
     void install(Socket& socket);
@@ -278,8 +283,8 @@ private:
     // T2_READ: AD released (input), S0-S2 passive -> AD=Input,  S0-S2=HiZ
     // T2_WRITE: AD driving (data), S0-S2 passive  -> AD=Output, S0-S2=HiZ
     // T3/T4/Tw: same as T2 for their respective read/write direction
-    enum class BusT { T1, T2_Read, T2_Write };
     BusT bus_t_ = BusT::T1;  // CPU starts by fetching -- first action is T1
+    TState t_state_ = TState::Ti;  // actual bus cycle phase (for debugger)
 
     // Interrupt state
     bool nmi_pending_ = false;
@@ -298,11 +303,14 @@ public:
     const uint16_t* regs16_ro() const { return reinterpret_cast<const uint16_t*>(regs_); }
     const uint8_t*  regs8_ro()  const { return regs_; }
     uint16_t ip()  const { return reg_ip_; }
+    const uint16_t* ip_ptr() const { return &reg_ip_; }
     // 16-bit register indices
     enum Reg16 { AX=0, CX=1, DX=2, BX=3, SP=4, BP=5, SI=6, DI=7,
                  ES=8, CS=9, SS=10, DS=11 };
     // Flag byte offsets in regs8
     enum Flag { CF=40, PF=41, AF=42, ZF=43, SF=44, TF=45, IF=46, DF=47, OF=48 };
+    TState t_state() const { return t_state_; }
+    BusT bus_t() const { return bus_t_; }
 private:
 
     // Start address (set via constructor, applied in cpu_reset)

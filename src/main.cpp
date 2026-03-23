@@ -120,8 +120,9 @@ int main() {
 
     // --- MDA display (render thread, reads framebuffer directly) ---
     MdaDisplay mda_display;
+    scheduler.set_cpu_ip(board.cpu->ip_ptr());
     mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
-                       &scheduler, board.cpu, &memview);
+                       &scheduler, board.cpu, &memview, board.dma_ic);
 
     // --- Power on ---
     spdlog::info("=== Power on ===");

@@ -65,6 +65,10 @@ public:
     void set_addr_latches(IC_74S373* u18, IC_74LS670* u19);
     void set_bus_ctrl(class IC_8288* bc) { bus_ctrl_ = bc; }
 
+    enum class State { SI, BusRequested, S1, S2, S3, S4, M2M_S1, M2M_S2, M2M_S3, M2M_S4 };
+    State state() const { return state_; }
+    int active_channel() const { return active_ch_; }
+
 protected:
     void on_power_on() override;
     void on_signal_change(Fiber caller) override;
@@ -138,7 +142,6 @@ private:
     //   SI: idle, polling DREQ
     //   BusRequested: HRQ asserted, waiting for HLDA
     //   S1-S4: active DMA transfer states
-    enum class State { SI, BusRequested, S1, S2, S3, S4, M2M_S1, M2M_S2, M2M_S3, M2M_S4 };
     State state_ = State::SI;
     int active_ch_ = -1;        // which channel is currently active
     bool disabled_ = false;     // controller disabled (command bit 2)

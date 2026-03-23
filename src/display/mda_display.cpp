@@ -25,6 +25,7 @@
 #include "core/scheduler.h"
 #include "ic/ic_8088.h"
 #include "debug/memory_view.h"
+#include "ic/ic_8237a.h"
 #include <Zydis/Zydis.h>
 #include <spdlog/spdlog.h>
 #include <cinttypes>
@@ -112,6 +113,7 @@ struct DxState {
     Scheduler* scheduler = nullptr;
     IC_8088* cpu = nullptr;
     const MemoryView* mem = nullptr;
+    IC_8237A* dma = nullptr;
     bool* dbg_visible = nullptr;  // points to MdaDisplay::dbg_visible_
 
     // Zydis disassembler (8086 real mode)
@@ -348,17 +350,29 @@ void DxState::render_debugger() {
     static constexpr int DISASM_LINES = 21;  // total visible lines
     static constexpr int MID_LINE = DISASM_LINES / 2;  // IP target row
 
+    // Layout:  1 toolbar + 1 separator + 1 CLK line + 3 register lines +
+    //          1 separator + DISASM_LINES disasm = DISASM_LINES + 7 content lines
+    // Plus title bar + frame padding.
+    static constexpr int CONTENT_LINES = DISASM_LINES + 7;
+    // "F000:FFFF  FF FF FF FF FF FF  mov word [bp+si+0x1234], 0x5678"
+    // = ~60 chars.  Consolas at 14px base: char width ~ 8.4px * dpi_scale.
+    static constexpr int LINE_CHARS = 62;
+
     ImGuiWindowFlags dbg_flags =
         ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoCollapse;
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize;
 
     float line_h = ImGui::GetTextLineHeightWithSpacing();
-    float initial_w = 620.0f;
-    float initial_h = line_h * (DISASM_LINES + 8) + 20.0f;
+    float char_w = ImGui::CalcTextSize("X").x;
+    float pad = ImGui::GetStyle().WindowPadding.x * 2;
+    float title_h = ImGui::GetFrameHeight();  // title bar
+    float w = char_w * LINE_CHARS + pad;
+    float h = line_h * CONTENT_LINES + title_h + pad;
 
     ImGui::SetNextWindowBgAlpha(0.90f);
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Once);
-    ImGui::SetNextWindowSize(ImVec2(initial_w, initial_h), ImGuiCond_Once);
+    ImGui::SetNextWindowSize(ImVec2(w, h));
 
     ImGui::Begin("Debugger [`]", dbg_visible, dbg_flags);
 
@@ -369,23 +383,57 @@ void DxState::render_debugger() {
         if (paused) scheduler->resume(); else scheduler->pause();
         paused = !paused;
     }
-    if (paused) {
-        if (ImGui::Button("Resume (F5)")) scheduler->resume();
-    } else {
-        if (ImGui::Button("Pause (F5)")) scheduler->pause();
+    {
+        float btn_w = ImGui::CalcTextSize("Resume (F5)").x + ImGui::GetStyle().FramePadding.x * 2;
+        if (paused) {
+            if (ImGui::Button("Resume (F5)", ImVec2(btn_w, 0))) scheduler->resume();
+        } else {
+            if (ImGui::Button("Pause  (F5)", ImVec2(btn_w, 0))) scheduler->pause();
+        }
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!paused);
-    bool do_step = ImGui::Button("Step (F10)");
+    // Step Instruction (F10) -- run until IP changes
+    bool do_step_instr = ImGui::Button("Step (F10)");
     if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, true))
-        do_step = true;
-    if (do_step) scheduler->step();
-    ImGui::EndDisabled();
+        do_step_instr = true;
+    if (do_step_instr && cpu)
+        scheduler->step_instruction(cpu->ip_ptr());
     ImGui::SameLine();
-    if (clk_cycles)
-        ImGui::Text("CLK: %" PRIu64 "  %.2f MHz", *clk_cycles, effective_mhz);
+    // Step Cycle (F11) -- single CLK cycle
+    bool do_step_cycle = ImGui::Button("Cycle (F11)");
+    if (paused && ImGui::IsKeyPressed(ImGuiKey_F11, true))
+        do_step_cycle = true;
+    if (do_step_cycle)
+        scheduler->step_cycle();
+    ImGui::EndDisabled();
 
     if (!cpu) { ImGui::End(); return; }
+
+    // --- Status bar ---
+    {
+        static const char* t_names[] = {"Ti", "T1", "T2", "T3", "Tw", "T4"};
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), " %s",
+            t_names[static_cast<int>(cpu->t_state())]);
+    }
+    if (dma) {
+        static const char* dma_names[] = {
+            "SI", "BREQ", "S1", "S2", "S3", "S4",
+            "M2M-S1", "M2M-S2", "M2M-S3", "M2M-S4"
+        };
+        ImGui::SameLine();
+        const char* ds = dma_names[static_cast<int>(dma->state())];
+        int ch = dma->active_channel();
+        if (ch >= 0)
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), " DMA:%s/CH%d", ds, ch);
+        else
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), " DMA:%s", ds);
+    }
+
+    ImGui::Separator();
+    if (clk_cycles)
+        ImGui::Text("CLK: %" PRIu64 "  %.2f MHz", *clk_cycles, effective_mhz);
 
     const uint16_t* r = cpu->regs16_ro();
     const uint8_t* r8 = cpu->regs8_ro();
@@ -393,14 +441,11 @@ void DxState::render_debugger() {
     using F = IC_8088::Flag;
 
     // --- Registers ---
-    ImGui::Separator();
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
     ImGui::Text("AX=%04X  BX=%04X  CX=%04X  DX=%04X",
                  r[R::AX], r[R::BX], r[R::CX], r[R::DX]);
     ImGui::Text("SP=%04X  BP=%04X  SI=%04X  DI=%04X",
                  r[R::SP], r[R::BP], r[R::SI], r[R::DI]);
-    ImGui::Text("CS=%04X  DS=%04X  ES=%04X  SS=%04X  IP=%04X",
-                 r[R::CS], r[R::DS], r[R::ES], r[R::SS], cpu->ip());
 
     char fl[] = "---------";
     if (r8[F::OF]) fl[0] = 'O'; if (r8[F::DF]) fl[1] = 'D';
@@ -408,7 +453,8 @@ void DxState::render_debugger() {
     if (r8[F::SF]) fl[4] = 'S'; if (r8[F::ZF]) fl[5] = 'Z';
     if (r8[F::AF]) fl[6] = 'A'; if (r8[F::PF]) fl[7] = 'P';
     if (r8[F::CF]) fl[8] = 'C';
-    ImGui::Text("FLAGS=%s", fl);
+    ImGui::Text("CS=%04X  DS=%04X  ES=%04X  SS=%04X  IP=%04X  %s",
+                 r[R::CS], r[R::DS], r[R::ES], r[R::SS], cpu->ip(), fl);
     ImGui::PopStyleColor();
 
     // --- Disassembly (DOSBox-style persistent view) ---
@@ -575,6 +621,7 @@ void MdaDisplay::render_loop(std::stop_token stop) {
     dx.scheduler = scheduler_;
     dx.cpu = cpu_;
     dx.mem = mem_;
+    dx.dma = dma_;
     dx.dbg_visible = &dbg_visible_;
     if (!dx.init(hwnd, winW, winH)) {
         spdlog::error("[MDA Display] Failed to init DX11");
@@ -607,12 +654,13 @@ void MdaDisplay::render_loop(std::stop_token stop) {
 
 void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
                        Scheduler* scheduler, IC_8088* cpu,
-                       const MemoryView* mem) {
+                       const MemoryView* mem, IC_8237A* dma) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
     cpu_ = cpu;
     mem_ = mem;
+    dma_ = dma;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });
