@@ -13,9 +13,12 @@ void IC_8288::on_power_on() {
     prev_active_ = false;
     commanding_ = false;
     inhibited_ = false;
+    bus_hold_ = 0;
     release_command();
+    // Reclaim all transceivers -- DMA may have left them configured.
+    // U8/U12/U13 start disabled (no bus cycle yet).
     // U14 always copies CPU -> X-bus in CPU mode (A->B).
-    // Prime it at power-on so command signals propagate from the first cycle.
+    disable_xcvr();
     xcvr_c_->set_driving(IC_74S245::Driving::B);
 }
 

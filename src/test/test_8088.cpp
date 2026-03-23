@@ -160,10 +160,9 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "mov",
-        /*"dma",
+        "dma",
         "dma_m2m",
-        "dma_refresh",
+        //"dma_refresh",
         "mov",
         "rom",
         "io",
@@ -194,7 +193,7 @@ int main() {
         "post_dma",
         "post_kbd",
         "post_pic",
-        "post_fdc",*/
+        "post_fdc",
     };
 
     std::vector<TestCase> tests;
@@ -371,7 +370,7 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-#define RUN_BENCHMARK
+//#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

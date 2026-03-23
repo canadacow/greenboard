@@ -46,6 +46,13 @@ void IC_8237A::on_power_on() {
     ior_prev_ = Level::HiZ;
     clk_prev_ = Level::HiZ;
     hlda_prev_ = Level::HiZ;
+
+    // Reset transceiver driving state -- previous test may have left them
+    // configured for DMA (e.g. mem-to-mem sets U13 to Driving::B).
+    if (xcvr_)   xcvr_->set_driving(IC_74S245::Driving::None);
+    if (xcvr_m_) xcvr_m_->set_driving(IC_74S245::Driving::None);
+    if (xcvr_x_) xcvr_x_->set_driving(IC_74S245::Driving::None);
+    if (xcvr_c_) xcvr_c_->set_driving(IC_74S245::Driving::None);
 }
 
 void IC_8237A::set_xcvr(IC_74S245* u8, IC_74S245* u12, IC_74S245* u13, IC_74S245* u14) {

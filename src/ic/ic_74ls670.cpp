@@ -63,6 +63,7 @@ void IC_74LS670::install(Socket& socket) {
 
 void IC_74LS670::on_power_on() {
     driving_ = false;
+    dma_output_ = false;
     for (auto& r : regs_) r = 0;
 }
 

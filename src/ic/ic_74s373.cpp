@@ -52,6 +52,7 @@ void IC_74S373::on_power_on() {
     std::memset(latch_, static_cast<uint8_t>(Level::HiZ), 8);
     le_prev_ = Level::HiZ;
     oe_active_ = false;
+    dma_output_ = false;
 }
 
 void IC_74S373::on_signal_change(Fiber /*caller*/) {
