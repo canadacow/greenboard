@@ -118,6 +118,12 @@ struct DxState {
     ZydisDecoder decoder = {};
     ZydisFormatter formatter = {};
 
+    // Disassembly view state (DOSBox-style: persistent top-of-window address,
+    // scrolls forward when IP passes the midpoint).
+    uint16_t view_cs = 0;
+    uint16_t view_ip = 0;
+    bool view_init = false;
+
     bool init(HWND hwnd, int w, int h);
     void render_mda(const uint8_t* vram);
     void render_overlay();
@@ -339,19 +345,26 @@ void DxState::render_overlay() {
 }
 
 void DxState::render_debugger() {
+    static constexpr int DISASM_LINES = 21;  // total visible lines
+    static constexpr int MID_LINE = DISASM_LINES / 2;  // IP target row
+
     ImGuiWindowFlags dbg_flags =
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoCollapse;
 
-    ImGui::SetNextWindowBgAlpha(0.85f);
+    float line_h = ImGui::GetTextLineHeightWithSpacing();
+    float initial_w = 620.0f;
+    float initial_h = line_h * (DISASM_LINES + 8) + 20.0f;
+
+    ImGui::SetNextWindowBgAlpha(0.90f);
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Once);
-    ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Once);
+    ImGui::SetNextWindowSize(ImVec2(initial_w, initial_h), ImGuiCond_Once);
 
     ImGui::Begin("Debugger [`]", dbg_visible, dbg_flags);
 
     bool paused = scheduler->is_paused();
 
-    // --- Toolbar: Pause/Resume + Step ---
+    // --- Toolbar ---
     if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
         if (paused) scheduler->resume(); else scheduler->pause();
         paused = !paused;
@@ -368,103 +381,149 @@ void DxState::render_debugger() {
         do_step = true;
     if (do_step) scheduler->step();
     ImGui::EndDisabled();
-
     ImGui::SameLine();
     if (clk_cycles)
         ImGui::Text("CLK: %" PRIu64 "  %.2f MHz", *clk_cycles, effective_mhz);
 
+    if (!cpu) { ImGui::End(); return; }
+
+    const uint16_t* r = cpu->regs16_ro();
+    const uint8_t* r8 = cpu->regs8_ro();
+    using R = IC_8088::Reg16;
+    using F = IC_8088::Flag;
+
+    // --- Registers ---
+    ImGui::Separator();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+    ImGui::Text("AX=%04X  BX=%04X  CX=%04X  DX=%04X",
+                 r[R::AX], r[R::BX], r[R::CX], r[R::DX]);
+    ImGui::Text("SP=%04X  BP=%04X  SI=%04X  DI=%04X",
+                 r[R::SP], r[R::BP], r[R::SI], r[R::DI]);
+    ImGui::Text("CS=%04X  DS=%04X  ES=%04X  SS=%04X  IP=%04X",
+                 r[R::CS], r[R::DS], r[R::ES], r[R::SS], cpu->ip());
+
+    char fl[] = "---------";
+    if (r8[F::OF]) fl[0] = 'O'; if (r8[F::DF]) fl[1] = 'D';
+    if (r8[F::IF]) fl[2] = 'I'; if (r8[F::TF]) fl[3] = 'T';
+    if (r8[F::SF]) fl[4] = 'S'; if (r8[F::ZF]) fl[5] = 'Z';
+    if (r8[F::AF]) fl[6] = 'A'; if (r8[F::PF]) fl[7] = 'P';
+    if (r8[F::CF]) fl[8] = 'C';
+    ImGui::Text("FLAGS=%s", fl);
+    ImGui::PopStyleColor();
+
+    // --- Disassembly (DOSBox-style persistent view) ---
+    if (!mem || !paused) { ImGui::End(); return; }
+
     ImGui::Separator();
 
-    // --- CPU Registers (only meaningful when paused) ---
-    if (cpu) {
-        const uint16_t* r = cpu->regs16_ro();
-        const uint8_t* r8 = cpu->regs8_ro();
-        using R = IC_8088::Reg16;
-        using F = IC_8088::Flag;
+    uint16_t cs = r[R::CS];
+    uint16_t ip = cpu->ip();
+    uint32_t cs_base = (uint32_t)cs << 4;
 
-        // Use monospace for register display
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+    // Initialize or re-sync view when CS changes or IP jumps out of view.
+    if (!view_init || view_cs != cs) {
+        view_cs = cs;
+        view_ip = ip;
+        view_init = true;
+    }
 
-        // General purpose registers - two columns
-        ImGui::Text("AX=%04X  BX=%04X  CX=%04X  DX=%04X",
-                     r[R::AX], r[R::BX], r[R::CX], r[R::DX]);
-        ImGui::Text("SP=%04X  BP=%04X  SI=%04X  DI=%04X",
-                     r[R::SP], r[R::BP], r[R::SI], r[R::DI]);
-        ImGui::Text("CS=%04X  DS=%04X  ES=%04X  SS=%04X",
-                     r[R::CS], r[R::DS], r[R::ES], r[R::SS]);
-        ImGui::Text("IP=%04X", cpu->ip());
+    // Disassemble DISASM_LINES from view_ip, find which line IP falls on.
+    struct DisLine { uint16_t addr; uint8_t len; char hex[32]; char text[128]; };
+    DisLine lines[DISASM_LINES];
+    int ip_line = -1;
 
-        // Flags as letters
-        char flags_str[] = "--------";
-        if (r8[F::OF]) flags_str[0] = 'O';
-        if (r8[F::DF]) flags_str[1] = 'D';
-        if (r8[F::IF]) flags_str[2] = 'I';
-        if (r8[F::TF]) flags_str[3] = 'T';
-        if (r8[F::SF]) flags_str[4] = 'S';
-        if (r8[F::ZF]) flags_str[5] = 'Z';
-        if (r8[F::AF]) flags_str[6] = 'A';
-        if (r8[F::CF]) flags_str[7] = 'C';
-        // PF separate
-        ImGui::SameLine();
-        ImGui::Text("  FL=%s%s", flags_str, r8[F::PF] ? "P" : "-");
+    uint16_t cur = view_ip;
+    for (int i = 0; i < DISASM_LINES; ++i) {
+        lines[i].addr = cur;
+        if (cur == ip) ip_line = i;
 
-        ImGui::PopStyleColor();
+        uint8_t buf[15];
+        mem->read((cs_base + cur) & 0xFFFFF, buf, 15);
 
-        // --- Disassembly (around CS:IP) ---
-        if (mem && paused) {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Disassembly:");
+        ZydisDecodedInstruction instr;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+        if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, buf, 15, &instr, operands))) {
+            ZydisFormatterFormatInstruction(&formatter, &instr, operands,
+                instr.operand_count, lines[i].text, sizeof(lines[i].text),
+                (uint64_t)cs_base + cur, ZYAN_NULL);
+            lines[i].len = (uint8_t)instr.length;
+            int hpos = 0;
+            for (int b = 0; b < (int)instr.length && hpos < 28; ++b)
+                hpos += snprintf(lines[i].hex + hpos, 32 - hpos, "%02X ", buf[b]);
+        } else {
+            snprintf(lines[i].hex, 32, "%02X", buf[0]);
+            snprintf(lines[i].text, 128, "db 0x%02X", buf[0]);
+            lines[i].len = 1;
+        }
+        cur += lines[i].len;
+    }
 
-            uint16_t cs = r[R::CS];
-            uint16_t ip = cpu->ip();
-            uint32_t base = ((uint32_t)cs << 4) + ip;
+    // Scroll the view so IP stays near the middle.
+    // If IP is below the window, advance view_ip until IP is at MID_LINE.
+    // If IP is above the window, snap view_ip to IP.
+    if (ip_line < 0) {
+        // IP not in view -- snap to IP centered.
+        view_ip = ip;
+    } else if (ip_line > MID_LINE) {
+        // IP drifted below midpoint -- scroll forward.
+        // Advance view_ip by the sizes of the lines we're scrolling past.
+        int scroll = ip_line - MID_LINE;
+        for (int i = 0; i < scroll; ++i)
+            view_ip += lines[i].len;
+    }
+    // If we adjusted, re-disassemble so this frame is correct.
+    if (ip_line != MID_LINE && ip_line >= 0 && ip_line <= MID_LINE) {
+        // IP is above midpoint but still in view -- leave it, natural scroll.
+    } else if (ip_line < 0 || ip_line > MID_LINE) {
+        // Re-disassemble with updated view_ip.
+        cur = view_ip;
+        ip_line = -1;
+        for (int i = 0; i < DISASM_LINES; ++i) {
+            lines[i].addr = cur;
+            if (cur == ip) ip_line = i;
 
-            // Fetch up to 64 bytes from CS:IP for disassembly
-            uint8_t code[64];
-            mem->read(base, code, 64);
+            uint8_t buf[15];
+            mem->read((cs_base + cur) & 0xFFFFF, buf, 15);
 
-            // Disassemble several instructions
-            size_t offset = 0;
-            size_t length = 64;
-            for (int line = 0; line < 16 && offset < length; ++line) {
-                ZydisDecodedInstruction instr;
-                ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
-                ZyanStatus status = ZydisDecoderDecodeFull(
-                    &decoder, code + offset, length - offset,
-                    &instr, operands);
-
-                uint16_t addr = ip + static_cast<uint16_t>(offset);
-
-                if (ZYAN_SUCCESS(status)) {
-                    char disasm[128];
-                    ZydisFormatterFormatInstruction(
-                        &formatter, &instr, operands, instr.operand_count,
-                        disasm, sizeof(disasm),
-                        ((uint64_t)cs << 4) + addr, ZYAN_NULL);
-
-                    // Hex bytes
-                    char hex[32] = {};
-                    int hpos = 0;
-                    for (size_t b = 0; b < instr.length && hpos < 24; ++b)
-                        hpos += snprintf(hex + hpos, sizeof(hex) - hpos,
-                                         "%02X ", code[offset + b]);
-
-                    // Highlight current IP
-                    if (offset == 0)
-                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.3f, 1.0f),
-                            "%04X:%04X  %-14s %s", cs, addr, hex, disasm);
-                    else
-                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
-                            "%04X:%04X  %-14s %s", cs, addr, hex, disasm);
-
-                    offset += instr.length;
-                } else {
-                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
-                        "%04X:%04X  %02X             ???",
-                        cs, addr, code[offset]);
-                    offset += 1;
-                }
+            ZydisDecodedInstruction instr;
+            ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+            if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, buf, 15, &instr, operands))) {
+                ZydisFormatterFormatInstruction(&formatter, &instr, operands,
+                    instr.operand_count, lines[i].text, sizeof(lines[i].text),
+                    (uint64_t)cs_base + cur, ZYAN_NULL);
+                lines[i].len = (uint8_t)instr.length;
+                int hpos = 0;
+                for (int b = 0; b < (int)instr.length && hpos < 28; ++b)
+                    hpos += snprintf(lines[i].hex + hpos, 32 - hpos, "%02X ", buf[b]);
+            } else {
+                snprintf(lines[i].hex, 32, "%02X", buf[0]);
+                snprintf(lines[i].text, 128, "db 0x%02X", buf[0]);
+                lines[i].len = 1;
             }
+            cur += lines[i].len;
+        }
+    }
+
+    // --- Render ---
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (int i = 0; i < DISASM_LINES; ++i) {
+        bool is_ip = (lines[i].addr == ip);
+
+        if (is_ip) {
+            // Highlight bar behind current instruction
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            float w = ImGui::GetContentRegionAvail().x;
+            dl->AddRectFilled(
+                ImVec2(pos.x - 4, pos.y),
+                ImVec2(pos.x + w + 4, pos.y + line_h),
+                IM_COL32(60, 60, 20, 220));
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.3f, 1.0f),
+                "%04X:%04X  %-18s %s", cs, lines[i].addr,
+                lines[i].hex, lines[i].text);
+        } else {
+            ImGui::TextColored(ImVec4(0.50f, 0.65f, 0.50f, 1.0f),
+                "%04X:%04X  %-18s %s", cs, lines[i].addr,
+                lines[i].hex, lines[i].text);
         }
     }
 
