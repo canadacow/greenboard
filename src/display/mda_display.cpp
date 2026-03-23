@@ -395,7 +395,7 @@ void DxState::render_debugger() {
     ImGui::BeginDisabled(!paused);
     // Step Instruction (F10) -- run until IP changes
     bool do_step_instr = ImGui::Button("Step (F10)");
-    if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, false))
+    if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, true))
         do_step_instr = true;
     if (do_step_instr && cpu)
         scheduler->step_instruction(cpu->ip_ptr());

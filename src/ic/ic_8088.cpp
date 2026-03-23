@@ -440,7 +440,13 @@ void IC_8088::index_inc(int reg_id) {
 }
 
 uint8_t IC_8088::fetch_byte(int offset) {
-    return bus_read_byte(prefetch_base_ + offset);
+    if (offset < prefetch_len_)
+        return prefetch_[offset];
+    while (prefetch_len_ <= offset) {
+        prefetch_[prefetch_len_] = bus_read_byte(prefetch_base_ + prefetch_len_);
+        ++prefetch_len_;
+    }
+    return prefetch_[offset];
 }
 
 uint16_t IC_8088::fetch_word(int offset) {
