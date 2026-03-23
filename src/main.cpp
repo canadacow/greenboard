@@ -87,6 +87,9 @@ int main() {
 
     scheduler.resolve();
 
+    // --- Speaker (Beep() on PPI port B speaker off transition) ---
+    board.ppi_ic->set_speaker_source(board.pit_ic, &board.clk_gen->clk_cycles_ref());
+
     spdlog::set_level(spdlog::level::info);
 
     // --- MDA display (render thread, reads framebuffer directly) ---

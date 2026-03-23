@@ -29,6 +29,9 @@ public:
 
     void install(Socket& socket);
 
+    // Speaker support: PIT channel 2 reload value -> frequency.
+    uint32_t channel2_reload() const { return channels_[2].reload; }
+
 protected:
     void on_power_on() override;
     void on_signal_change(Fiber caller) override;

@@ -1,5 +1,16 @@
 #include "ic/ic_8255a.h"
+#include "ic/ic_8253.h"
 #include <spdlog/spdlog.h>
+#include <thread>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace bench {
 
@@ -143,10 +154,23 @@ void IC_8255A::on_bus_write() {
                 // Log when speaker is turned on or off.
                 bool spk_now = (data & 0x03) == 0x03;
                 bool spk_was = (old_b & 0x03) == 0x03;
-                if (spk_now && !spk_was)
+                if (spk_now && !spk_was) {
                     spdlog::info("[BEEP] speaker on");
-                else if (!spk_now && spk_was)
+                    if (clk_cycles_) speaker_on_clk_ = *clk_cycles_;
+                }
+                else if (!spk_now && spk_was) {
                     spdlog::info("[BEEP] speaker off");
+#ifdef _WIN32
+                    if (pit_ && clk_cycles_) {
+                        uint32_t reload = pit_->channel2_reload();
+                        if (!reload) reload = 65536;
+                        int freq = 1193182 / reload;
+                        int ms = static_cast<int>((*clk_cycles_ - speaker_on_clk_) / 4770);
+                        if (freq >= 37 && freq <= 32767 && ms > 0 && ms < 5000)
+                            std::thread([=]{ Beep(freq, ms); }).detach();
+                    }
+#endif
+                }
             }
         }
             break;

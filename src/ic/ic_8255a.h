@@ -4,6 +4,8 @@
 
 namespace bench {
 
+class IC_8253;  // forward decl for speaker support
+
 // Intel 8255A-5 Programmable Peripheral Interface.
 //
 // 40-pin DIP. Three 8-bit I/O ports (A, B, C) with programmable
@@ -41,6 +43,11 @@ public:
     IC_8255A();
 
     void install(Socket& socket);
+
+    // Speaker support: set PIT and CLK counter so we can Beep() on speaker off.
+    void set_speaker_source(const IC_8253* pit, const uint64_t* clk_cycles) {
+        pit_ = pit; clk_cycles_ = clk_cycles;
+    }
 
 protected:
     void on_signal_change(Fiber caller) override;
@@ -99,6 +106,11 @@ private:
     Level cs_prev_ = Level::HiZ;
     Level rd_prev_ = Level::HiZ;
     bool write_pending_ = false;   // deferred write: data settles one cycle after ~WR falls
+
+    // Speaker support
+    const IC_8253* pit_ = nullptr;
+    const uint64_t* clk_cycles_ = nullptr;
+    uint64_t speaker_on_clk_ = 0;
 };
 
 } // namespace bench
