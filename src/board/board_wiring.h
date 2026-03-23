@@ -206,6 +206,13 @@ struct Board {
     Signal isa_aen{"ISA_AEN"};                // Buffered AEN for ISA bus (from U15)
     Signal isa_dack0{"ISA_~DACK0"};           // Buffered ~DACK0 for ISA bus (from U15)
     Signal isa_clk88{"N-000289"};             // Buffered CLK88 for ISA bus (from U15, stub)
+    // U23 switch/keyboard mux
+    Signal n_000371{"N-000371"};      // NOT(PB7) -> U23 DIR/~OE
+    Signal sw1_pin[8] = {             // SW1 DIP switch outputs (to U23)
+        Signal("N-000370"), Signal("N-000352"), Signal("N-000361"), Signal("N-000362"),
+        Signal("N-000360"), Signal("N.P._INSTL_SW"), Signal("N-000351"), Signal("N-000350")
+    };
+
     Signal n_000288{"N-000288"};      // U27 gate 2 output
     Signal n_000317{"N-000317"};      // U27 gate 3 output
     Signal n_000303{"N-000303"};      // U27 gate 4 output
@@ -319,6 +326,7 @@ struct Board {
     Socket mux_hi{"U79", "74S158", 16};
     Socket inv_socket{"U83", "74S04", 14};
     Socket dma_socket{"U35", "8237A", 40};
+    Socket sw_mux_socket{"U23", "74S244", 20};  // Switch/keyboard mux for Port A
     Socket inv99_socket{"U99", "74S04", 14};   // Hex inverter (HRQ, CLK88, EOP)
     Socket nand52_socket{"U52", "74S00", 14};  // Quad NAND (HRQ gate, DCLK)
     Socket nand5_socket{"U5", "74LS30", 14};   // 8-input NAND (bus idle)
@@ -362,6 +370,7 @@ struct Board {
     IC_74S158* mux_hi_ic = nullptr;
     IC_74S04* inv_ic = nullptr;
     IC_8237A* dma_ic = nullptr;
+    IC_74S244* sw_mux_ic = nullptr;   // U23: switch/keyboard mux
     IC_74S04* inv99_ic = nullptr;     // U99
     IC_74S00* nand52_ic = nullptr;    // U52
     IC_74LS30* nand5_ic = nullptr;    // U5
@@ -1029,6 +1038,8 @@ struct Board {
         inv99_socket.wire(7, gnd);
         inv99_socket.wire(8, nclk88);          // Y4 = N-000247 (~CLK88)
         inv99_socket.wire(9, clk);             // A4 = CLK88
+        inv99_socket.wire(12, n_000371);           // Y6 = NOT(PB7) = N-000371
+        inv99_socket.wire(13, ppi_pb[7]);          // A6 = PB7 (N-000365)
         inv99_socket.wire(14, vcc);
         inv99_ic = inv99_socket.emplace<IC_74S04>();
 
@@ -1591,6 +1602,31 @@ struct Board {
         spkr_socket.wire(14, vcc);              // VCC
         spkr_ic = spkr_socket.emplace<IC_74S00>();
 
+        // U23: 74S244 octal buffer -- SW1 DIP switches to Port A (BRD-verified).
+        // ~1G = ~2G = N-000371 = NOT(PB7).
+        // When PB7=High, N-000371=Low -> U23 enabled, SW1 drives PA.
+        sw_mux_socket.wire(1, n_000371);          // DIR
+        sw_mux_socket.wire(2, sw1_pin[0]);        // A1 = N-000370 (SW1.9)
+        sw_mux_socket.wire(3, ppi_pa[6]);         // A2 = N-000378 (PA6)
+        sw_mux_socket.wire(4, sw1_pin[2]);        // A3 = N-000361 (SW1.11)
+        sw_mux_socket.wire(5, ppi_pa[4]);         // A4 = N-000379 (PA4)
+        sw_mux_socket.wire(6, sw1_pin[5]);        // A5 = N.P._INSTL_SW (SW1.15)
+        sw_mux_socket.wire(7, ppi_pa[0]);         // A6 = N-000381 (PA0)
+        sw_mux_socket.wire(8, sw1_pin[3]);        // A7 = N-000362 (SW1.13)
+        sw_mux_socket.wire(9, ppi_pa[2]);         // A8 = N-000380 (PA2)
+        sw_mux_socket.wire(10, gnd);              // GND
+        sw_mux_socket.wire(11, sw1_pin[6]);       // B8 = N-000351 (SW1.14)
+        sw_mux_socket.wire(12, ppi_pa[3]);        // B7 = N-000374 (PA3)
+        sw_mux_socket.wire(13, sw1_pin[7]);       // B6 = N-000350 (SW1.16)
+        sw_mux_socket.wire(14, ppi_pa[1]);        // B5 = N-000375 (PA1)
+        sw_mux_socket.wire(15, sw1_pin[1]);       // B4 = N-000352 (SW1.12)
+        sw_mux_socket.wire(16, ppi_pa[5]);        // B3 = N-000373 (PA5)
+        sw_mux_socket.wire(17, sw1_pin[4]);       // B2 = N-000360 (SW1.10)
+        sw_mux_socket.wire(18, ppi_pa[7]);        // B1 = N-000372 (PA7)
+        sw_mux_socket.wire(19, n_000371);         // ~OE
+        sw_mux_socket.wire(20, vcc);              // VCC
+        sw_mux_ic = sw_mux_socket.emplace<IC_74S244>();
+
         // DIP switches -- configure for our machine state.
         // SW1: floppy present, no 8087, 64K planar RAM, MDA video, 1 floppy drive
         //   bit 0 = 1 (floppy present, ON = grounded = 0)
@@ -1610,6 +1646,7 @@ struct Board {
 
         scheduler.register_callback(xcvr);
         scheduler.register_callback(xcvr13_ic);
+        scheduler.register_callback(sw_mux_ic);
         scheduler.register_callback(xcvr14_ic);
         scheduler.register_callback(mem_xcvr);
         scheduler.register_callback(buf15_ic);

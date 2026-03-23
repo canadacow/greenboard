@@ -160,9 +160,8 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "post_sw1_readback",
-        "mov"
-        /*"dma",
+        "mov",
+        "dma",
         "dma_m2m",
         //"dma_refresh",
         "mov",
@@ -195,7 +194,8 @@ int main() {
         "post_dma",
         "post_kbd",
         "post_pic",
-        "post_fdc",*/
+        "post_fdc",
+        "post_sw1_readback",
     };
 
     std::vector<TestCase> tests;
@@ -302,17 +302,19 @@ int main() {
 #endif
 
         // Drive DIP switch values onto signals (reset clears them each cycle).
-        {
-            Signal* sw1_out[8] = {
-                &board.ppi_pa[0], &board.ppi_pa[1], &board.ppi_pa[2], &board.ppi_pa[3],
-                &board.ppi_pa[4], &board.ppi_pa[5], &board.ppi_pa[6], &board.ppi_pa[7]
-            };
-            board.sw1.drive(sw1_out);
-            Signal* sw2_out[4] = {
-                &board.ppi_pc[0], &board.ppi_pc[1], &board.ppi_pc[2], &board.ppi_pc[3]
-            };
-            board.sw2.drive(sw2_out);
-        }
+        // SW1 drives through U23 onto PA. BRD pin mapping:
+        // PA0<-sw1_pin[7], PA1<-sw1_pin[5], PA2<-sw1_pin[6], PA3<-sw1_pin[3]
+        // PA4<-sw1_pin[1], PA5<-sw1_pin[2], PA6<-sw1_pin[4], PA7<-sw1_pin[0]
+        Signal* sw1_out[8] = {
+            &board.sw1_pin[7], &board.sw1_pin[5], &board.sw1_pin[6], &board.sw1_pin[3],
+            &board.sw1_pin[1], &board.sw1_pin[2], &board.sw1_pin[4], &board.sw1_pin[0]
+        };
+        board.sw1.drive(sw1_out);
+
+        Signal* sw2_out[4] = {
+            &board.ppi_pc[0], &board.ppi_pc[1], &board.ppi_pc[2], &board.ppi_pc[3]
+        };
+        board.sw2.drive(sw2_out);
 
         clk_gen->power_on();
         clk_gen->psu_power_on();

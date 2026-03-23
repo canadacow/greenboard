@@ -141,7 +141,6 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
     }
 
     // ACK: PB7 rising edge (real hardware acknowledge).
-    // Port 0xFD is diagnostic only -- logged but does NOT trigger delivery.
     if (pb7_cur == Level::High && pb7_prev_ != Level::High && waiting_ack_) {
         handle_ack("PB7");
     }
