@@ -404,6 +404,9 @@ uint32_t IC_8253::decrement(uint32_t val, bool bcd) {
 }
 
 void IC_8253::update_out(int ch) {
+    // Channel 1 drives DRQ0 for DMA refresh. Suppress it to avoid
+    // refresh cycles complicating the DAG permutation ordering.
+    if (ch == 1) return;
     pin_out_[ch].drive(channels_[ch].out ? Level::High : Level::Low);
 }
 

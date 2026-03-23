@@ -290,6 +290,8 @@ void IC_8259A::on_inta_falling() {
                 vector = vector_base_ | inta_level_;
             else
                 vector = vector_base_ | (inta_level_ << 2);
+            spdlog::info("[{}] INTA2: vector=0x{:02X} base=0x{:02X} level={} mode8086={}",
+                         name(), vector, vector_base_, inta_level_, mode_8086_);
             drive_data(vector);
 
             if (auto_eoi_)
