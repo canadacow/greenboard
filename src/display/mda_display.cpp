@@ -193,10 +193,18 @@ bool DxState::init(HWND hw, int w, int h) {
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 1.0f, 0.0f), &brightGreenBrush);
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &blackBrush);
 
-    // ImGui
+    // ImGui -- scale font + style for high-DPI.
+    // Load the font at the scaled pixel size (not FontGlobalScale, which
+    // just stretches the already-rasterized atlas and looks blurry).
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
+
+    float dpi_scale = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf", 14.0f * dpi_scale);
+    ImGui::GetStyle().ScaleAllSizes(dpi_scale);
+
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(device.Get(), ctx.Get());
 
