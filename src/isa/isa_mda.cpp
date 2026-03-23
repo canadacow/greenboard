@@ -95,13 +95,6 @@ void ISA_MDA::on_mmio_write(uint32_t addr, uint8_t val) {
     uint32_t offset = addr - FB_BASE;
     uint8_t old = fb_[offset];
     fb_[offset] = val;
-
-    // Log character writes (even offsets = character, odd = attribute).
-    if ((offset & 1) == 0 && val != old && val >= 0x20 && val < 0x7F) {
-        int col = (offset / 2) % 80;
-        int row = (offset / 2) / 80;
-        spdlog::info("[MDA] char '{}' at row={} col={}", (char)val, row, col);
-    }
 }
 
 } // namespace bench

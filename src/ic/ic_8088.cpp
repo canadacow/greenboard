@@ -511,7 +511,6 @@ void IC_8088::pc_interrupt(uint8_t interrupt_num) {
     push16(reg_ip_);
     regs16()[REG_CS] = bus_read_word(4 * interrupt_num + 2);
     reg_ip_ = bus_read_word(4 * interrupt_num);
-    spdlog::info("[8088] INT {:02X} -> {:04X}:{:04X}", interrupt_num, regs16()[REG_CS], reg_ip_);
     regs8()[FLAG_TF] = 0;
     regs8()[FLAG_IF] = 0;
 }
@@ -535,15 +534,7 @@ void IC_8088::execute() {
     prefetch_base_ = cs_ip;
     prefetch_len_ = 0;
 
-    uint8_t opbyte = fetch_byte(0);
-    
-    static uint64_t instrCount = 0;
-    if (instrCount % 50000 == 0)
-    {
-        spdlog::info("[8088] {:04X}:{:04X} op={:02X}", regs16()[REG_CS], reg_ip_, opbyte);
-    }
-    ++instrCount;
-    
+    uint8_t opbyte = fetch_byte(0);    
     set_opcode(opbyte);
     i_w_ = (i_reg4bit_ = raw_opcode_id_ & 7) & 1;
     i_d_ = i_reg4bit_ / 2 & 1;
@@ -1270,7 +1261,6 @@ void IC_8088::execute() {
             drive_status_passive();
             full_wait_clk("T3 INTA Pulse 2");                    // T3
             uint8_t vector = read_data();
-            spdlog::info("[8088] INTA read_data -> 0x{:02X}", vector);
             bus_t_ = BusT::T1;
             full_wait_clk("T4 INTA Pulse 2");                    // T4
 

@@ -23,8 +23,9 @@ class MdaDisplay {
 public:
     // Start the display thread.  vram must point to a 4096-byte buffer
     // (80x25 char+attr pairs) that remains valid until stop().
+    // clk_cycles points to the 8284A's monotonic cycle counter (read-only).
     // Blocks until the window is up and rendering.
-    void start(const uint8_t* vram);
+    void start(const uint8_t* vram, const uint64_t* clk_cycles = nullptr);
 
     // Stop the display thread and close the window.
     void stop();
@@ -36,6 +37,7 @@ private:
     std::atomic<bool> running_{false};
     std::latch ready_{1};
     const uint8_t* vram_ = nullptr;
+    const uint64_t* clk_cycles_ = nullptr;
 
     void render_loop(std::stop_token stop);
 };

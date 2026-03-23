@@ -1,7 +1,4 @@
-// MDA Display — DX11 + D2D/DirectWrite renderer for 80x25 MDA VRAM.
-//
-// Reads the MDA card's framebuffer directly at 60fps on its own thread.
-// No synchronization — Option A.
+// MDA Display — DX11 + D2D + ImGui overlay.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -20,9 +17,16 @@
 #pragma comment(lib, "dwrite.lib")
 #pragma comment(lib, "dxgi.lib")
 
+#include <imgui.h>
+#include <imgui_impl_win32.h>
+#include <imgui_impl_dx11.h>
+
 #include "display/mda_display.h"
 #include <spdlog/spdlog.h>
 #include <cmath>
+#include <chrono>
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 using Microsoft::WRL::ComPtr;
 
@@ -68,7 +72,7 @@ static wchar_t cp437_to_unicode(uint8_t c) {
 }
 
 // ========================================================================
-// DX11 + D2D state
+// DX11 + D2D + ImGui state
 // ========================================================================
 
 struct DxState {
@@ -79,6 +83,7 @@ struct DxState {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> ctx;
     ComPtr<IDXGISwapChain1> swapChain;
+    ComPtr<ID3D11RenderTargetView> rtv;
 
     ComPtr<ID2D1Factory1> d2dFactory;
     ComPtr<ID2D1Device> d2dDevice;
@@ -92,8 +97,16 @@ struct DxState {
     ComPtr<ID2D1SolidColorBrush> brightGreenBrush;
     ComPtr<ID2D1SolidColorBrush> blackBrush;
 
+    // MHz tracking
+    const uint64_t* clk_cycles = nullptr;
+    uint64_t last_cycles = 0;
+    std::chrono::steady_clock::time_point last_time;
+    double effective_mhz = 0.0;
+
     bool init(HWND hwnd, int w, int h);
-    void render(const uint8_t* vram);
+    void render_mda(const uint8_t* vram);
+    void render_overlay();
+    void present();
 };
 
 bool DxState::init(HWND hw, int w, int h) {
@@ -101,13 +114,11 @@ bool DxState::init(HWND hw, int w, int h) {
     cellW = (float)w / MDA_COLS;
     cellH = (float)h / MDA_ROWS;
 
-    // DX11 device with BGRA support (required for D2D interop).
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
     D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
         &fl, 1, D3D11_SDK_VERSION, &device, nullptr, &ctx);
 
-    // DXGI swap chain.
     ComPtr<IDXGIDevice1> dxgiDevice;
     device.As(&dxgiDevice);
     ComPtr<IDXGIAdapter> adapter;
@@ -124,24 +135,27 @@ bool DxState::init(HWND hw, int w, int h) {
     scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     factory->CreateSwapChainForHwnd(device.Get(), hwnd, &scd, nullptr, nullptr, &swapChain);
 
-    // D2D device context (draws directly to the swap chain back buffer).
+    // RTV for ImGui (it renders via DX11 directly, not D2D).
+    ComPtr<ID3D11Texture2D> backBuf;
+    swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuf));
+    device->CreateRenderTargetView(backBuf.Get(), nullptr, &rtv);
+
+    // D2D
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory.GetAddressOf());
     d2dFactory->CreateDevice(dxgiDevice.Get(), &d2dDevice);
     d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &d2dCtx);
 
-    // Wrap the back buffer as a D2D bitmap target.
-    ComPtr<IDXGISurface> backBuffer;
-    swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+    ComPtr<IDXGISurface> backSurface;
+    swapChain->GetBuffer(0, IID_PPV_ARGS(&backSurface));
     D2D1_BITMAP_PROPERTIES1 bmpProps = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-    d2dCtx->CreateBitmapFromDxgiSurface(backBuffer.Get(), &bmpProps, &d2dTarget);
+    d2dCtx->CreateBitmapFromDxgiSurface(backSurface.Get(), &bmpProps, &d2dTarget);
     d2dCtx->SetTarget(d2dTarget.Get());
 
-    // DirectWrite + MDA font.
+    // DirectWrite + MDA font
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory5),
         (IUnknown**)dwriteFactory.GetAddressOf());
-
     ComPtr<IDWriteFontFile> fontFile;
     dwriteFactory->CreateFontFileReference(L"assets/Ac437_IBM_MDA.ttf", nullptr, &fontFile);
     ComPtr<IDWriteFontSetBuilder1> fontSetBuilder;
@@ -163,10 +177,19 @@ bool DxState::init(HWND hw, int w, int h) {
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 1.0f, 0.0f), &brightGreenBrush);
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &blackBrush);
 
+    // ImGui
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX11_Init(device.Get(), ctx.Get());
+
+    last_time = std::chrono::steady_clock::now();
+
     return true;
 }
 
-void DxState::render(const uint8_t* vram) {
+void DxState::render_mda(const uint8_t* vram) {
     d2dCtx->BeginDraw();
     d2dCtx->Clear(D2D1::ColorF(D2D1::ColorF::Black));
 
@@ -227,14 +250,62 @@ void DxState::render(const uint8_t* vram) {
     }
 
     d2dCtx->EndDraw();
+}
+
+void DxState::render_overlay() {
+    // Update MHz calculation every frame.
+    if (clk_cycles) {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - last_time).count();
+        if (elapsed >= 0.5) {  // update every 500ms for stability
+            uint64_t cur = *clk_cycles;
+            double delta = static_cast<double>(cur - last_cycles);
+            effective_mhz = (delta / elapsed) / 1e6;
+            last_cycles = cur;
+            last_time = now;
+        }
+    }
+
+    // ImGui overlay — bottom-right, transparent background.
+    ImGui_ImplDX11_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing;
+
+    ImGui::SetNextWindowBgAlpha(0.4f);
+    ImGui::SetNextWindowPos(
+        ImVec2((float)winW - 10.0f, (float)winH - 10.0f),
+        ImGuiCond_Always,
+        ImVec2(1.0f, 1.0f));  // anchor bottom-right
+
+    ImGui::Begin("##stats", nullptr, flags);
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%.2f MHz", effective_mhz);
+    ImGui::End();
+
+    ImGui::Render();
+
+    ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
+
+void DxState::present() {
     swapChain->Present(1, 0);
 }
 
 // ========================================================================
-// Window + message loop
+// Window
 // ========================================================================
 
 static LRESULT CALLBACK MdaWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
+        return true;
     if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -265,6 +336,7 @@ void MdaDisplay::render_loop(std::stop_token stop) {
         nullptr, nullptr, wc.hInstance, nullptr);
 
     DxState dx;
+    dx.clk_cycles = clk_cycles_;
     if (!dx.init(hwnd, winW, winH)) {
         spdlog::error("[MDA Display] Failed to init DX11");
         return;
@@ -280,16 +352,23 @@ void MdaDisplay::render_loop(std::stop_token stop) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         } else {
-            dx.render(vram_);
+            dx.render_mda(vram_);
+            dx.render_overlay();
+            dx.present();
         }
     }
+
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
 
     DestroyWindow(hwnd);
     running_.store(false);
 }
 
-void MdaDisplay::start(const uint8_t* vram) {
+void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles) {
     vram_ = vram;
+    clk_cycles_ = clk_cycles;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });

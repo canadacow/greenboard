@@ -4,6 +4,10 @@
   "description": "IBM PC 5150 motherboard emulator with modeled interconnects",
   "dependencies": [
     "spdlog",
-    "fmt"
+    "fmt",
+    {
+      "name": "imgui",
+      "features": ["docking-experimental", "dx11-binding", "win32-binding"]
+    }
   ]
 }

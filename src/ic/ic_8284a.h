@@ -37,6 +37,7 @@ public:
     void set_scheduler(Scheduler* s) { scheduler_ = s; }
     void set_bus_controller(IC_8288* bc) { bus_ctrl_ = bc; }
     uint64_t clk_cycles() const { return clk_cycles_; }
+    const uint64_t& clk_cycles_ref() const { return clk_cycles_; }
 
     // --- Mock PSU (driven from main thread, acted on by clock thread) ---
     void psu_power_on()  { psu_cmd_ = PsuCmd::PowerOn; }

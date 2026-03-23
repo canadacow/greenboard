@@ -91,7 +91,7 @@ int main() {
 
     // --- MDA display (render thread, reads framebuffer directly) ---
     MdaDisplay mda_display;
-    mda_display.start(mda.framebuffer());
+    mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref());
 
     // --- Power on ---
     spdlog::info("=== Power on ===");
