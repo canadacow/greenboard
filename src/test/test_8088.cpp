@@ -160,6 +160,7 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
+        "mov",
         "dma",
         "dma_m2m",
         //"dma_refresh",
@@ -291,14 +292,6 @@ int main() {
         // Load binary into DRAM at 0100:0100 (physical 0x01100)
         std::string path = std::string(ASM_TEST_DIR) + "/" + tc.bin_file;
         if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) { ++failed; continue; }
-
-        // Verify load (each physical addr translates independently)
-        {
-            auto d = dram.data();
-            spdlog::trace("  dram phys 01100..01107 = {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
-                d[dram_xlat(0x1100)], d[dram_xlat(0x1101)], d[dram_xlat(0x1102)], d[dram_xlat(0x1103)],
-                d[dram_xlat(0x1104)], d[dram_xlat(0x1105)], d[dram_xlat(0x1106)], d[dram_xlat(0x1107)]);
-        }
 
         // Power on: 8284A thread starts, PSU powers all components, drives VCC.
         cpu->set_reset_vector(0x0100, 0x0100);

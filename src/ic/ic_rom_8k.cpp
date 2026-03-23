@@ -93,8 +93,6 @@ void IC_ROM_8K::update_outputs() {
         for (int i = 0; i < 8; ++i) {
             pin_d_[i].drive((data >> i) & 1 ? Level::High : Level::Low);
         }
-        if (!driving_)
-            spdlog::trace("[{}] ~CS Low, addr=0x{:04X} data=0x{:02X}", name(), addr, data);
         driving_ = true;
     } else if (driving_) {
         for (int i = 0; i < 8; ++i) {

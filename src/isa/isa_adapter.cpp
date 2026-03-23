@@ -100,11 +100,8 @@ void ISA_Adapter::install(IsaSlot& slot) {
             auto iow_lev = iow_.level();
             if (ior_lev == Level::Low) {
                 uint16_t port = static_cast<uint16_t>(read_address());
-                if (claims_port(port)) {
-                    spdlog::trace("[{}] bidir: ~IOR={} port=0x{:04X} -> OUT",
-                                  name(), int(ior_lev), port);
+                if (claims_port(port))
                     return BidirDir::Output;
-                }
                 return BidirDir::HiZ;
             }
             if (iow_lev == Level::Low) return BidirDir::Input;
@@ -150,7 +147,6 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     if (dma_dack_pending_) {
         dma_dack_pending_ = false;
         uint8_t byte = on_dma_read();
-        spdlog::debug("[{}] DMA DACK{}: driving byte 0x{:02X}", name(), dma_active_ch_, byte);
         drive_sd(byte);
         dma_ior_count_ = 0;
     }
@@ -176,7 +172,6 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
         if (dack_[ch].level() == Level::Low && dack_prev_[ch] == Level::Low) {
             if (dma_ior_count_ > 0) {
                 uint8_t byte = on_dma_read();
-                spdlog::debug("[{}] DMA IOR ch{}: driving byte 0x{:02X}", name(), ch, byte);
                 drive_sd(byte);
             }
             dma_ior_count_++;
@@ -184,12 +179,8 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     }
 
     // T/C rising edge: DMA transfer complete. Deassert DRQn, notify subclass.
-    if (dma_active())
-        spdlog::debug("[{}] T/C check: tc_cur={} tc_prev={} dma_ch={} tc_.idx={}",
-                      name(), int(tc_cur), int(tc_prev_), dma_active_ch_, tc_.idx);
     if (tc_cur == Level::High && tc_prev_ != Level::High && dma_active()) {
         int ch = dma_active_ch_;
-        spdlog::debug("[{}] DMA T/C: ch{} transfer complete", name(), ch);
         dma_active_ch_ = -1;
         if (ch >= 1 && ch <= 3 && drq_sig_[ch])
             drq_sig_[ch]->drive(Level::Low);
@@ -204,8 +195,6 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     if (write_pending_) {
         uint16_t port = static_cast<uint16_t>(read_address());
         uint8_t val = read_sd();
-        spdlog::trace("[{}] IOW: port=0x{:04X} val=0x{:02X} claimed={}",
-                      name(), port, val, claims_port(port));
         if (claims_port(port))
             on_io_write(port, val);
         write_pending_ = false;
@@ -222,7 +211,6 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
             uint16_t port = static_cast<uint16_t>(read_address());
             if (claims_port(port)) {
                 read_byte_ = on_io_read(port);
-                spdlog::trace("[{}] READ port=0x{:04X} -> 0x{:02X}", name(), port, read_byte_);
                 drive_sd(read_byte_);
             }
         }
@@ -247,7 +235,6 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
         if (claims_mmio(addr)) {
             uint8_t val = read_sd();
             on_mmio_write(addr, val);
-            spdlog::trace("[{}] MMIO WRITE 0x{:05X} = 0x{:02X}", name(), addr, val);
         }
         mem_write_pending_ = false;
     } else if (memw_cur == Level::Low && memw_prev_ != Level::Low) {
@@ -260,10 +247,7 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     if (memr_cur == Level::Low) {
         uint32_t addr = read_address();
         if (claims_mmio(addr)) {
-            uint8_t val = on_mmio_read(addr);
-            if (!data_driven_ || memr_prev_ != Level::Low)
-                spdlog::trace("[{}] MMIO READ 0x{:05X} = 0x{:02X}", name(), addr, val);
-            drive_sd(val);
+            drive_sd(on_mmio_read(addr));
         }
     } else if (memr_prev_ == Level::Low) {
         if (data_driven_) release_sd();
@@ -293,7 +277,6 @@ void ISA_Adapter::lower_irq(int n) {
 void ISA_Adapter::assert_drq(int ch) {
     if (ch >= 1 && ch <= 3 && owns_dma(ch)) {
         dma_active_ch_ = ch;
-        spdlog::debug("[{}] DMA start: asserting DRQ{}", name(), ch);
         if (drq_sig_[ch])
             drq_sig_[ch]->drive(Level::High);
     }

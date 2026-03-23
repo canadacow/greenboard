@@ -162,35 +162,18 @@ void IC_8288::on_clk_rising() {
     // Inhibit when DMA owns bus (AEN_BRD High) AND wait state active (~RDY/WAIT Low).
     // When U82 Q goes High, ~RDY/WAIT=High, un-inhibit so 8288 can re-assert
     // commands in the same cycle READY goes High.
-    auto cyc_str = [this]() -> const char* {
-        switch (cycle_) {
-            case BusCycle::Passive: return "Passive"; case BusCycle::INTA: return "INTA";
-            case BusCycle::IOR: return "IOR"; case BusCycle::IOW: return "IOW";
-            case BusCycle::Halt: return "Halt"; case BusCycle::Fetch: return "Fetch";
-            case BusCycle::MemR: return "MemR"; case BusCycle::MemW: return "MemW";
-            default: return "???";
-        }
-    };
-
-    spdlog::trace("[{}] entry: ~AEN={} CEN={} inhibited={} commanding={} bus_hold={} cycle={}",
-                  name(), int(pin_aen_.level()), int(pin_cen_.level()),
-                  inhibited_, commanding_, bus_hold_, cyc_str());
-
     // --- Bus recovery state machine (B0-B4) ---
     // While bus_hold_ > 0, DMA re-inhibit is blocked.
     // bus_hold() (checked by 8284A) returns true when bus_hold_ > 0.
     if (bus_hold_ > 0) {
         // Don't advance bus recovery until CEN goes High (AEN_BRD dropped,
         // CPU address latches enabled). Stall at current count.
-        if (pin_cen_.level() != Level::High) {
-            spdlog::trace("[{}] bus recovery stalled: CEN={} bus_hold={}", name(), int(pin_cen_.level()), bus_hold_);
+        if (pin_cen_.level() != Level::High)
             return;
-        }
         bus_hold_--;
         if (bus_hold_ == 2) {
             // B1: un-inhibit, re-assert commands, nudge transceivers.
             inhibited_ = false;
-            spdlog::trace("[{}] *** B1: un-inhibit, re-assert {} -- READY held Low ***", name(), cyc_str());
             if (cycle_ != BusCycle::Passive && cycle_ != BusCycle::Halt) {
                 commanding_ = true;
                 switch (cycle_) {
@@ -208,12 +191,10 @@ void IC_8288::on_clk_rising() {
             return;
         } else if (bus_hold_ == 1) {
             // B2: CAS falls. Nudge transceivers again.
-            spdlog::trace("[{}] *** B3: CAS settling, nudge again -- READY held Low ***", name());
             nudge_xcvr();
             return;
         } else {
             // B3: bus_hold_==0. DRAM reads. CPU reads. DMA unblocked.
-            spdlog::trace("[{}] *** B4: bus settled, READY+DMA released ***", name());
             // Fall through to normal processing.
         }
     }
@@ -225,7 +206,6 @@ void IC_8288::on_clk_rising() {
         bool should_inhibit = dma_owns_bus && wait_active;
         if (should_inhibit) {
             if (!inhibited_) {
-                spdlog::trace("[{}] *** INHIBIT: DMA taking bus (commanding={} cycle={}) ***", name(), commanding_, cyc_str());
                 release_command();
                 pin_ale_.drive(Level::Low);
                 pin_den_.drive(Level::High);
@@ -243,21 +223,8 @@ void IC_8288::on_clk_rising() {
         // Release DMA address latches so their bidirs revert to pin-driven
         u18_->set_dma_output(false);
         u19_->set_dma_output(false);
-        spdlog::trace("[{}] *** B0: bus recovery STARTED (cycle={}) -- DMA write finishing ***", name(), cyc_str());
         return;
     }
-
-    auto cyc_name = [](BusCycle c) -> const char* {
-        if (c == BusCycle::Passive) return "Passive";
-        if (c == BusCycle::Halt)    return "Halt";
-        if (c == BusCycle::Fetch)   return "Fetch";
-        if (c == BusCycle::MemR)    return "MemR";
-        if (c == BusCycle::MemW)    return "MemW";
-        if (c == BusCycle::IOR)     return "IOR";
-        if (c == BusCycle::IOW)     return "IOW";
-        if (c == BusCycle::INTA)    return "INTA";
-        return "???";
-    };
 
     BusCycle bus = decode_status();
     bool active = (bus != BusCycle::Passive && bus != BusCycle::Halt);
@@ -270,13 +237,11 @@ void IC_8288::on_clk_rising() {
             pin_den_.drive(Level::High);
             disable_xcvr();
             commanding_ = false;
-            spdlog::trace("[{}] cmds released (prev cycle={})", name(), cyc_name(cycle_));
         }
         cycle_ = bus;
         bool is_write = (bus == BusCycle::IOW || bus == BusCycle::MemW);
         pin_ale_.drive(Level::High);
         pin_dtr_.drive(is_write ? Level::High : Level::Low);
-        spdlog::trace("[{}] T1 cycle={} DT/~R={}", name(), cyc_name(bus), is_write ? "H(wr)" : "L(rd)");
 
     } else if (prev_active_ && active) {
         // active->active: T2. ALE falls, assert command, enable data.
@@ -296,7 +261,6 @@ void IC_8288::on_clk_rising() {
         }
         pin_den_.drive(Level::Low);
         nudge_xcvr();
-        spdlog::trace("[{}] T2 cycle={} cmd asserted CEN={}", name(), cyc_name(cycle_), cen);
 
     } else if (prev_active_ && !active) {
         // active->passive: entering T3. Commands stay active.
@@ -306,7 +270,6 @@ void IC_8288::on_clk_rising() {
         // This ensures U8/U13 go HiZ before T1 of the next bus cycle, so they
         // don't drive stale data over the CPU's fresh address on AD0-7.
         disable_xcvr();
-        spdlog::trace("[{}] T3 cycle={}", name(), cyc_name(cycle_));
 
     } else {
         // passive->passive: Tw. Hold commands.

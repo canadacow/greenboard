@@ -73,9 +73,6 @@ void IC_74LS02::update_outputs() {
             auto& g = gates_[i];
             bool any = g.a.level() == Level::High || g.b.level() == Level::High;
             Level out = any ? Level::Low : Level::High;
-            if (pass == 1)
-                spdlog::trace("[{}] gate{}: A={} B={} -> Y={}", name(), i+1,
-                              int(g.a.level()), int(g.b.level()), int(out));
             g.y.drive(out);
         }
     }

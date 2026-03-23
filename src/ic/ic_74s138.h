@@ -118,13 +118,9 @@ private:
 
             for (int i : active_)
                 y_[i].drive(i == sel ? Level::Low : Level::High);
-            spdlog::trace("[{}] enabled sel={} G1={} ~G2A={} ~G2B={}", name(), sel,
-                          int(g1_.level()), int(g2a_.level()), int(g2b_.level()));
         } else {
             for (int i : active_)
                 y_[i].drive(Level::High);
-            spdlog::trace("[{}] disabled G1={} ~G2A={} ~G2B={}", name(),
-                          int(g1_.level()), int(g2a_.level()), int(g2b_.level()));
         }
     }
 

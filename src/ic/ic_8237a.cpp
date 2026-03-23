@@ -235,19 +235,10 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
 
     // DREQ changes -- check for new DMA requests.
     // evaluate_dreq() gates on HLDA Low per datasheet p.6.
-    static constexpr const char* state_names[] = {
-        "SI", "S0", "S1", "S2", "S3", "S4", "M2M_S1", "M2M_S2", "M2M_S3", "M2M_S4"
-    };
-    spdlog::trace("[8237A] DREQ: ch0={} ch1={} ch2={} ch3={} disabled={} state={}",
-                  int(pin_dreq_[0].level()), int(pin_dreq_[1].level()),
-                  int(pin_dreq_[2].level()), int(pin_dreq_[3].level()),
-                  disabled_, state_names[static_cast<int>(state_)]);
     evaluate_dreq();
 
     // Advance state machine. Each call to on_signal_change is one full cycle, always
-    spdlog::debug("[8237A] CLK tick: state={} clk={}/{}", int(state_), int(clk_cur), int(clk_prev_));
     on_clk_falling();
-    spdlog::debug("[8237A] CLK post: state={}", int(state_));
 
     // DACKs are declare_output (always driven), so no re-drive needed.
 
@@ -290,7 +281,6 @@ void IC_8237A::on_reset() {
     release_data();
     release_address();
 
-    spdlog::debug("[8237A] reset");
 }
 
 void IC_8237A::on_bus_write() {
@@ -332,7 +322,6 @@ void IC_8237A::on_bus_write() {
         case 0x08:  // Command register
             command_ = data;
             disabled_ = (data & 0x04) != 0;
-            spdlog::debug("[8237A] command={:#04x} disabled={}", data, disabled_);
             evaluate_dreq();
             break;
 
@@ -346,7 +335,6 @@ void IC_8237A::on_bus_write() {
         case 0x0A: {  // Single mask register
             int ch = data & 0x03;
             ch_[ch].masked = (data & 0x04) != 0;
-            spdlog::debug("[8237A] single mask: ch{}={}", ch, ch_[ch].masked ? "MASKED" : "unmasked");
             evaluate_dreq();
             break;
         }
@@ -439,10 +427,8 @@ void IC_8237A::evaluate_dreq() {
 
     // Don't assert HRQ during bus recovery -- CPU needs the bus to complete
     // its interrupted read/write before DMA can take it again.
-    if (bus_ctrl_->bus_hold()) {
-        spdlog::trace("[8237A] DREQ blocked by bus_hold (hold={})", bus_ctrl_->bus_hold());
+    if (bus_ctrl_->bus_hold())
         return;
-    }
 
     // Fixed priority: CH0 highest
     for (int i = 0; i < 4; ++i) {
@@ -455,8 +441,6 @@ void IC_8237A::evaluate_dreq() {
             active_ch_ = i;
             state_ = State::BusRequested;
             pin_hrq_.drive(Level::High); hrq_driven_ = true;
-            spdlog::debug("[8237A] HRQ asserted for ch{} (HLDA={} bus_hold={} state={})",
-                          i, int(pin_hlda_.level()), bus_ctrl_->bus_hold(), int(state_));
             return;
         }
     }
@@ -496,10 +480,8 @@ void IC_8237A::on_clk_falling() {
 
     case State::BusRequested:
         if (pin_hlda_.level() == Level::High) {
-            spdlog::debug("[8237A] HLDA received, entering S1 for ch{}", active_ch_);
             state_ = State::S1;
         } else {
-            spdlog::trace("[8237A] BusRequested: waiting for HLDA (HLDA={})", int(pin_hlda_.level()));
             break;
         }
         // Fall through to execute S1 in this same CLK cycle
@@ -564,8 +546,6 @@ void IC_8237A::on_clk_falling() {
         u18_->set_dma_output(true);
         u19_->set_dma_output(true);
 
-        spdlog::debug("[8237A] S1 ch{}: addr={:#06x} upper={:#04x}",
-                      active_ch_, ch.current_address, upper);
 
         state_ = State::S2;
         break;
@@ -599,10 +579,6 @@ void IC_8237A::on_clk_falling() {
 
         xcvr_c_->set_driving(IC_74S245::Driving::A);
 
-        spdlog::debug("[8237A] S2 ch{}: addr={:#06x}{}",
-                      active_ch_,
-                      ch.current_address,
-                      (command_ & 0x01) ? " (m2m read)" : "");
 
         bool compressed = (command_ & 0x08) != 0;
         if (compressed) {
@@ -627,10 +603,6 @@ void IC_8237A::on_clk_falling() {
     case State::S4: {
         auto& ch = ch_[active_ch_];
 
-        spdlog::trace("[8237A] S4 entry ch{}: addr={:#06x} count={} HLDA={}",
-                      active_ch_, ch.current_address, ch.current_count,
-                      int(pin_hlda_.level()));
-
         // Deassert all strobes
         pin_memr_.drive(Level::High);
         pin_memw_.drive(Level::High);
@@ -640,7 +612,6 @@ void IC_8237A::on_clk_falling() {
         // Memory-to-memory read phase complete: capture data, switch to write phase
         if ((command_ & 0x01) && !mem2mem_write_) {
             temp_ = read_data();
-            spdlog::debug("[8237A] S4 ch0 m2m read: temp=0x{:02X}, switching to ch1 write", temp_);
 
             // Update ch0 address (source)
             bool decrement = (ch.mode & 0x20) != 0;
@@ -667,14 +638,12 @@ void IC_8237A::on_clk_falling() {
 
         // Terminal count check (ch1 for m2m, active_ch_ otherwise)
         bool tc = false;
-        spdlog::debug("[8237A] S4 ch{}: count={} addr={:#06x}", active_ch_, ch.current_count, ch.current_address);
         if (ch.current_count == 0) {
             tc = true;
             ch.tc_reached = true;
 
             pin_eop_.drive(Level::Low);
             eop_pending_ = true;
-            spdlog::debug("[8237A] TC! ch{} ~EOP driven Low", active_ch_);
 
             if (ch.mode & 0x10) {
                 ch.current_address = ch.base_address;
@@ -713,7 +682,6 @@ void IC_8237A::on_clk_falling() {
             release_bus = tc;
         }
 
-        spdlog::trace("[8237A] S4 ch{}: mode_type={} release_bus={} tc={}", active_ch_, mode_type, release_bus, tc);
         if (release_bus) {
             end_dma_service();
         } else {
@@ -750,8 +718,6 @@ void IC_8237A::on_clk_falling() {
         xcvr_m_->set_driving(IC_74S245::Driving::B);  // D->MD
         xcvr_x_->set_driving(IC_74S245::Driving::A);  // XD->D
 
-        spdlog::debug("[8237A] M2M_S1 ch1: addr={:#06x} (write temp=0x{:02X})",
-                      ch.current_address, temp_);
         state_ = State::M2M_S2;
         break;
     }
@@ -767,7 +733,6 @@ void IC_8237A::on_clk_falling() {
 
         xcvr_c_->set_driving(IC_74S245::Driving::A);
 
-        spdlog::debug("[8237A] M2M_S2 ch1: data=0x{:02X}", temp_);
 
         bool compressed = (command_ & 0x08) != 0;
         state_ = compressed ? State::M2M_S4 : State::M2M_S3;
@@ -814,7 +779,6 @@ void IC_8237A::end_dma_service() {
     active_ch_ = -1;
     mem2mem_write_ = false;
 
-    spdlog::debug("[8237A] DMA service complete for ch{}", ch_idx);
 
     // Bus released. HLDA will clear via U52/U67 handshake.
     // evaluate_dreq() won't re-request until HLDA is Low.

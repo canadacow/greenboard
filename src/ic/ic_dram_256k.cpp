@@ -72,9 +72,7 @@ void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank
         std::initializer_list<Pin>(md_pins.data(), md_pins.data() + md_pins.size()),
         BidirDir::Input | BidirDir::Output,
         [this]() {
-            auto wv = pin_we_.level();
-            spdlog::trace("[DRAM] bidir lambda: ~WE={}", int(wv));
-            return wv == Level::Low ? BidirDir::Input : BidirDir::Output;
+            return pin_we_.level() == Level::Low ? BidirDir::Input : BidirDir::Output;
         });
 }
 
@@ -112,7 +110,6 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         for (int i = 0; i < 4; ++i) {
             if (banks_[i].ras.level() == Level::Low && banks_[i].ras_prev != Level::Low) {
                 b = i;
-                spdlog::trace("[DRAM] ~RAS{} falling edge", i);
                 break;
             }
         }
@@ -130,8 +127,6 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
         bank.row_addr = read_address();
         bank.row_latched = true;
         active_bank_ = b;
-        spdlog::debug("[DRAM] ~RAS{} FALL -> row=0x{:02X} (A0-A7=0x{:02X})",
-                      b, bank.row_addr, uint8_t(~bank.row_addr));
     }
 
     // ~RAS rising edge: end of cycle, release outputs
@@ -158,8 +153,6 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
     }
     if ((cas_edge || ras_edge_with_cas) && bank.row_latched) {
         uint8_t col_addr = read_address();
-        spdlog::debug("[DRAM] ~CAS{} FALL -> col=0x{:02X} (A8-A15=0x{:02X}) row was 0x{:02X} (A0-A7=0x{:02X})",
-                      b, col_addr, uint8_t(~col_addr), bank.row_addr, uint8_t(~bank.row_addr));
         uint32_t addr = (static_cast<uint32_t>(b) << 16)
                       | (static_cast<uint32_t>(bank.row_addr) << 8)
                       | col_addr;
@@ -174,13 +167,9 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
             }
             ram_[addr] = data;
             parity_[addr] = bank.din[8].level() == Level::High ? 1 : 0;
-            spdlog::trace("[DRAM] WRITE bank{} row=0x{:02X} col=0x{:02X} linear=0x{:05X} (idx=0x{:05X}) data=0x{:02X}",
-                          b, bank.row_addr, col_addr, linear, addr, data);
         } else {
             // Read: drive DOUT pins from RAM
             uint8_t data = ram_[addr];
-            spdlog::trace("[DRAM] READ bank{} row=0x{:02X} col=0x{:02X} linear=0x{:05X} (idx=0x{:05X}) data=0x{:02X}",
-                          b, bank.row_addr, col_addr, linear, addr, data);
             for (int i = 0; i < 8; ++i) {
                 bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
             }
@@ -214,12 +203,6 @@ void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
 
     bank.ras_prev = ras_cur;
     bank.cas_prev = cas_cur;
-    spdlog::trace("[DRAM] state: bank={} ras={} cas={} ras_prev={} cas_prev={} "
-                  "row_addr=0x{:02X} row_latched={} driving={} active_bank={} "
-                  "~WE={} addr_now=0x{:02X}",
-                  b, int(ras_cur), int(cas_cur), int(bank.ras_prev), int(bank.cas_prev),
-                  bank.row_addr, bank.row_latched, bank.driving, active_bank_,
-                  int(pin_we_.level()), read_address());
 }
 
 uint8_t IC_DRAM_256K::read_address() const {

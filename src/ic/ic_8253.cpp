@@ -138,7 +138,6 @@ void IC_8253::handle_write() {
     bool a1 = pin_a1_.level() == Level::High;
     int addr = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
-    spdlog::debug("[{}] write: addr={} data=0x{:02X}", name(), addr, data);
 
     if (addr == 3)
         write_control(data);
@@ -203,8 +202,6 @@ void IC_8253::write_control(uint8_t value) {
     }
     update_out(ch);
 
-    spdlog::debug("[{}] ch{} programmed: mode={} rw={} bcd={}",
-                  name(), ch, c.mode, c.rw_mode, c.bcd);
 }
 
 // =========================================================================

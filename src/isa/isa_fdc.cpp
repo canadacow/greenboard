@@ -99,10 +99,8 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
                 if (result_pos_ == 0)
                     lower_irq(6);
                 uint8_t val = result_buf_[result_pos_++];
-                spdlog::debug("[{}] FIFO read: result[{}]=0x{:02X}", name(), result_pos_ - 1, val);
                 if (result_pos_ >= result_len_) {
                     phase_ = Phase::Idle;
-                    spdlog::debug("[{}] result phase complete -> idle", name());
                 }
                 return val;
             }
@@ -125,12 +123,10 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                 phase_ = Phase::Idle;
                 cmd_len_ = 0;
                 irq_pending_ = false;
-                spdlog::debug("[{}] DOR: out of reset, val=0x{:02X}", name(), val);
             } else if (!now_active) {
                 // Entering reset.
                 phase_ = Phase::Idle;
                 cmd_len_ = 0;
-                spdlog::debug("[{}] DOR: reset, val=0x{:02X}", name(), val);
             }
             break;
         }
@@ -169,8 +165,6 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                 }
                 if (cmd_len_ < 9)
                     cmd_buf_[cmd_len_++] = val;
-                spdlog::debug("[{}] FIFO write: cmd[{}]=0x{:02X} (expect {})",
-                              name(), cmd_len_ - 1, val, cmd_expected_);
                 if (cmd_len_ >= cmd_expected_)
                     start_command();
             }
@@ -204,7 +198,6 @@ void ISA_FloppyController::start_command() {
             result_len_ = 2;
             result_pos_ = 0;
             phase_ = Phase::Result;
-            spdlog::debug("[{}] SENSE INTERRUPT -> ST0=0x{:02X} PCN={}", name(), result_buf_[0], pcn_[drive]);
             break;
         }
 
@@ -215,13 +208,11 @@ void ISA_FloppyController::start_command() {
                 // Recalibrate: move to cylinder 0.
                 uint8_t drive = cmd_buf_[1] & 0x03;
                 pcn_[drive] = 0;
-                spdlog::debug("[{}] RECALIBRATE drive {} -> cyl 0", name(), drive);
             }
             if (cmd_id == 0x0F) {
                 // Seek: move to specified cylinder.
                 uint8_t drive = cmd_buf_[1] & 0x03;
                 pcn_[drive] = cmd_buf_[2];
-                spdlog::debug("[{}] SEEK drive {} -> cyl {}", name(), drive, pcn_[drive]);
             }
             if (cmd_id == 0x07 || cmd_id == 0x0F) {
                 // Fire IRQ for seek completion (real FDC does this).
@@ -232,7 +223,6 @@ void ISA_FloppyController::start_command() {
             }
             phase_ = Phase::Idle;
             cmd_len_ = 0;
-            spdlog::debug("[{}] command 0x{:02X} complete -> idle", name(), cmd_id);
             break;
         }
 

@@ -70,14 +70,6 @@ void IC_74S244::update_outputs() {
     bool g1_en = pin_g1_.level() == Level::Low;
     bool g2_en = pin_g2_.level() == Level::Low;
 
-    spdlog::trace("[{}] ~1G={} ~2G={} y0.idx={} y3.idx={} y4.idx={} y7.idx={}"
-                  " grp1=[{},{},{},{}] grp2=[{},{},{},{}]",
-                  name(), int(pin_g1_.level()), int(pin_g2_.level()),
-                  grp2_[3].y.idx, grp2_[0].y.idx, grp1_[3].y.idx, grp1_[0].y.idx,
-                  int(grp1_[0].a.level()), int(grp1_[1].a.level()),
-                  int(grp1_[2].a.level()), int(grp1_[3].a.level()),
-                  int(grp2_[0].a.level()), int(grp2_[1].a.level()),
-                  int(grp2_[2].a.level()), int(grp2_[3].a.level()));
     for (auto& b : grp1_) {
         if (g1_en)
             b.y.drive(b.a.level() == Level::High ? Level::High : Level::Low);

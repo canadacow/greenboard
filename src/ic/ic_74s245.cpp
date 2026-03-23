@@ -54,16 +54,11 @@ void IC_74S245::install(Socket& socket) {
         [this]() -> BidirDir {
             // Commit pending direction from bus controller.
             driving_ = pending_driving_;
-            BidirDir result;
             switch (driving_) {
-                case Driving::A: result = BidirDir::Output; break;  // B->A: A is output
-                case Driving::B: result = BidirDir::Input;  break;  // A->B: B is output
-                default:         result = BidirDir::HiZ;    break;
+                case Driving::A: return BidirDir::Output;  // B->A: A is output
+                case Driving::B: return BidirDir::Input;   // A->B: B is output
+                default:         return BidirDir::HiZ;
             }
-            spdlog::trace("[{}] bidir lambda: driving={} -> {}",
-                          name(), int(driving_),
-                          result == BidirDir::HiZ ? "HiZ" : (result == BidirDir::Output ? "OUT(B->A)" : "IN(A->B)"));
-            return result;
         });
 }
 
@@ -74,7 +69,6 @@ void IC_74S245::install(Socket& socket) {
 // real hardware timing (8288 sets DT/~R at T1, ~DEN at T2).
 
 void IC_74S245::set_driving(Driving driving) {
-    spdlog::trace("[{}] set_driving: {} -> {}", name(), int(pending_driving_), int(driving));
     pending_driving_ = driving;
 }
 
@@ -93,21 +87,11 @@ void IC_74S245::update_outputs() {
     if (driving_ == Driving::A) {
         for (int i = 0; i < 8; ++i)
             a_[i].drive(b_[i].level());
-        spdlog::trace("[{}] B->A: [{},{},{},{},{},{},{},{}] (~G={} DIR={}) a[0].idx={} b[0].idx={}",
-                      name(),
-                      int(b_[0].level()), int(b_[1].level()), int(b_[2].level()), int(b_[3].level()),
-                      int(b_[4].level()), int(b_[5].level()), int(b_[6].level()), int(b_[7].level()),
-                      int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
     }
 
     if (driving_ == Driving::B) {
         for (int i = 0; i < 8; ++i)
             b_[i].drive(a_[i].level());
-        spdlog::trace("[{}] A->B: [{},{},{},{},{},{},{},{}] (~G={} DIR={}) a[0].idx={} b[0].idx={}",
-                      name(),
-                      int(a_[0].level()), int(a_[1].level()), int(a_[2].level()), int(a_[3].level()),
-                      int(a_[4].level()), int(a_[5].level()), int(a_[6].level()), int(a_[7].level()),
-                      int(g_.level()), int(dir_.level()), a_[0].idx, b_[0].idx);
     }
 }
 
@@ -118,36 +102,24 @@ void IC_74S245::release_outputs() {
 void IC_74S245::transfer(bool a_to_b) {
     if (a_to_b) {
         driving_ = Driving::None;
-        uint8_t val = 0;
         bool all_hiz = true;
         for (int i = 0; i < 8; ++i) {
-            Level lv = a_[i].level();
-            if (lv != Level::HiZ) all_hiz = false;
-            if (lv == Level::High) val |= (1 << i);
+            if (a_[i].level() != Level::HiZ) { all_hiz = false; break; }
         }
-        if (all_hiz) {
-            spdlog::trace("[{}] transfer A->B: HiZ (source floating)", name());
-        } else {
+        if (!all_hiz) {
             for (int i = 0; i < 8; ++i)
                 b_[i].drive(a_[i].level());
-            spdlog::trace("[{}] transfer A->B: 0x{:02X}", name(), val);
             driving_ = Driving::B;
         }
     } else {
         driving_ = Driving::None;
-        uint8_t val = 0;
         bool all_hiz = true;
         for (int i = 0; i < 8; ++i) {
-            Level lv = b_[i].level();
-            if (lv != Level::HiZ) all_hiz = false;
-            if (lv == Level::High) val |= (1 << i);
+            if (b_[i].level() != Level::HiZ) { all_hiz = false; break; }
         }
-        if (all_hiz) {
-            spdlog::trace("[{}] transfer B->A: HiZ (source floating)", name());
-        } else {
+        if (!all_hiz) {
             for (int i = 0; i < 8; ++i)
                 a_[i].drive(b_[i].level());
-            spdlog::trace("[{}] transfer B->A: 0x{:02X}", name(), val);
             driving_ = Driving::A;
         }
     }

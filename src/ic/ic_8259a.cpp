@@ -92,11 +92,6 @@ void IC_8259A::on_signal_change(Fiber /*caller*/) {
     // Bus write: ~WR and ~CS both active, but deferred one eval.
     // ~WR falls at T2 but data propagates through xcvrs at T3.
     // Fire on the second eval where both are low (wr_prev_ already Low).
-    spdlog::trace("[{}] sig: ~WR={} ~RD={} ~CS={} ~INTA={} wr_prev={} inta_prev={} write_latched={} irr=0x{:02X} imr=0x{:02X} isr=0x{:02X} inta_count={} inta_level={} initialized={}",
-                  name(), int(wr_cur), int(rd_cur), int(cs_cur), int(inta_cur),
-                  int(wr_prev_), int(inta_prev_), write_latched_,
-                  irr_, imr_, isr_, inta_count_, inta_level_, initialized_);
-
     if (wr_cur == Level::Low && cs_cur == Level::Low &&
         wr_prev_ == Level::Low && !write_latched_) {
         on_bus_write();
@@ -156,8 +151,6 @@ void IC_8259A::on_signal_change(Fiber /*caller*/) {
 void IC_8259A::on_bus_write() {
     uint8_t data = read_data();
     bool a0 = a0_.level() == Level::High;
-    spdlog::debug("[{}] bus_write: data=0x{:02X} a0={} init={} state={}",
-                  name(), data, a0, initialized_, int(init_state_));
 
     if (!a0 && (data & 0x10)) {
         // ICW1: A0=0, D4=1
@@ -266,8 +259,6 @@ void IC_8259A::on_bus_read() {
     bool a0 = a0_.level() == Level::High;
 
     uint8_t val = a0 ? imr_ : (read_isr_ ? isr_ : irr_);
-    spdlog::debug("[{}] bus_read: a0={} val=0x{:02X} imr=0x{:02X} irr=0x{:02X} isr=0x{:02X}",
-                  name(), a0, val, imr_, irr_, isr_);
     drive_data(val);
 }
 

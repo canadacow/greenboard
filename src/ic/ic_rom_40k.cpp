@@ -99,8 +99,6 @@ void IC_ROM_40K::on_signal_change(Fiber /*caller*/) {
         uint8_t data = rom_[active * 8192 + (addr & 0x1FFF)];
         for (int i = 0; i < 8; ++i)
             pin_d_[i].drive((data >> i) & 1 ? Level::High : Level::Low);
-        if (active_bank_ != active)
-            spdlog::trace("[ROM] bank {} selected, addr=0x{:04X} data=0x{:02X}", active, addr, data);
         active_bank_ = active;
     } else if (active_bank_ >= 0) {
         // No bank selected -- release data bus

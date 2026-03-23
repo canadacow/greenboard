@@ -80,7 +80,6 @@ void ISA_MDA::on_io_write(uint16_t port, uint8_t val) {
 
         case 0x3B8:
             mode_ = val;
-            spdlog::debug("[MDA] mode register: 0x{:02X}", val);
             break;
 
         default:

@@ -46,9 +46,6 @@ void IC_TD1::on_power_off() {
 
 void IC_TD1::on_signal_change(Fiber /*caller*/) {
     Level in_now = pin_in_.level();
-    spdlog::trace("[TD1] eval: in={} pending={} -> driving pending, capturing in",
-        in_now == Level::High ? "H" : in_now == Level::Low ? "L" : "Z",
-        pending_ == Level::High ? "H" : pending_ == Level::Low ? "L" : "Z");
     // Drive outputs with previously captured value.
     for (auto& p : pin_out_) p.drive(pending_);
     // Capture current input for next evaluation.

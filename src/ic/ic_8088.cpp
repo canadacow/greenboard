@@ -175,18 +175,6 @@ void IC_8088::drive_address(uint32_t address) {
         pin_ad_[i].drive((address >> i) & 1 ? Level::High : Level::Low);
     for (int i = 0; i < 12; ++i)
         pin_a_upper_[i].drive((address >> (i + 8)) & 1 ? Level::High : Level::Low);
-    spdlog::trace("[8088] drive_address 0x{:05X} AD=0x{:02X} A8-15=0x{:02X} A16-19=0x{:01X} CS={:04X} DS={:04X} ES={:04X} SS={:04X}",
-                  address, address & 0xFF, (address >> 8) & 0xFF, (address >> 16) & 0xF,
-                  regs16()[REG_CS], regs16()[REG_DS], regs16()[REG_ES], regs16()[REG_SS]);
-    spdlog::trace("[8088]   AD pool after drive: {}={} {}={} {}={} {}={} {}={} {}={} {}={} {}={}",
-                  pin_ad_[0].idx, int(SignalPool::levels[pin_ad_[0].idx]),
-                  pin_ad_[1].idx, int(SignalPool::levels[pin_ad_[1].idx]),
-                  pin_ad_[2].idx, int(SignalPool::levels[pin_ad_[2].idx]),
-                  pin_ad_[3].idx, int(SignalPool::levels[pin_ad_[3].idx]),
-                  pin_ad_[4].idx, int(SignalPool::levels[pin_ad_[4].idx]),
-                  pin_ad_[5].idx, int(SignalPool::levels[pin_ad_[5].idx]),
-                  pin_ad_[6].idx, int(SignalPool::levels[pin_ad_[6].idx]),
-                  pin_ad_[7].idx, int(SignalPool::levels[pin_ad_[7].idx]));
 }
 
 void IC_8088::drive_data(uint8_t value) {
@@ -194,7 +182,6 @@ void IC_8088::drive_data(uint8_t value) {
     for (int i = 0; i < 8; ++i)
         pin_ad_[i].drive((value >> i) & 1 ? Level::High : Level::Low);
 
-    spdlog::trace("[8088] drive_data 0x{:02X}", value);        
 }
 
 uint8_t IC_8088::read_data() {
@@ -203,7 +190,6 @@ uint8_t IC_8088::read_data() {
     for (int i = 0; i < 8; ++i)
         if (pin_ad_[i].level() == Level::High)
             val |= (1 << i);
-    spdlog::trace("[8088] read_data 0x{:02X}", val);
     return val;
 }
 
@@ -226,8 +212,7 @@ void IC_8088::drive_status_passive() {
     pin_lock_.drive(Level::High);  // ~LOCK: active-low, deasserted during normal operation
 }
 
-void IC_8088::full_wait_clk(const char* stateYield) {
-    spdlog::trace("[8088] T-state {}", stateYield);
+void IC_8088::full_wait_clk(const char* /*stateYield*/) {
     yield();
     check_nmi();
 }
@@ -250,7 +235,6 @@ uint8_t IC_8088::bus_read_byte(uint32_t address) {
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
-        spdlog::trace("[8088] Tw wait (read) READY={}", int(pin_ready_.level()));
         full_wait_clk("Tw bus_read");                            // Tw
     }
     
@@ -278,7 +262,6 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
-        spdlog::trace("[8088] Tw wait (write) READY={}", int(pin_ready_.level()));
         full_wait_clk("Tw bus_write");                           // Tw
     }
 
@@ -316,7 +299,6 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
-        spdlog::trace("[8088] Tw wait (io_read) READY={}", int(pin_ready_.level()));
         full_wait_clk("Tw io_read");                             // Tw
     }
 
@@ -344,7 +326,6 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
 
     // Tw -- wait states while READY is low
     while (pin_ready_.level() != Level::High) {
-        spdlog::trace("[8088] Tw wait (write) READY={}", int(pin_ready_.level()));
         full_wait_clk("Tw io_write");                            // Tw
     }    
 

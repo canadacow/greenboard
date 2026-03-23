@@ -102,7 +102,6 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
     // PB6 High after Low = CLK released (reset complete) -> send 0xAA.
     if (pb6_cur == Level::Low && pb6_prev_ != Level::Low) {
         reset_pending_ = true;
-        spdlog::trace("[{}] reset: CLK pulled low", name());
     }
     if (reset_pending_ && pb6_cur == Level::High && pb6_prev_ != Level::High) {
         reset_pending_ = false;
@@ -113,7 +112,6 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
         // Real keyboard takes ~20ms; we just need enough cycles for
         // the BIOS to execute the unmask + STI instructions.
         reset_delay_ = 200;
-        spdlog::trace("[{}] reset: CLK released, queued 0xAA (delay={})", name(), reset_delay_);
     }
 
     // Countdown for delayed reset delivery.
@@ -126,7 +124,6 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
     if (!armed_) {
         if (ready_cur == Level::High && ready_prev_ != Level::High) {
             armed_ = true;
-            spdlog::trace("[{}] armed, {} scancodes queued", name(), queue_.size());
             deliver_next();
         }
         ready_prev_ = ready_cur;
@@ -149,7 +146,7 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
         handle_ack("PB7");
     }
     if (ack_cur == Level::High && ack_prev_ != Level::High) {
-        spdlog::trace("[{}] port 0xFD diagnostic ({}/{})", name(), queue_pos_, queue_.size());
+        // port 0xFD diagnostic ack
     }
 
     ready_prev_ = ready_cur;
@@ -163,7 +160,6 @@ void TestKeyboard::handle_ack(const char* source) {
     pin_irq1_.drive(Level::Low);
     waiting_ack_ = false;
     deliver_pending_ = true;  // deliver next cycle so PIC sees Low->High edge
-    spdlog::trace("[{}] ACK via {} ({}/{})", name(), source, queue_pos_, queue_.size());
 }
 
 void TestKeyboard::deliver_next() {
@@ -172,7 +168,6 @@ void TestKeyboard::deliver_next() {
     drive_scancode(sc);
     pin_irq1_.drive(Level::High);
     waiting_ack_ = true;
-    spdlog::trace("[{}] scancode 0x{:02X} ({}/{})", name(), sc, queue_pos_, queue_.size());
 }
 
 void TestKeyboard::drive_scancode(uint8_t sc) {

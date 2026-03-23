@@ -47,22 +47,13 @@ void IC_74LS30::on_signal_change(Fiber /*caller*/) { update_output(); }
 void IC_74LS30::update_output() {
     // Y = ~(A & B & C & D & E & F & G & H)
     bool all_high = true;
-    int first_non_high = -1;
     for (int i = 0; i < 8; ++i) {
         if (inputs_[i].level() != Level::High) {
             all_high = false;
-            if (first_non_high < 0) first_non_high = i;
+            break;
         }
     }
-    Level out = all_high ? Level::Low : Level::High;
-    spdlog::trace("[{}] NAND8: inputs=[{},{},{},{},{},{},{},{}] -> Y={} (first_non_high={})",
-                  name(),
-                  int(inputs_[0].level()), int(inputs_[1].level()),
-                  int(inputs_[2].level()), int(inputs_[3].level()),
-                  int(inputs_[4].level()), int(inputs_[5].level()),
-                  int(inputs_[6].level()), int(inputs_[7].level()),
-                  int(out), first_non_high);
-    output_.drive(out);
+    output_.drive(all_high ? Level::Low : Level::High);
 }
 
 } // namespace bench

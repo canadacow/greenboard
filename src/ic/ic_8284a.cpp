@@ -103,11 +103,6 @@ void IC_8284A::run(std::stop_token stop) {
         pclk_level = Level(int8_t(-int8_t(pclk_level)));
         pin_pclk_.drive(pclk_level);
 
-        spdlog::trace("[CLK] cycle={} READY={} pclk_level={} (~AEN1={} RDY1={})", clk_cycles_, 
-            int(pin_ready_.level()), int(pin_pclk_.level()),
-            int(pin_aen1_.level()), int(pin_rdy1_.level())
-        );
-
         scheduler_->evaluate(self);
 
         // READY = Low when any wait condition is active:

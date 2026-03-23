@@ -74,13 +74,6 @@ void IC_74S175::on_signal_change(Fiber /*caller*/) {
         drive_outputs();
     }
 
-    spdlog::trace("[{}] D=[{},{},{},{}] Q=[{},{},{},{}] ~Q=[{},{},{},{}] ~CLR={}",
-                  name(),
-                  int(pin_d_[0].level()), int(pin_d_[1].level()),
-                  int(pin_d_[2].level()), int(pin_d_[3].level()),
-                  q_[0]?1:0, q_[1]?1:0, q_[2]?1:0, q_[3]?1:0,
-                  q_[0]?0:1, q_[1]?0:1, q_[2]?0:1, q_[3]?0:1,
-                  int(pin_clr_.level()));
 }
 
 void IC_74S175::clear_all() {

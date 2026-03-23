@@ -69,27 +69,17 @@ void IC_74S158::on_signal_change(Fiber /*caller*/) {
 void IC_74S158::update_outputs() {
     // ~STROBE High -> all outputs High (disabled)
     if (pin_strobe_.level() == Level::High) {
-        spdlog::trace("[{}] ~STROBE=High, all Y=High", name());
         for (auto& m : muxes_)
             m.y.drive(Level::High);
         return;
     }
 
     bool sel = pin_select_.level() == Level::High;
-    uint8_t out = 0;
     for (int i = 0; i < 4; ++i) {
         auto& m = muxes_[i];
         Level chosen = sel ? m.i1.level() : m.i0.level();
-        Level y = chosen == Level::High ? Level::Low : Level::High;
-        m.y.drive(y);
-        if (y == Level::High) out |= (1 << i);
+        m.y.drive(chosen == Level::High ? Level::Low : Level::High);
     }
-    spdlog::trace("[{}] sel={} out=0x{:X} sel_raw={} i0=[{},{},{},{}] i1=[{},{},{},{}]",
-                  name(), sel, out, int(pin_select_.level()),
-                  int(muxes_[0].i0.level()), int(muxes_[1].i0.level()),
-                  int(muxes_[2].i0.level()), int(muxes_[3].i0.level()),
-                  int(muxes_[0].i1.level()), int(muxes_[1].i1.level()),
-                  int(muxes_[2].i1.level()), int(muxes_[3].i1.level()));
 
 #if 0  // reads partner's pins without declaration -- triggers pin validation
     if (partner_) {

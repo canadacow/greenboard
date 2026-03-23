@@ -279,13 +279,9 @@ public:
         SignalPool::end_component();
 #endif
         static constexpr uint64_t dir_to_digit[] = {0, 0, 1, 0, 2};  // indexed by uint8_t(BidirDir)
-        static constexpr const char* dir_names[] = {"?", "HiZ", "IN", "?", "OUT"};
         uint64_t perm = 0, mul = 1;
         for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
-            auto dir = bidir_refs_[i].block->direction();
-            uint8_t d = uint8_t(dir);
-            spdlog::trace("[Scheduler] evaluate bidir[{}] comp={} dir={}({})",
-                          i, bidir_refs_[i].comp->name(), d, (d <= 4 ? dir_names[d] : "?"));
+            uint8_t d = uint8_t(bidir_refs_[i].block->direction());
             perm += dir_to_digit[d] * mul;
             mul *= 3;
         }
@@ -301,8 +297,6 @@ public:
         auto it = wave_plans_.find(perm);
         if (it == wave_plans_.end())
             it = wave_plans_.emplace(perm, solve_perm(perm)).first;
-
-        spdlog::trace("[Scheduler] using perm {} ({} waves)", perm, it->second.waves.size());
 
         for (auto& wave : it->second.waves) {
             for (auto* c : wave) {

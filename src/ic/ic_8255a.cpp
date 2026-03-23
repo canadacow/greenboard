@@ -119,7 +119,6 @@ void IC_8255A::on_reset() {
         pin_pc_[i].release();
     }
 
-    spdlog::debug("[8255A] reset -- all ports input");
 }
 
 void IC_8255A::on_bus_write() {
@@ -128,7 +127,6 @@ void IC_8255A::on_bus_write() {
     bool a1 = pin_a1_.level() == Level::High;
     int port = (a1 ? 2 : 0) | (a0 ? 1 : 0);
 
-    spdlog::debug("[8255A] on_bus_write: port={} A0={} A1={} data=0x{:02X}", port, a0, a1, data);
 
     switch (port) {
         case 0:  // Port A
@@ -141,7 +139,6 @@ void IC_8255A::on_bus_write() {
             latch_b_ = data;
             if (!pb_input_) {
                 write_port_b(data);
-                spdlog::debug("[8255A] Port B write: 0x{:02X} (PB7={})", data, (data >> 7) & 1);
                 // Speaker: PB0 gates timer 2, PB1 is speaker data.
                 // Log when speaker is turned on or off.
                 bool spk_now = (data & 0x03) == 0x03;
@@ -184,12 +181,6 @@ void IC_8255A::on_bus_write() {
                 }
                 write_port_c(0);  // handles mixed input/output
 
-                spdlog::debug("[8255A] control={:#04x} PA={} PB={} PCu={} PCl={}",
-                              data,
-                              pa_input_ ? "in" : "out",
-                              pb_input_ ? "in" : "out",
-                              pc_upper_input_ ? "in" : "out",
-                              pc_lower_input_ ? "in" : "out");
             } else {
                 // Bit set/reset on Port C
                 int bit = (data >> 1) & 0x07;
@@ -211,7 +202,6 @@ void IC_8255A::on_bus_read() {
     switch (port) {
         case 0: {
             uint8_t val = pa_input_ ? read_port_a() : latch_a_;
-            spdlog::debug("[8255A] Port A read: 0x{:02X} (input={})", val, pa_input_);
             drive_data(val);
             break;
         }

@@ -74,8 +74,6 @@ void IC_74S74::update_ff(int i) {
     bool clr = f.clr.level() == Level::Low;
     bool pre = f.pre.level() == Level::Low;
 
-    bool old_q = f.q_state;
-
     if (clr && pre) {
         // Both asserted: Q=H, ~Q=H (indeterminate)
         f.q_state = true;
@@ -105,14 +103,6 @@ void IC_74S74::update_ff(int i) {
         drive_ff(i);
     }
 
-    spdlog::trace("[{}] FF{}: D={} CLK={} ~CLR={} ~PRE={} -> Q={} (was {})",
-                  name(), i + 1,
-                  int(f.d.level()), int(f.clk.level()),
-                  int(f.clr.level()), int(f.pre.level()),
-                  f.q_state ? 1 : 0, old_q ? 1 : 0);
-    if (f.q_state != old_q) {
-        spdlog::debug("[{}] FF{}: Q CHANGED {} -> {}", name(), i + 1, old_q ? 1 : 0, f.q_state ? 1 : 0);
-    }
 }
 
 void IC_74S74::drive_ff(int i) {
