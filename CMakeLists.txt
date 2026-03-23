@@ -8,6 +8,15 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 
+# Performance: AVX2, aggressive inlining, whole program optimization
+if(MSVC)
+    add_compile_options(/arch:AVX2 /GL /Ob3 /GS- /Gw /Gy)
+    add_link_options(/LTCG)
+else()
+    add_compile_options(-mavx2 -flto)
+    add_link_options(-flto)
+endif()
+
 # Collect all headers so they appear in Visual Studio Solution Explorer
 file(GLOB_RECURSE BENCH_HEADERS CONFIGURE_DEPENDS src/*.h)
 
@@ -76,15 +85,6 @@ source_group(TREE ${CMAKE_SOURCE_DIR}/src PREFIX "Source Files" FILES ${BENCH_HE
 # Pin validation: runtime checks that every read/write matches declared direction.
 # Disable for release builds.
 #add_compile_definitions(BENCH_PIN_VALIDATION)
-
-# Performance: AVX2, aggressive inlining, whole program optimization
-if(MSVC)
-    add_compile_options(/arch:AVX2 /GL /Ob3 /GS- /Gw /Gy)
-    add_link_options(/LTCG)
-else()
-    add_compile_options(-mavx2 -flto)
-    add_link_options(-flto)
-endif()
 
 # Set working directory to project root so relative paths (e.g. assets/) resolve correctly.
 set_target_properties(bench PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

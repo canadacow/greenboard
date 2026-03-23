@@ -295,19 +295,25 @@ public:
         perm += group_bits * mul;
 
         auto it = wave_plans_.find(perm);
-        if (it == wave_plans_.end())
-            it = wave_plans_.emplace(perm, solve_perm(perm)).first;
+        if (it == wave_plans_.end()) {
+            auto plan = solve_perm(perm);
+            plan.flatten();
+            it = wave_plans_.emplace(perm, std::move(plan)).first;
+        }
 
-        for (auto& wave : it->second.waves) {
-            for (auto* c : wave) {
+        // Flattened eval: single contiguous array, plain index loop.
+        // No double indirection through vector<vector<Component*>>.
+        const auto& flat = it->second.flat;
+        const int plan_size = static_cast<int>(flat.size());
+        Component* const* plan = flat.data();
+        for (int i = 0; i < plan_size; ++i) {
 #ifdef BENCH_PIN_VALIDATION
-                SignalPool::begin_component(c);
+            SignalPool::begin_component(plan[i]);
 #endif
-                c->on_signal_change(caller);
+            plan[i]->on_signal_change(caller);
 #ifdef BENCH_PIN_VALIDATION
-                SignalPool::end_component();
+            SignalPool::end_component();
 #endif
-            }
         }
     }
 
@@ -385,6 +391,18 @@ private:
     // Per-permutation wave plans (populated by dump_unified_waves()).
     struct WavePlan {
         std::vector<std::vector<Component*>> waves;
+
+        // Flattened eval plan: single contiguous array of Component*,
+        // iterated with a plain index loop.  Eliminates the double
+        // indirection through vector<vector<Component*>>.
+        std::vector<Component*> flat;
+
+        void flatten() {
+            flat.clear();
+            for (auto& wave : waves)
+                for (auto* c : wave)
+                    flat.push_back(c);
+        }
     };
     std::unordered_map<uint64_t, WavePlan> wave_plans_;
 
