@@ -538,7 +538,7 @@ void IC_8088::execute() {
     uint8_t opbyte = fetch_byte(0);
     
     static uint64_t instrCount = 0;
-    if (instrCount % 10000 == 0)
+    if (instrCount % 50000 == 0)
     {
         spdlog::info("[8088] {:04X}:{:04X} op={:02X}", regs16()[REG_CS], reg_ip_, opbyte);
     }
