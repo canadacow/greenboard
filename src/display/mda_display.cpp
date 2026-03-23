@@ -22,7 +22,9 @@
 #include <imgui_impl_dx11.h>
 
 #include "display/mda_display.h"
+#include "core/scheduler.h"
 #include <spdlog/spdlog.h>
+#include <cinttypes>
 #include <cmath>
 #include <chrono>
 
@@ -102,6 +104,10 @@ struct DxState {
     uint64_t last_cycles = 0;
     std::chrono::steady_clock::time_point last_time;
     double effective_mhz = 0.0;
+
+    // Debugger
+    Scheduler* scheduler = nullptr;
+    bool* dbg_visible = nullptr;  // points to MdaDisplay::dbg_visible_
 
     bool init(HWND hwnd, int w, int h);
     void render_mda(const uint8_t* vram);
@@ -266,28 +272,85 @@ void DxState::render_overlay() {
         }
     }
 
-    // ImGui overlay — bottom-right, transparent background.
+    // ImGui overlay
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration |
-        ImGuiWindowFlags_NoInputs |
-        ImGuiWindowFlags_NoNav |
-        ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoFocusOnAppearing;
+    // F12 toggles debugger panel.
+    if (ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false) && dbg_visible)
+        *dbg_visible = !*dbg_visible;
 
-    ImGui::SetNextWindowBgAlpha(0.4f);
-    ImGui::SetNextWindowPos(
-        ImVec2((float)winW - 10.0f, (float)winH - 10.0f),
-        ImGuiCond_Always,
-        ImVec2(1.0f, 1.0f));  // anchor bottom-right
+    // --- Stats HUD (bottom-right, passive) ---
+    {
+        ImGuiWindowFlags flags =
+            ImGuiWindowFlags_NoDecoration |
+            ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_NoNav |
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoFocusOnAppearing;
 
-    ImGui::Begin("##stats", nullptr, flags);
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%.2f MHz", effective_mhz);
-    ImGui::End();
+        ImGui::SetNextWindowBgAlpha(0.4f);
+        ImGui::SetNextWindowPos(
+            ImVec2((float)winW - 10.0f, (float)winH - 10.0f),
+            ImGuiCond_Always,
+            ImVec2(1.0f, 1.0f));
+
+        ImGui::Begin("##stats", nullptr, flags);
+        bool paused = scheduler && scheduler->is_paused();
+        if (paused)
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "PAUSED");
+        else
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%.2f MHz", effective_mhz);
+        ImGui::End();
+    }
+
+    // --- Debugger panel (top-left, translucent) ---
+    if (dbg_visible && *dbg_visible && scheduler) {
+        ImGuiWindowFlags dbg_flags =
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoCollapse;
+
+        ImGui::SetNextWindowBgAlpha(0.75f);
+        ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Once);
+
+        ImGui::Begin("Debugger [`]", dbg_visible, dbg_flags);
+
+        bool paused = scheduler->is_paused();
+
+        // Pause / Resume  (also bound to F5)
+        if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
+            if (paused) scheduler->resume(); else scheduler->pause();
+            paused = !paused;
+        }
+        if (paused) {
+            if (ImGui::Button("Resume (F5)"))
+                scheduler->resume();
+        } else {
+            if (ImGui::Button("Pause (F5)"))
+                scheduler->pause();
+        }
+
+        ImGui::SameLine();
+
+        // Single step (F10)
+        ImGui::BeginDisabled(!paused);
+        bool do_step = ImGui::Button("Step (F10)");
+        if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, true))
+            do_step = true;
+        if (do_step)
+            scheduler->step();
+        ImGui::EndDisabled();
+
+        ImGui::Separator();
+        if (clk_cycles)
+            ImGui::Text("CLK: %" PRIu64, *clk_cycles);
+        ImGui::Text("%.2f MHz", effective_mhz);
+
+        ImGui::End();
+    }
 
     ImGui::Render();
 
@@ -337,6 +400,8 @@ void MdaDisplay::render_loop(std::stop_token stop) {
 
     DxState dx;
     dx.clk_cycles = clk_cycles_;
+    dx.scheduler = scheduler_;
+    dx.dbg_visible = &dbg_visible_;
     if (!dx.init(hwnd, winW, winH)) {
         spdlog::error("[MDA Display] Failed to init DX11");
         return;
@@ -366,9 +431,11 @@ void MdaDisplay::render_loop(std::stop_token stop) {
     running_.store(false);
 }
 
-void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles) {
+void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
+                       Scheduler* scheduler) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
+    scheduler_ = scheduler;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });

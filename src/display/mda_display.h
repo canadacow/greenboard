@@ -19,13 +19,17 @@
 
 namespace bench {
 
+class Scheduler;  // forward
+
 class MdaDisplay {
 public:
     // Start the display thread.  vram must point to a 4096-byte buffer
     // (80x25 char+attr pairs) that remains valid until stop().
     // clk_cycles points to the 8284A's monotonic cycle counter (read-only).
+    // scheduler is optional; if provided, enables the debugger overlay.
     // Blocks until the window is up and rendering.
-    void start(const uint8_t* vram, const uint64_t* clk_cycles = nullptr);
+    void start(const uint8_t* vram, const uint64_t* clk_cycles = nullptr,
+               Scheduler* scheduler = nullptr);
 
     // Stop the display thread and close the window.
     void stop();
@@ -38,6 +42,8 @@ private:
     std::latch ready_{1};
     const uint8_t* vram_ = nullptr;
     const uint64_t* clk_cycles_ = nullptr;
+    Scheduler* scheduler_ = nullptr;
+    bool dbg_visible_ = false;
 
     void render_loop(std::stop_token stop);
 };

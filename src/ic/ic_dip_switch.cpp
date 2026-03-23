@@ -45,7 +45,7 @@ void IC_DipSwitch::on_power_off() {
 }
 
 void IC_DipSwitch::on_signal_change(Fiber /*caller*/) {
-    drive_all();
+    //drive_all();
 }
 
 void IC_DipSwitch::drive_all() {

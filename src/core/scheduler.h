@@ -13,8 +13,10 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <intrin.h>
 #include <spdlog/spdlog.h>
 
 #define WAVE_DEBUGS
@@ -244,6 +246,10 @@ public:
 
     // Evaluate all components in topological wave order.
     void evaluate(Fiber caller = nullptr) {
+        // Debugger gate: zero-cost when not paused (relaxed load + not-taken branch).
+        if (paused_.load(std::memory_order_relaxed)) [[unlikely]]
+            pause_gate();
+
         // Select DAG permutation by checking bidir block lambdas.
         // Map BidirDir bit flags to base-3 digits: HiZ(1)->0, Input(2)->1, Output(4)->2.
         // Lambdas may read pin levels -- suspend validation during selection.
@@ -350,11 +356,57 @@ public:
         }
     }
 
+    // --- Debugger pause / single-step ---
+    // Zero-cost when not paused: a single relaxed load + predicted-not-taken branch.
+    // When paused, the clock thread sleeps via umwait (WAITPKG) monitoring the
+    // control word, waking only when the UI writes to it (step/resume).
+
+    bool is_paused() const { return paused_.load(std::memory_order_relaxed); }
+
+    void pause()  { paused_.store(true, std::memory_order_relaxed); }
+    void resume() {
+        paused_.store(false, std::memory_order_relaxed);
+        // Poke control word to wake umwait.
+        dbg_wake_.store(1, std::memory_order_release);
+    }
+    void step() {
+        steps_.fetch_add(1, std::memory_order_relaxed);
+        // Poke control word to wake umwait.
+        dbg_wake_.store(1, std::memory_order_release);
+    }
+
     // Set the pool base index for the 20-bit address bus (LA0-LA19).
     // Called by board wiring so evaluate() can pre-compute bus_address.
     void set_bus_address_base(int base) { bus_address_base_ = base; }
 
 private:
+    // Debugger state -- atomic so the render thread can poke them.
+    std::atomic<bool> paused_{false};
+    std::atomic<int>  steps_{0};
+    std::atomic<int>  dbg_wake_{0};   // written by UI to break umwait
+
+    // Block the clock thread while paused, using umwait to sleep efficiently.
+    // Called at the top of evaluate(); predicted-not-taken when running normally.
+    void pause_gate() {
+        for (;;) {
+            // Consume a pending step if available.
+            int s = steps_.load(std::memory_order_relaxed);
+            if (s > 0 && steps_.compare_exchange_weak(s, s - 1, std::memory_order_relaxed))
+                return;  // allow one evaluate() through
+            if (!paused_.load(std::memory_order_relaxed))
+                return;  // resumed
+
+            // Sleep until the UI thread writes to dbg_wake_.
+            _umonitor(const_cast<int*>(reinterpret_cast<volatile int*>(&dbg_wake_)));
+            // C0.2 state, ~100us timeout (TSC ticks). The actual duration
+            // doesn't matter much -- umwait wakes instantly on a store to
+            // the monitored address. The timeout is just a backstop.
+            uint64_t deadline = __rdtsc() + 500000;
+            _umwait(1, deadline);
+            dbg_wake_.store(0, std::memory_order_relaxed);
+        }
+    }
+
     bool unified_resolved_ = false;
     int bus_address_base_ = 0;
 
