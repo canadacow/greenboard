@@ -31,27 +31,8 @@ namespace bench {
 // topologically sorts into waves, and inserts a commit() between each wave.
 class Scheduler {
 public:
-    // A group of components that can be skipped when inactive.
-    // is_active() is called once per evaluate(); if false, all components
-    // in the group are skipped for that cycle.
-    struct ComponentGroup {
-        std::string name;
-        std::function<bool()> is_active;
-    };
-
-    static constexpr int MAX_GROUPS = 1;
-
-    int register_group(std::string name, std::function<bool()> is_active_fn) {
-        int id = num_groups_++;
-        assert(id < MAX_GROUPS);
-        groups_[id] = {std::move(name), std::move(is_active_fn)};
-        return id;
-    }
-
-    void register_callback(CallbackComponent* cc, int group_id = -1) {
+    void register_callback(CallbackComponent* cc) {
         callbacks_.push_back(cc);
-        callback_group_.push_back(group_id);
-        cc->group_id_ = group_id;
     }
 
     void register_fiber(FiberComponent* fc) {
@@ -139,16 +120,7 @@ public:
 
         for (auto& [perm, plan] : wave_plans_) {
             // Build flat active component list (same as solve_perm).
-            uint64_t bidir_space = 1;
-            for (int i = 0; i < num_bidir; ++i) bidir_space *= 3;
-            uint64_t group_bits = (bidir_space > 0) ? perm / bidir_space : 0;
-
-            std::vector<Component*> active;
-            for (auto* c : evals_) {
-                int gid = c->group_id_;
-                if (gid >= 0 && !(group_bits & (1 << gid))) continue;
-                active.push_back(c);
-            }
+            std::vector<Component*> active(evals_.begin(), evals_.end());
             const int nn = static_cast<int>(active.size());
 
             // Compute effective masks.
@@ -294,14 +266,6 @@ public:
             mul *= 3;
         }
 
-        // Fold group active/inactive state into permutation key.
-        // Group bits sit above the bidir base-3 digits.
-        uint64_t group_bits = 0;
-        for (int g = 0; g < MAX_GROUPS; ++g)
-            if (groups_[g].is_active())
-                group_bits |= (uint64_t(1) << g);
-        perm += group_bits * mul;
-
         auto it = wave_plans_.find(perm);
         if (it == wave_plans_.end()) {
             auto plan = solve_perm(perm);
@@ -395,11 +359,6 @@ private:
     int bus_address_base_ = 0;
 
     std::vector<CallbackComponent*> callbacks_;
-    std::vector<int> callback_group_;  // group id per callback (-1 = none)
-
-    // Component groups (skippable subsystems).
-    std::array<ComponentGroup, MAX_GROUPS> groups_;
-    int num_groups_ = 0;
 
     // Per-permutation wave plans (populated by dump_unified_waves()).
     struct WavePlan {
@@ -439,19 +398,8 @@ private:
             return digit_to_dir[p % 3];
         };
 
-        // Extract group bits from the top of the permutation key.
-        uint64_t bidir_space = 1;
-        for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) bidir_space *= 3;
-        uint64_t group_bits = (bidir_space > 0) ? perm / bidir_space : 0;
-
-        // Filter out components belonging to inactive groups.
-        std::vector<Component*> active_evals;
-        active_evals.reserve(evals_.size());
-        for (auto* c : evals_) {
-            int gid = c->group_id_;
-            if (gid >= 0 && !(group_bits & (1 << gid))) continue;
-            active_evals.push_back(c);
-        }
+        // All components participate in every permutation.
+        std::vector<Component*> active_evals(evals_.begin(), evals_.end());
 
         // Remap bidir block indices to filtered component list.
         const int num_bidir = static_cast<int>(bidir_refs_.size());
