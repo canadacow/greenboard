@@ -54,6 +54,7 @@ private:
     Level ack_prev_ = Level::HiZ;
     Level pb6_prev_ = Level::HiZ;
     Level pb7_prev_ = Level::HiZ;
+    uint8_t pa_driven_ = 0;           // current PA value (re-driven every cycle like U24)
 
     static const uint8_t ascii_to_make_[128];
     static const bool    ascii_needs_shift_[128];

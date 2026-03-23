@@ -70,6 +70,7 @@ void TestKeyboard::on_power_on() {
     ack_prev_ = Level::HiZ;
     pb6_prev_ = Level::HiZ;
     pb7_prev_ = Level::HiZ;
+    pa_driven_ = 0;
     pin_irq1_.drive(Level::Low);
 }
 
@@ -100,12 +101,7 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
     // Detect keyboard reset protocol via PB6 (KBD CLK inhibit):
     // PB6 Low = CLK pulled low (reset start).
     // PB6 High after Low = CLK released (reset complete) -> send 0xAA.
-    if (pb6_cur != pb6_prev_)
-        spdlog::info("[TestKBD] PB6: {} -> {}", int(pb6_prev_), int(pb6_cur));
-    if (pb7_cur != pb7_prev_)
-        spdlog::info("[TestKBD] PB7: {} -> {} waiting_ack={}", int(pb7_prev_), int(pb7_cur), waiting_ack_);
     if (pb6_cur == Level::Low && pb6_prev_ != Level::Low) {
-        spdlog::info("[TestKBD] reset_pending = true");
         reset_pending_ = true;
     }
     if (reset_pending_ && pb6_cur == Level::High && pb6_prev_ != Level::High) {
@@ -142,21 +138,23 @@ void TestKeyboard::on_signal_change(Fiber /*caller*/) {
     // This ensures the PIC sees a clean Low->High edge.
     if (deliver_pending_) {
         deliver_pending_ = false;
-        spdlog::info("[TestKBD] delivering next scancode");
         deliver_next();
     }
 
+    // PB7 High = U24 CLEAR: zero the shift register outputs.
+    // This does NOT advance the queue -- it just clears PA like real hardware.
+    if (pb7_cur == Level::High)
+        pa_driven_ = 0;
+
     // ACK: port 0xFD write from IRQ handler.
-    // PB7 is NOT used for ACK -- on the real 5150, PB7 High clears U24
-    // (keyboard shift register) but doesn't trigger the next scancode.
-    // The IRQ handler toggles PB7 as part of the keyboard protocol,
-    // which would cause spurious ACKs if we listened to it here.
     if (ack_cur == Level::High && ack_prev_ != Level::High && waiting_ack_) {
-        spdlog::info("[TestKBD] handle_ack via 0xFD");
         handle_ack("0xFD");
-        // Reset the ack signal so we can detect the next rising edge.
         pin_ack_.drive(Level::Low);
     }
+
+    // Re-drive PA every cycle (like real U24 shift register holds its outputs).
+    for (int i = 0; i < 8; ++i)
+        pin_pa_[i].drive((pa_driven_ >> i) & 1 ? Level::High : Level::Low);
 
     ready_prev_ = ready_cur;
     ack_prev_ = ack_cur;
@@ -180,14 +178,11 @@ void TestKeyboard::deliver_next() {
 }
 
 void TestKeyboard::drive_scancode(uint8_t sc) {
-    for (int i = 0; i < 8; ++i)
-        pin_pa_[i].drive((sc >> i) & 1 ? Level::High : Level::Low);
+    pa_driven_ = sc;
 }
 
 void TestKeyboard::release_scancode() {
-    // Drive 0x00 -- idle keyboard outputs zero (U24 shift register cleared).
-    for (int i = 0; i < 8; ++i)
-        pin_pa_[i].drive(Level::Low);
+    pa_driven_ = 0x00;
 }
 
 } // namespace bench

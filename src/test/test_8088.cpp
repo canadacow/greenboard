@@ -164,7 +164,6 @@ int main() {
         "post_sw1_readback",
         "post_kbd",
         "keyboard",
-        /*
         "mov",
         "dma",
         "dma_m2m",
@@ -196,7 +195,7 @@ int main() {
         "post_pic",
         "post_video",
         "post_dma",
-        "post_fdc",*/
+        "post_fdc",
     };
 
     std::vector<TestCase> tests;
