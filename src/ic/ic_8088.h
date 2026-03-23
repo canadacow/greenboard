@@ -293,6 +293,16 @@ public:
     bool halted() const { return halted_; }
     void clear_halt() { halted_ = false; }
     void set_reset_vector(uint16_t cs, uint16_t ip) { start_cs_ = cs; start_ip_ = ip; }
+
+    // --- Debugger read-only access (safe to call from any thread while paused) ---
+    const uint16_t* regs16_ro() const { return reinterpret_cast<const uint16_t*>(regs_); }
+    const uint8_t*  regs8_ro()  const { return regs_; }
+    uint16_t ip()  const { return reg_ip_; }
+    // 16-bit register indices
+    enum Reg16 { AX=0, CX=1, DX=2, BX=3, SP=4, BP=5, SI=6, DI=7,
+                 ES=8, CS=9, SS=10, DS=11 };
+    // Flag byte offsets in regs8
+    enum Flag { CF=40, PF=41, AF=42, ZF=43, SF=44, TF=45, IF=46, DF=47, OF=48 };
 private:
 
     // Start address (set via constructor, applied in cpu_reset)

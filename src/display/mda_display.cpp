@@ -23,6 +23,9 @@
 
 #include "display/mda_display.h"
 #include "core/scheduler.h"
+#include "ic/ic_8088.h"
+#include "debug/memory_view.h"
+#include <Zydis/Zydis.h>
 #include <spdlog/spdlog.h>
 #include <cinttypes>
 #include <cmath>
@@ -107,11 +110,18 @@ struct DxState {
 
     // Debugger
     Scheduler* scheduler = nullptr;
+    IC_8088* cpu = nullptr;
+    const MemoryView* mem = nullptr;
     bool* dbg_visible = nullptr;  // points to MdaDisplay::dbg_visible_
+
+    // Zydis disassembler (8086 real mode)
+    ZydisDecoder decoder = {};
+    ZydisFormatter formatter = {};
 
     bool init(HWND hwnd, int w, int h);
     void render_mda(const uint8_t* vram);
     void render_overlay();
+    void render_debugger();
     void present();
 };
 
@@ -191,6 +201,10 @@ bool DxState::init(HWND hw, int w, int h) {
     ImGui_ImplDX11_Init(device.Get(), ctx.Get());
 
     last_time = std::chrono::steady_clock::now();
+
+    // Zydis: 8086 real mode disassembler
+    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_REAL_16, ZYDIS_STACK_WIDTH_16);
+    ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
 
     return true;
 }
@@ -307,55 +321,146 @@ void DxState::render_overlay() {
     }
 
     // --- Debugger panel (top-left, translucent) ---
-    if (dbg_visible && *dbg_visible && scheduler) {
-        ImGuiWindowFlags dbg_flags =
-            ImGuiWindowFlags_NoSavedSettings |
-            ImGuiWindowFlags_AlwaysAutoResize |
-            ImGuiWindowFlags_NoCollapse;
-
-        ImGui::SetNextWindowBgAlpha(0.75f);
-        ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Once);
-
-        ImGui::Begin("Debugger [`]", dbg_visible, dbg_flags);
-
-        bool paused = scheduler->is_paused();
-
-        // Pause / Resume  (also bound to F5)
-        if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
-            if (paused) scheduler->resume(); else scheduler->pause();
-            paused = !paused;
-        }
-        if (paused) {
-            if (ImGui::Button("Resume (F5)"))
-                scheduler->resume();
-        } else {
-            if (ImGui::Button("Pause (F5)"))
-                scheduler->pause();
-        }
-
-        ImGui::SameLine();
-
-        // Single step (F10)
-        ImGui::BeginDisabled(!paused);
-        bool do_step = ImGui::Button("Step (F10)");
-        if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, true))
-            do_step = true;
-        if (do_step)
-            scheduler->step();
-        ImGui::EndDisabled();
-
-        ImGui::Separator();
-        if (clk_cycles)
-            ImGui::Text("CLK: %" PRIu64, *clk_cycles);
-        ImGui::Text("%.2f MHz", effective_mhz);
-
-        ImGui::End();
-    }
+    if (dbg_visible && *dbg_visible && scheduler)
+        render_debugger();
 
     ImGui::Render();
 
     ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
+
+void DxState::render_debugger() {
+    ImGuiWindowFlags dbg_flags =
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoCollapse;
+
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Once);
+    ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Once);
+
+    ImGui::Begin("Debugger [`]", dbg_visible, dbg_flags);
+
+    bool paused = scheduler->is_paused();
+
+    // --- Toolbar: Pause/Resume + Step ---
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
+        if (paused) scheduler->resume(); else scheduler->pause();
+        paused = !paused;
+    }
+    if (paused) {
+        if (ImGui::Button("Resume (F5)")) scheduler->resume();
+    } else {
+        if (ImGui::Button("Pause (F5)")) scheduler->pause();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!paused);
+    bool do_step = ImGui::Button("Step (F10)");
+    if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, true))
+        do_step = true;
+    if (do_step) scheduler->step();
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (clk_cycles)
+        ImGui::Text("CLK: %" PRIu64 "  %.2f MHz", *clk_cycles, effective_mhz);
+
+    ImGui::Separator();
+
+    // --- CPU Registers (only meaningful when paused) ---
+    if (cpu) {
+        const uint16_t* r = cpu->regs16_ro();
+        const uint8_t* r8 = cpu->regs8_ro();
+        using R = IC_8088::Reg16;
+        using F = IC_8088::Flag;
+
+        // Use monospace for register display
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+
+        // General purpose registers - two columns
+        ImGui::Text("AX=%04X  BX=%04X  CX=%04X  DX=%04X",
+                     r[R::AX], r[R::BX], r[R::CX], r[R::DX]);
+        ImGui::Text("SP=%04X  BP=%04X  SI=%04X  DI=%04X",
+                     r[R::SP], r[R::BP], r[R::SI], r[R::DI]);
+        ImGui::Text("CS=%04X  DS=%04X  ES=%04X  SS=%04X",
+                     r[R::CS], r[R::DS], r[R::ES], r[R::SS]);
+        ImGui::Text("IP=%04X", cpu->ip());
+
+        // Flags as letters
+        char flags_str[] = "--------";
+        if (r8[F::OF]) flags_str[0] = 'O';
+        if (r8[F::DF]) flags_str[1] = 'D';
+        if (r8[F::IF]) flags_str[2] = 'I';
+        if (r8[F::TF]) flags_str[3] = 'T';
+        if (r8[F::SF]) flags_str[4] = 'S';
+        if (r8[F::ZF]) flags_str[5] = 'Z';
+        if (r8[F::AF]) flags_str[6] = 'A';
+        if (r8[F::CF]) flags_str[7] = 'C';
+        // PF separate
+        ImGui::SameLine();
+        ImGui::Text("  FL=%s%s", flags_str, r8[F::PF] ? "P" : "-");
+
+        ImGui::PopStyleColor();
+
+        // --- Disassembly (around CS:IP) ---
+        if (mem && paused) {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Disassembly:");
+
+            uint16_t cs = r[R::CS];
+            uint16_t ip = cpu->ip();
+            uint32_t base = ((uint32_t)cs << 4) + ip;
+
+            // Fetch up to 64 bytes from CS:IP for disassembly
+            uint8_t code[64];
+            mem->read(base, code, 64);
+
+            // Disassemble several instructions
+            size_t offset = 0;
+            size_t length = 64;
+            for (int line = 0; line < 16 && offset < length; ++line) {
+                ZydisDecodedInstruction instr;
+                ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+                ZyanStatus status = ZydisDecoderDecodeFull(
+                    &decoder, code + offset, length - offset,
+                    &instr, operands);
+
+                uint16_t addr = ip + static_cast<uint16_t>(offset);
+
+                if (ZYAN_SUCCESS(status)) {
+                    char disasm[128];
+                    ZydisFormatterFormatInstruction(
+                        &formatter, &instr, operands, instr.operand_count,
+                        disasm, sizeof(disasm),
+                        ((uint64_t)cs << 4) + addr, ZYAN_NULL);
+
+                    // Hex bytes
+                    char hex[32] = {};
+                    int hpos = 0;
+                    for (size_t b = 0; b < instr.length && hpos < 24; ++b)
+                        hpos += snprintf(hex + hpos, sizeof(hex) - hpos,
+                                         "%02X ", code[offset + b]);
+
+                    // Highlight current IP
+                    if (offset == 0)
+                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.3f, 1.0f),
+                            "%04X:%04X  %-14s %s", cs, addr, hex, disasm);
+                    else
+                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f),
+                            "%04X:%04X  %-14s %s", cs, addr, hex, disasm);
+
+                    offset += instr.length;
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                        "%04X:%04X  %02X             ???",
+                        cs, addr, code[offset]);
+                    offset += 1;
+                }
+            }
+        }
+    }
+
+    ImGui::End();
 }
 
 void DxState::present() {
@@ -401,6 +506,8 @@ void MdaDisplay::render_loop(std::stop_token stop) {
     DxState dx;
     dx.clk_cycles = clk_cycles_;
     dx.scheduler = scheduler_;
+    dx.cpu = cpu_;
+    dx.mem = mem_;
     dx.dbg_visible = &dbg_visible_;
     if (!dx.init(hwnd, winW, winH)) {
         spdlog::error("[MDA Display] Failed to init DX11");
@@ -432,10 +539,13 @@ void MdaDisplay::render_loop(std::stop_token stop) {
 }
 
 void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
-                       Scheduler* scheduler) {
+                       Scheduler* scheduler, IC_8088* cpu,
+                       const MemoryView* mem) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
+    cpu_ = cpu;
+    mem_ = mem;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });

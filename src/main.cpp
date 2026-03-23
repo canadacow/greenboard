@@ -9,6 +9,7 @@
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
 #include "display/mda_display.h"
+#include "debug/memory_view.h"
 #include "test/test_keyboard.h"
 #include "core/signal.h"
 #include "core/scheduler.h"
@@ -94,9 +95,33 @@ int main() {
 
     spdlog::set_level(spdlog::level::info);
 
+    // --- Debugger memory view (unified 20-bit address space) ---
+    MemoryView memview;
+
+    // DRAM: 00000-3FFFF (256KB, through 74S158 address inversion)
+    memview.map(0x00000, 0x40000, [&](uint32_t addr) -> uint8_t {
+        uint8_t row = static_cast<uint8_t>(~(addr & 0xFF));
+        uint8_t col = static_cast<uint8_t>(~((addr >> 8) & 0xFF));
+        uint32_t bank = (addr >> 16) & 3;
+        uint32_t xlat = (bank << 16) | (static_cast<uint32_t>(row) << 8) | col;
+        return board.dram.data()[xlat];
+    });
+
+    // MDA framebuffer: B0000-B0FFF (4KB)
+    memview.map(ISA_MDA::FB_BASE, ISA_MDA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
+        return mda.framebuffer()[addr - ISA_MDA::FB_BASE];
+    });
+
+    // ROM: F6000-FFFFF (5 banks x 8KB)
+    memview.map(0xF6000, 5 * 8192, [&](uint32_t addr) -> uint8_t {
+        uint32_t off = addr - 0xF6000;
+        return board.rom.bank_data(off / 8192)[off % 8192];
+    });
+
     // --- MDA display (render thread, reads framebuffer directly) ---
     MdaDisplay mda_display;
-    mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(), &scheduler);
+    mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
+                       &scheduler, board.cpu, &memview);
 
     // --- Power on ---
     spdlog::info("=== Power on ===");

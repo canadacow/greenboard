@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(spdlog CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(zydis CONFIG REQUIRED)
 
 # Performance: AVX2, aggressive inlining, whole program optimization
 if(MSVC)
@@ -74,7 +75,7 @@ add_executable(bench
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui d3d11 d2d1 dwrite dxgi)
+target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis d3d11 d2d1 dwrite dxgi)
 target_compile_definitions(bench PRIVATE
     PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
 )
