@@ -32,6 +32,7 @@
 #include "ic/ic_74ls32.h"
 #include "ic/ic_8253.h"
 #include "ic/ic_8255a.h"
+#include "ic/ic_dip_switch.h"
 #include "board/isa_slot.h"
 #include <string>
 #include <vector>
@@ -284,17 +285,9 @@ struct Board {
         IsaSlot("J1"), IsaSlot("J2"), IsaSlot("J3"), IsaSlot("J4"), IsaSlot("J5"),
     };
 
-    // DIP switch configuration
-    SW1Config sw1 {
-        .floppy_present   = true,
-        .math_coprocessor = false,
-        .planar_ram_kb    = 64,
-        .video_mode       = SW1Config::MDA,
-        .floppy_count     = 1,
-    };
-    SW2Config sw2 {
-        .expansion_ram_banks = 6,   // (256K - 64K planar) / 32K = 6
-    };
+    // DIP switch ICs (driven every cycle via DAG)
+    IC_DipSwitch sw1_ic{"SW1", 8};
+    IC_DipSwitch sw2_ic{"SW2", 4};
 
     // All traces on the board. On power loss, every trace discharges.
     std::vector<Signal*> all_traces;
@@ -1636,6 +1629,31 @@ struct Board {
         //   bit 6-7 = 00 (1 floppy drive)
         // ON = grounded = bit is 0.  OFF = pull-up = bit is 1.
         // value byte: 0 = ON, 1 = OFF.
+
+        // SW1: connect logical positions to sw1_pin signals.
+        // Physical switch N drives BRD pin (16-N) which maps to sw1_pin index:
+        //   pos 0 (SW1-1, floppy)  -> pin 16 -> sw1_pin[7]
+        //   pos 1 (SW1-2, 8087)    -> pin 15 -> sw1_pin[5]
+        //   pos 2 (SW1-3, RAM lo)  -> pin 14 -> sw1_pin[6]
+        //   pos 3 (SW1-4, RAM hi)  -> pin 13 -> sw1_pin[3]
+        //   pos 4 (SW1-5, vid lo)  -> pin 12 -> sw1_pin[1]
+        //   pos 5 (SW1-6, vid hi)  -> pin 11 -> sw1_pin[2]
+        //   pos 6 (SW1-7, drv lo)  -> pin 10 -> sw1_pin[4]
+        //   pos 7 (SW1-8, drv hi)  -> pin  9 -> sw1_pin[0]
+        static constexpr int sw1_remap[8] = {7, 5, 6, 3, 1, 2, 4, 0};
+        for (int i = 0; i < 8; ++i)
+            sw1_ic.connect_position(i, sw1_pin[sw1_remap[i]]);
+
+        // SW1 default: floppy=1, no 8087=0, 64K=11, MDA=11, 1 drive=00 = 0x3D
+        // set_value bit=1 means OFF (High). ON=Low=grounded.
+        sw1_ic.set_value(0x3D);
+
+        // SW2: connect positions to Port C lower nibble.
+        for (int i = 0; i < 4; ++i)
+            sw2_ic.connect_position(i, ppi_pc[i]);
+
+        // SW2: 6 expansion RAM banks = 0x06
+        sw2_ic.set_value(0x06);
     }
 
     void register_all(Scheduler& scheduler) {
@@ -1644,6 +1662,8 @@ struct Board {
             return dma_enabled;
         });
 
+        scheduler.register_callback(&sw1_ic);
+        scheduler.register_callback(&sw2_ic);
         scheduler.register_callback(xcvr);
         scheduler.register_callback(xcvr13_ic);
         scheduler.register_callback(sw_mux_ic);

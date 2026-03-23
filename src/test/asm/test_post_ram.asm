@@ -115,6 +115,8 @@ org 0x0100
 ; Expect 0x3D: floppy=1, no 8087=0, 64K RAM=11, MDA=11, 1 drive=00
 ; =====================================================================
 .test4:
+    mov al, 0xFC            ; PB7=1: enable SW1 mux (U23), as BIOS TEST.02 does
+    out 0x61, al
     in al, 0x60             ; read PPI Port A (switches)
     cmp al, 0x3D
     jne .test5

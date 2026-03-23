@@ -31,6 +31,7 @@ add_executable(bench
     src/ic/ic_74s175.cpp
     src/ic/ic_8259a.cpp
     src/ic/ic_8255a.cpp
+    src/ic/ic_dip_switch.cpp
     src/ic/ic_8237a.cpp
     src/ic/ic_8088.cpp
     src/ic/ic_rom_8k.cpp
@@ -126,6 +127,7 @@ add_executable(test_8088
     src/ic/ic_74ls32.cpp
     src/ic/ic_8253.cpp
     src/ic/ic_8255a.cpp
+    src/ic/ic_dip_switch.cpp
     src/isa/isa_adapter.cpp
     src/isa/isa_testcard.cpp
     src/isa/isa_fdc.cpp

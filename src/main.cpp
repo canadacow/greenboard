@@ -86,29 +86,12 @@ int main() {
 
     scheduler.resolve();
 
-    Signal* sw1_out[8] = {
-        &board.sw1_pin[7], &board.sw1_pin[5], &board.sw1_pin[6], &board.sw1_pin[3],
-        &board.sw1_pin[1], &board.sw1_pin[2], &board.sw1_pin[4], &board.sw1_pin[0]
-    };
-    board.sw1.drive(sw1_out);
-    Signal* sw2_out[4] = {
-        &board.ppi_pc[0], &board.ppi_pc[1], &board.ppi_pc[2], &board.ppi_pc[3]
-    };
-    board.sw2.drive(sw2_out);
-
     spdlog::set_level(spdlog::level::info);
 
     // --- Power on ---
     spdlog::info("=== Power on ===");
-    spdlog::info("SW1: floppy={} 8087={} RAM={}K video={} drives={}",
-                 board.sw1.floppy_present, board.sw1.math_coprocessor,
-                 board.sw1.planar_ram_kb,
-                 board.sw1.video_mode == SW1Config::MDA ? "MDA" :
-                 board.sw1.video_mode == SW1Config::CGA_80 ? "CGA80" :
-                 board.sw1.video_mode == SW1Config::CGA_40 ? "CGA40" : "NONE",
-                 board.sw1.floppy_count);
-    spdlog::info("SW2: expansion RAM = {}K ({} x 32K banks)",
-                 board.sw2.expansion_ram_banks * 32, board.sw2.expansion_ram_banks);
+    spdlog::info("SW1: 0x{:02X}  SW2: 0x{:02X}",
+                 board.sw1_ic.value(), board.sw2_ic.value());
 
     board.clk_gen->power_on();
     board.clk_gen->psu_power_on();
