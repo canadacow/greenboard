@@ -29,6 +29,9 @@ struct SignalPool {
         return base;
     }
 
+    // Pre-computed bus address from LA0-LA19, updated once per evaluate().
+    static uint32_t bus_address;
+
     // Power rail bitmask -- signals that should never create dependency edges.
     static constexpr int PW = (MAX_SIGNALS + 63) / 64;
     static uint64_t power_rails[PW];

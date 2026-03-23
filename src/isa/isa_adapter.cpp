@@ -99,15 +99,15 @@ void ISA_Adapter::install(IsaSlot& slot) {
             auto ior_lev = ior_.level();
             auto iow_lev = iow_.level();
             if (ior_lev == Level::Low) {
-                uint16_t port = static_cast<uint16_t>(read_address());
+                uint16_t port = static_cast<uint16_t>(SignalPool::bus_address);
                 if (claims_port(port))
                     return BidirDir::Output;
                 return BidirDir::HiZ;
             }
             if (iow_lev == Level::Low) return BidirDir::Input;
-            if (memr_.level() == Level::Low && claims_mmio(read_address()))
+            if (memr_.level() == Level::Low && claims_mmio(SignalPool::bus_address))
                 return BidirDir::Output;
-            if (memw_.level() == Level::Low && claims_mmio(read_address()))
+            if (memw_.level() == Level::Low && claims_mmio(SignalPool::bus_address))
                 return BidirDir::Input;
             return BidirDir::HiZ;
         });
@@ -295,11 +295,7 @@ void ISA_Adapter::deassert_drq(int ch) {
 // =========================================================================
 
 uint32_t ISA_Adapter::read_address() {
-    uint32_t addr = 0;
-    for (int i = 0; i < 20; ++i)
-        if (sa_[i].level() == Level::High)
-            addr |= (1u << i);
-    return addr;
+    return SignalPool::bus_address;
 }
 
 uint8_t ISA_Adapter::read_sd() {

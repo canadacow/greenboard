@@ -1657,6 +1657,8 @@ struct Board {
     }
 
     void register_all(Scheduler& scheduler) {
+        scheduler.set_bus_address_base(la_block_);
+
         // DMA group: skip when HRQ is Low and no DRQ pending.
         int dma_group = scheduler.register_group("DMA", [this]() {
             return dma_enabled;

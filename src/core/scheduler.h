@@ -278,6 +278,14 @@ public:
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::end_component();
 #endif
+        // Pre-compute bus address for bidir lambdas.
+        {
+            const Level* p = &SignalPool::levels[bus_address_base_];
+            uint32_t a = 0;
+            for (int i = 0; i < 20; ++i)
+                if (p[i] == Level::High) a |= (1u << i);
+            SignalPool::bus_address = a;
+        }
         static constexpr uint64_t dir_to_digit[] = {0, 0, 1, 0, 2};  // indexed by uint8_t(BidirDir)
         uint64_t perm = 0, mul = 1;
         for (int i = 0; i < static_cast<int>(bidir_refs_.size()); ++i) {
@@ -378,8 +386,13 @@ public:
         }
     }
 
+    // Set the pool base index for the 20-bit address bus (LA0-LA19).
+    // Called by board wiring so evaluate() can pre-compute bus_address.
+    void set_bus_address_base(int base) { bus_address_base_ = base; }
+
 private:
     bool unified_resolved_ = false;
+    int bus_address_base_ = 0;
 
     std::vector<CallbackComponent*> callbacks_;
     std::vector<int> callback_group_;  // group id per callback (-1 = none)
