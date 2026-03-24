@@ -251,7 +251,7 @@ public:
         if (paused_.load(std::memory_order_relaxed)) [[unlikely]]
             pause_gate();
 
-        #if 0
+        #if 1
         // Auto-pause on VS debugger resume: if wall time between two cycles
         // exceeds ~50ms worth of TSC ticks, a debugger must have frozen us.
         // __rdtsc() is ~1 cycle, so this is essentially free.
@@ -393,6 +393,14 @@ public:
         step_instr_.store(true, std::memory_order_relaxed);
         dbg_wake_.store(1, std::memory_order_release);
     }
+    // Step over: run until IP == target_ip with SP >= saved SP.
+    // Skips into CALLs/INTs, pauses when they return to the next instruction.
+    void step_over(uint16_t target_ip, uint16_t saved_sp) {
+        dbg_over_ip_ = target_ip;
+        dbg_over_sp_ = saved_sp;
+        step_over_.store(true, std::memory_order_relaxed);
+        dbg_wake_.store(1, std::memory_order_release);
+    }
     void set_cpu(IC_8088* cpu) { dbg_cpu_ = cpu; }
 
     // Set the pool base index for the 20-bit address bus (LA0-LA19).
@@ -404,9 +412,12 @@ private:
     std::atomic<bool> paused_{false};
     std::atomic<int>  steps_{0};
     std::atomic<bool> step_instr_{false};
+    std::atomic<bool> step_over_{false};
     std::atomic<int>  dbg_wake_{0};   // written by UI to break umwait
     IC_8088*          dbg_cpu_ = nullptr;
     uint64_t          dbg_instr_start_ = 0;
+    uint16_t          dbg_over_ip_ = 0;
+    uint16_t          dbg_over_sp_ = 0;
     uint64_t          dbg_last_tsc_ = 0;
     // ~50ms at 3GHz = 150M ticks. Conservative -- any cycle gap this large
     // means a debugger froze us (normal cycle is ~600 ticks at 4.77MHz).
@@ -425,6 +436,18 @@ private:
             }
         }
 
+        // Step over: let cycles through until IP == target and SP >= saved.
+        // Check only at instruction boundaries (instr_count changed since last check).
+        if (step_over_.load(std::memory_order_relaxed)) {
+            if (dbg_cpu_ && dbg_cpu_->ip() == dbg_over_ip_
+                && dbg_cpu_->regs16_ro()[IC_8088::SP] >= dbg_over_sp_) {
+                step_over_.store(false, std::memory_order_relaxed);
+                // Target reached -- fall through to sleep.
+            } else {
+                return;  // keep running
+            }
+        }
+
         for (;;) {
             // Consume a pending cycle step if available.
             int s = steps_.load(std::memory_order_relaxed);
@@ -432,8 +455,10 @@ private:
                 return;
             if (!paused_.load(std::memory_order_relaxed))
                 return;
-            // Instruction step requested -- start running.
+            // Step requested -- start running.
             if (step_instr_.load(std::memory_order_relaxed))
+                return;
+            if (step_over_.load(std::memory_order_relaxed))
                 return;
 
             // Sleep until the UI thread writes to dbg_wake_.

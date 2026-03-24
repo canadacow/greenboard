@@ -49,7 +49,12 @@ static constexpr uint8_t BUS_MEMW    = 6;  // 1,1,0
 static constexpr uint8_t BUS_PASSIVE = 7;  // 1,1,1
 
 IC_8088::IC_8088(uint16_t start_cs, uint16_t start_ip)
-    : FiberComponent("8088"), start_cs_(start_cs), start_ip_(start_ip) { set_description("CPU"); }
+    : FiberComponent("8088"), start_cs_(start_cs), start_ip_(start_ip) {
+    set_description("CPU");
+    // Real 8088 powers on with CS:IP at reset vector.
+    regs16()[REG_CS] = start_cs_;
+    reg_ip_ = start_ip_;
+}
 
 void IC_8088::install(Socket& socket) {
     auto pin = [&](int p) -> Pin {

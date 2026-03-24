@@ -50,7 +50,7 @@ private:
     IC_8088* cpu_ = nullptr;
     const MemoryView* mem_ = nullptr;
     IC_8237A* dma_ = nullptr;
-    bool dbg_visible_ = false;
+    bool dbg_visible_ = true;
 
     void render_loop(std::stop_token stop);
 };

@@ -396,14 +396,33 @@ void DxState::render_debugger() {
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!paused);
-    // Step Instruction (F10) -- run until IP changes
-    bool do_step_instr = ImGui::Button("Step (F10)");
+    // F9: Step Over -- run until next instruction at same stack level
+    bool do_step_over = ImGui::Button("Over (F9)");
+    if (paused && ImGui::IsKeyPressed(ImGuiKey_F9, true))
+        do_step_over = true;
+    if (do_step_over && cpu && mem) {
+        uint16_t cs = cpu->regs16_ro()[IC_8088::CS];
+        uint16_t ip = cpu->ip();
+        uint16_t sp = cpu->regs16_ro()[IC_8088::SP];
+        uint32_t phys = ((uint32_t)cs << 4) + ip;
+        uint8_t buf[15];
+        mem->read(phys & 0xFFFFF, buf, 15);
+        ZydisDecodedInstruction instr;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+        uint16_t len = 1;
+        if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, buf, 15, &instr, operands)))
+            len = (uint16_t)instr.length;
+        scheduler->step_over(ip + len, sp);
+    }
+    ImGui::SameLine();
+    // F10: Step Into -- single instruction
+    bool do_step_instr = ImGui::Button("Into (F10)");
     if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, true))
         do_step_instr = true;
     if (do_step_instr)
         scheduler->step_instruction();
     ImGui::SameLine();
-    // Step Cycle (F11) -- single CLK cycle
+    // F11: Cycle -- single CLK cycle
     bool do_step_cycle = ImGui::Button("Cycle (F11)");
     if (paused && ImGui::IsKeyPressed(ImGuiKey_F11, true))
         do_step_cycle = true;
@@ -443,12 +462,14 @@ void DxState::render_debugger() {
     using R = IC_8088::Reg16;
     using F = IC_8088::Flag;
 
-    // --- Registers ---
+    // --- Registers (segment:offset pairs) ---
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
-    ImGui::Text("AX=%04X  BX=%04X  CX=%04X  DX=%04X",
-                 r[R::AX], r[R::BX], r[R::CX], r[R::DX]);
-    ImGui::Text("SP=%04X  BP=%04X  SI=%04X  DI=%04X",
-                 r[R::SP], r[R::BP], r[R::SI], r[R::DI]);
+    ImGui::Text("AX=%04X  BX=%04X  CX=%04X  DX=%04X  BP=%04X",
+                 r[R::AX], r[R::BX], r[R::CX], r[R::DX], r[R::BP]);
+    ImGui::Text("CS:IP=%04X:%04X  DS:SI=%04X:%04X",
+                 r[R::CS], cpu->ip(), r[R::DS], r[R::SI]);
+    ImGui::Text("SS:SP=%04X:%04X  ES:DI=%04X:%04X",
+                 r[R::SS], r[R::SP], r[R::ES], r[R::DI]);
 
     char fl[] = "---------";
     if (r8[F::OF]) fl[0] = 'O'; if (r8[F::DF]) fl[1] = 'D';
@@ -456,8 +477,7 @@ void DxState::render_debugger() {
     if (r8[F::SF]) fl[4] = 'S'; if (r8[F::ZF]) fl[5] = 'Z';
     if (r8[F::AF]) fl[6] = 'A'; if (r8[F::PF]) fl[7] = 'P';
     if (r8[F::CF]) fl[8] = 'C';
-    ImGui::Text("CS=%04X  DS=%04X  ES=%04X  SS=%04X  IP=%04X  %s",
-                 r[R::CS], r[R::DS], r[R::ES], r[R::SS], cpu->ip(), fl);
+    ImGui::Text("%s", fl);
     ImGui::PopStyleColor();
 
     // --- Disassembly (DOSBox-style persistent view) ---
