@@ -415,9 +415,6 @@ uint8_t ISA_FloppyController::on_dma_read() {
     uint8_t byte = 0x00;
     if (sector_offset_ + xfer_ptr_ < image_.size())
         byte = image_[sector_offset_ + xfer_ptr_];
-    if (xfer_ptr_ < 4 || xfer_ptr_ == 511)
-        spdlog::info("[{}] READ image[0x{:05X}] = 0x{:02X} (xfer={})",
-                     name_, sector_offset_ + xfer_ptr_, byte, xfer_ptr_);
     xfer_ptr_++;
 
     // Crossed a sector boundary? Advance to next sector so the DMA
@@ -430,8 +427,6 @@ uint8_t ISA_FloppyController::on_dma_read() {
 }
 
 void ISA_FloppyController::on_dma_write(uint8_t val) {
-    spdlog::trace("[{}] on_dma_write: byte=0x{:02X} xfer_ptr={} sector={} format={}",
-                  name_, val, xfer_ptr_, cur_sector_, format_mode_);
     if (format_mode_) {
         // FORMAT TRACK: receive 4-byte address fields (C, H, R, N) per sector,
         // then fill the sector with the fill byte.
@@ -447,13 +442,8 @@ void ISA_FloppyController::on_dma_write(uint8_t val) {
         }
     } else {
         // WRITE DATA: store byte into image.
-        size_t idx = sector_offset_ + xfer_ptr_;
-        if (idx < image_.size()) {
-            image_[idx] = val;
-            if (xfer_ptr_ < 4 || xfer_ptr_ == 511)
-                spdlog::info("[{}] WRITE image[0x{:05X}] = 0x{:02X} (xfer={})",
-                             name_, idx, val, xfer_ptr_);
-        }
+        if (sector_offset_ + xfer_ptr_ < image_.size())
+            image_[sector_offset_ + xfer_ptr_] = val;
         xfer_ptr_++;
 
         // Multi-sector: advance when sector boundary crossed.
@@ -465,8 +455,7 @@ void ISA_FloppyController::on_dma_write(uint8_t val) {
 }
 
 void ISA_FloppyController::on_dma_complete(int /*channel*/) {
-    spdlog::info("[{}] DMA complete: phase={} format={} xfer_ptr={} dor=0x{:02X}",
-                 name_, static_cast<int>(phase_), format_mode_, xfer_ptr_, dor_);
+    spdlog::debug("[{}] DMA complete", name_);
     format_mode_ = false;
     build_result_ok();
 }
@@ -504,12 +493,8 @@ void ISA_FloppyController::build_result_ok() {
     phase_ = Phase::Result;
 
     // Fire IRQ 6 (if DMA/IRQ enabled in DOR).
-    if (dor_ & 0x08) {
-        spdlog::info("[{}] build_result_ok: raising IRQ6, dor=0x{:02X}", name_, dor_);
+    if (dor_ & 0x08)
         bus_->raise_irq(6);
-    } else {
-        spdlog::warn("[{}] build_result_ok: DOR bit 3 clear, NOT raising IRQ6, dor=0x{:02X}", name_, dor_);
-    }
 }
 
 // =========================================================================
