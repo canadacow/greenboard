@@ -269,13 +269,11 @@ public:
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::end_component();
 #endif
-        // Pre-compute bus address for bidir lambdas.
+        // Pre-compute bus address for bidir lambdas (AVX2: 20 bytes in one shot).
         {
-            const Level* p = &SignalPool::levels[bus_address_base_];
-            uint32_t a = 0;
-            for (int i = 0; i < 20; ++i)
-                if (p[i] == Level::High) a |= (1u << i);
-            SignalPool::bus_address = a;
+            const auto* p = reinterpret_cast<const __m256i*>(&SignalPool::levels[bus_address_base_]);
+            SignalPool::bus_address = _mm256_movemask_epi8(
+                _mm256_cmpgt_epi8(_mm256_loadu_si256(p), _mm256_setzero_si256())) & 0xFFFFF;
         }
         static constexpr uint64_t dir_to_digit[] = {0, 0, 1, 0, 2};  // indexed by uint8_t(BidirDir)
         uint64_t perm = 0, mul = 1;
