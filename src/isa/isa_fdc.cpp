@@ -30,9 +30,12 @@ void ISA_FloppyController::on_power_on() {
     result_pos_ = 0;
     sector_offset_ = 0;
     xfer_ptr_ = 0;
+    cur_sector_ = 1;
+    eot_ = 0;
     std::memset(pcn_, 0, sizeof(pcn_));
     pio_mode_ = false;
     irq_pending_ = false;
+    reset_sense_ = false;
 }
 
 // =========================================================================
@@ -88,9 +91,12 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
                     val = image_[sector_offset_ + xfer_ptr_];
                 xfer_ptr_++;
                 if (xfer_ptr_ >= sector_size_) {
-                    // All bytes read -- transition to result phase.
-                    spdlog::info("[{}] PIO complete: {} bytes transferred", name(), xfer_ptr_);
-                    build_result_ok();
+                    spdlog::info("[{}] PIO sector complete: sector {} ({} bytes)", name(), cur_sector_, xfer_ptr_);
+                    if (advance_sector()) {
+                        xfer_ptr_ = 0;  // next sector, keep reading
+                    } else {
+                        build_result_ok();
+                    }
                 }
                 return val;
             }
@@ -119,10 +125,13 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
             bool was_reset = !(old & 0x04);
             bool now_active = (val & 0x04) != 0;
             if (was_reset && now_active) {
-                // Coming out of reset.
+                // Coming out of reset -- real NEC 765 fires IRQ6.
                 phase_ = Phase::Idle;
                 cmd_len_ = 0;
-                irq_pending_ = false;
+                irq_pending_ = true;
+                reset_sense_ = true;
+                if (val & 0x08)  // DMA/IRQ enabled
+                    raise_irq(6);
             } else if (!now_active) {
                 // Entering reset.
                 phase_ = Phase::Idle;
@@ -191,9 +200,15 @@ void ISA_FloppyController::start_command() {
             break;
 
         case 0x08: {  // SENSE INTERRUPT STATUS
-            // Return ST0 + current cylinder for the selected drive.
             uint8_t drive = dor_ & 0x03;
-            result_buf_[0] = 0x20 | drive;  // ST0: seek end + drive
+            if (reset_sense_) {
+                // After reset: ST0 = 0xC0 (polling, drive ready transition).
+                result_buf_[0] = 0xC0 | drive;
+                reset_sense_ = false;
+            } else {
+                // After seek/recal: ST0 = 0x20 (seek end, normal).
+                result_buf_[0] = 0x20 | drive;
+            }
             result_buf_[1] = pcn_[drive];   // PCN (current cylinder)
             result_len_ = 2;
             result_pos_ = 0;
@@ -226,6 +241,25 @@ void ISA_FloppyController::start_command() {
             break;
         }
 
+        case 0x0A: {  // READ ID
+            uint8_t drive = cmd_buf_[1] & 0x03;
+            uint8_t head  = (cmd_buf_[1] >> 2) & 0x01;
+            // Return the current position (next sector on the track).
+            result_buf_[0] = 0x00;  // ST0: normal
+            result_buf_[1] = 0x00;  // ST1
+            result_buf_[2] = 0x00;  // ST2
+            result_buf_[3] = pcn_[drive];
+            result_buf_[4] = head;
+            result_buf_[5] = 1;     // sector 1 (simulated -- head always at sector 1)
+            result_buf_[6] = 2;     // N=2 (512 bytes)
+            result_len_ = 7;
+            result_pos_ = 0;
+            phase_ = Phase::Result;
+            if (dor_ & 0x08)
+                raise_irq(6);
+            break;
+        }
+
         default:
             phase_ = Phase::Idle;
             cmd_len_ = 0;
@@ -242,11 +276,13 @@ void ISA_FloppyController::execute_read_data() {
     int n      = cmd_buf_[5];  // sector size code: 2 = 512
 
     sector_size_ = (n == 0) ? 128 : (128u << n);
+    cur_sector_ = sector;
+    eot_ = cmd_buf_[6];
     sector_offset_ = chs_to_offset(cyl, head, sector);
     xfer_ptr_ = 0;
 
-    spdlog::info("[{}] READ DATA: C={} H={} R={} N={} size={} offset=0x{:05X}",
-                 name(), cyl, head, sector, n, sector_size_, sector_offset_);
+    spdlog::info("[{}] READ DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X}",
+                 name(), cyl, head, sector, n, eot_, sector_size_, sector_offset_);
 
     if (sector_offset_ + sector_size_ > image_.size()) {
         spdlog::error("[{}] READ DATA: sector beyond image end", name());
@@ -287,23 +323,43 @@ uint8_t ISA_FloppyController::on_dma_read() {
 }
 
 void ISA_FloppyController::on_dma_complete(int /*channel*/) {
-    spdlog::info("[{}] DMA complete: {} bytes transferred", name(), xfer_ptr_);
-    build_result_ok();
+    spdlog::info("[{}] DMA sector complete: sector {} ({} bytes)", name(), cur_sector_, xfer_ptr_);
+    if (advance_sector()) {
+        // More sectors to transfer -- start next sector.
+        xfer_ptr_ = 0;
+        assert_drq(2);
+    } else {
+        build_result_ok();
+    }
+}
+
+bool ISA_FloppyController::advance_sector() {
+    if (cur_sector_ >= eot_)
+        return false;  // reached end of track
+
+    cur_sector_++;
+    int cyl  = cmd_buf_[2];
+    int head = cmd_buf_[3];
+    sector_offset_ = chs_to_offset(cyl, head, cur_sector_);
+
+    if (sector_offset_ + sector_size_ > image_.size())
+        return false;  // next sector beyond image
+
+    return true;
 }
 
 void ISA_FloppyController::build_result_ok() {
     // Build result phase (7 bytes): ST0, ST1, ST2, C, H, R, N
-    int cyl    = cmd_buf_[2];
-    int head   = cmd_buf_[3];
-    int sector = cmd_buf_[4];
-    int n      = cmd_buf_[5];
+    int cyl  = cmd_buf_[2];
+    int head = cmd_buf_[3];
+    int n    = cmd_buf_[5];
 
     result_buf_[0] = 0x00;  // ST0: normal
     result_buf_[1] = 0x00;  // ST1: no errors
     result_buf_[2] = 0x00;  // ST2: no errors
     result_buf_[3] = static_cast<uint8_t>(cyl);
     result_buf_[4] = static_cast<uint8_t>(head);
-    result_buf_[5] = static_cast<uint8_t>(sector + 1);  // next sector
+    result_buf_[5] = static_cast<uint8_t>(cur_sector_ + 1);  // next sector
     result_buf_[6] = static_cast<uint8_t>(n);
     result_len_ = 7;
     result_pos_ = 0;

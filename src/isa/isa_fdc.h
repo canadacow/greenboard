@@ -14,8 +14,8 @@ namespace bench {
 //   0x3F4  MSR   Main Status Register (read)
 //   0x3F5  FIFO  Data Register (command/result bytes)
 //
-// Supports READ DATA command only (enough for boot sector reads).
-// Loads a raw disk image at construction time.
+// Supports: READ DATA (multi-sector), SPECIFY, RECALIBRATE, SEEK,
+// SENSE INTERRUPT STATUS, READ ID. Loads a raw disk image at construction.
 class ISA_FloppyController final : public ISA_Adapter {
 public:
     // disk_image: raw sector image (e.g. 360K .img file).
@@ -61,17 +61,20 @@ private:
     int result_len_ = 0;       // total result bytes
     int result_pos_ = 0;       // next result byte to return
 
-    // Execution state (sector read -- shared by DMA and PIO)
+    // Execution state (sector read/write -- shared by DMA and PIO)
     uint32_t sector_offset_ = 0;  // byte offset into image for current sector
     uint16_t sector_size_ = 512;
-    uint16_t xfer_ptr_ = 0;       // bytes transferred so far (DMA or PIO)
+    uint16_t xfer_ptr_ = 0;       // bytes transferred so far within current sector
     bool pio_mode_ = false;        // true when DOR bit 3 is clear (no DMA)
+    int cur_sector_ = 1;          // current 1-based sector number (advances multi-sector)
+    int eot_ = 0;                 // end-of-track sector number from command
 
     // Current cylinder per drive (for SENSE INTERRUPT STATUS)
     uint8_t pcn_[4] = {};
 
     // Interrupt pending
     bool irq_pending_ = false;
+    bool reset_sense_ = false;  // true = next SENSE INT returns 0xC0 (reset)
 
     // MSR computation
     uint8_t read_msr() const;
@@ -80,6 +83,7 @@ private:
     void start_command();
     void execute_read_data();
     void build_result_ok();
+    bool advance_sector();  // move to next sector; returns false if past EOT
 
     // CHS -> byte offset
     uint32_t chs_to_offset(int cyl, int head, int sector) const;

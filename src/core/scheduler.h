@@ -251,7 +251,7 @@ public:
         if (paused_.load(std::memory_order_relaxed)) [[unlikely]]
             pause_gate();
 
-        #if 1
+        #if 0
         // Auto-pause on VS debugger resume: if wall time between two cycles
         // exceeds ~50ms worth of TSC ticks, a debugger must have frozen us.
         // __rdtsc() is ~1 cycle, so this is essentially free.
