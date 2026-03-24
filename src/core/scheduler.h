@@ -250,6 +250,18 @@ public:
         if (paused_.load(std::memory_order_relaxed)) [[unlikely]]
             pause_gate();
 
+        #if 0
+        // Auto-pause on VS debugger resume: if wall time between two cycles
+        // exceeds ~50ms worth of TSC ticks, a debugger must have frozen us.
+        // __rdtsc() is ~1 cycle, so this is essentially free.
+        {
+            uint64_t now = __rdtsc();
+            if (dbg_last_tsc_ && (now - dbg_last_tsc_) > dbg_tsc_threshold_) [[unlikely]]
+                paused_.store(true, std::memory_order_relaxed);
+            dbg_last_tsc_ = now;
+        }
+        #endif
+
         // Select DAG permutation by checking bidir block lambdas.
         // Map BidirDir bit flags to base-3 digits: HiZ(1)->0, Input(2)->1, Output(4)->2.
         // Lambdas may read pin levels -- suspend validation during selection.
@@ -366,6 +378,7 @@ public:
     void pause()  { paused_.store(true, std::memory_order_relaxed); }
     void resume() {
         paused_.store(false, std::memory_order_relaxed);
+        dbg_last_tsc_ = 0;  // reset so first cycle after resume doesn't re-trigger
         dbg_wake_.store(1, std::memory_order_release);
     }
     // Step one CLK cycle.
@@ -396,6 +409,10 @@ private:
     std::atomic<int>  dbg_wake_{0};   // written by UI to break umwait
     const uint16_t*   dbg_ip_ptr_ = nullptr;
     uint16_t          dbg_ip_start_ = 0;
+    uint64_t          dbg_last_tsc_ = 0;
+    // ~50ms at 3GHz = 150M ticks. Conservative -- any cycle gap this large
+    // means a debugger froze us (normal cycle is ~600 ticks at 4.77MHz).
+    uint64_t          dbg_tsc_threshold_ = 150'000'000;
 
     // Block the clock thread while paused, using umwait to sleep efficiently.
     // Called at the top of evaluate(); predicted-not-taken when running normally.

@@ -124,6 +124,9 @@ int main() {
     mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
                        &scheduler, board.cpu, &memview, board.dma_ic);
 
+    // Start paused so the debugger is immediately usable.
+    scheduler.pause();
+
     // --- Power on ---
     spdlog::info("=== Power on ===");
     spdlog::info("SW1: 0x{:02X}  SW2: 0x{:02X}",
@@ -138,6 +141,7 @@ int main() {
 
     // --- Power off ---
     spdlog::info("=== Power off ===");
+    scheduler.resume();  // unblock pause_gate so the clock thread can exit
     board.clk_gen->psu_power_off();
     board.clk_gen->power_off();
     mda_display.stop();

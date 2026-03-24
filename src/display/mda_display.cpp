@@ -311,11 +311,10 @@ void DxState::render_overlay() {
     if (ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false) && dbg_visible)
         *dbg_visible = !*dbg_visible;
 
-    // --- Stats HUD (bottom-right, passive) ---
+    // --- Stats HUD (bottom-right, clickable to pause/resume) ---
     {
         ImGuiWindowFlags flags =
             ImGuiWindowFlags_NoDecoration |
-            ImGuiWindowFlags_NoInputs |
             ImGuiWindowFlags_NoNav |
             ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoSavedSettings |
@@ -333,6 +332,10 @@ void DxState::render_overlay() {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "PAUSED");
         else
             ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%.2f MHz", effective_mhz);
+        if (scheduler && ImGui::IsItemClicked()) {
+            if (paused) scheduler->resume(); else scheduler->pause();
+            if (dbg_visible) *dbg_visible = !paused;
+        }
         ImGui::End();
     }
 
