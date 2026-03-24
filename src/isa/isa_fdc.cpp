@@ -36,6 +36,11 @@ void ISA_FloppyController::on_power_on() {
     pio_mode_ = false;
     irq_pending_ = false;
     reset_sense_ = false;
+    format_mode_ = false;
+    format_fill_ = 0;
+    format_spt_ = 0;
+    format_n_ = 0;
+    format_fields_received_ = 0;
 }
 
 // =========================================================================
@@ -140,7 +145,22 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
             break;
         }
 
-        case 0x3F5: {  // FIFO (command phase)
+        case 0x3F5: {  // FIFO
+            // PIO write execution: accept data bytes from CPU.
+            if (phase_ == Phase::Execution && pio_mode_) {
+                if (sector_offset_ + xfer_ptr_ < image_.size())
+                    image_[sector_offset_ + xfer_ptr_] = val;
+                xfer_ptr_++;
+                if (xfer_ptr_ >= sector_size_) {
+                    spdlog::info("[{}] PIO write sector complete: sector {} ({} bytes)", name(), cur_sector_, xfer_ptr_);
+                    if (advance_sector()) {
+                        xfer_ptr_ = 0;
+                    } else {
+                        build_result_ok();
+                    }
+                }
+                break;
+            }
             if (phase_ == Phase::Idle || phase_ == Phase::Command) {
                 if (phase_ == Phase::Idle) {
                     // First byte: determine command and expected length.
@@ -148,8 +168,12 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                     cmd_len_ = 0;
                     uint8_t cmd_id = val & 0x1F;  // mask MT/MF/SK bits
                     switch (cmd_id) {
+                        case 0x05:  // WRITE DATA
                         case 0x06:  // READ DATA
                             cmd_expected_ = 9;
+                            break;
+                        case 0x0D:  // FORMAT TRACK
+                            cmd_expected_ = 6;
                             break;
                         case 0x08:  // SENSE INTERRUPT STATUS
                             cmd_expected_ = 1;
@@ -195,8 +219,16 @@ void ISA_FloppyController::on_mmio_write(uint32_t /*addr*/, uint8_t /*val*/) {}
 void ISA_FloppyController::start_command() {
     uint8_t cmd_id = cmd_buf_[0] & 0x1F;
     switch (cmd_id) {
+        case 0x05:  // WRITE DATA
+            execute_write_data();
+            break;
+
         case 0x06:  // READ DATA
             execute_read_data();
+            break;
+
+        case 0x0D:  // FORMAT TRACK
+            execute_format_track();
             break;
 
         case 0x08: {  // SENSE INTERRUPT STATUS
@@ -308,6 +340,77 @@ void ISA_FloppyController::execute_read_data() {
     }
 }
 
+void ISA_FloppyController::execute_write_data() {
+    // Same parameter layout as READ DATA:
+    //   [0] command  [1] HD|DS  [2] C  [3] H  [4] R  [5] N  [6] EOT  [7] GPL  [8] DTL
+    int cyl    = cmd_buf_[2];
+    int head   = cmd_buf_[3];
+    int sector = cmd_buf_[4];
+    int n      = cmd_buf_[5];
+
+    sector_size_ = (n == 0) ? 128 : (128u << n);
+    cur_sector_ = sector;
+    eot_ = cmd_buf_[6];
+    sector_offset_ = chs_to_offset(cyl, head, sector);
+    xfer_ptr_ = 0;
+    format_mode_ = false;
+
+    spdlog::info("[{}] WRITE DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X}",
+                 name(), cyl, head, sector, n, eot_, sector_size_, sector_offset_);
+
+    if (sector_offset_ + sector_size_ > image_.size()) {
+        spdlog::error("[{}] WRITE DATA: sector beyond image end", name());
+        std::memset(result_buf_, 0, sizeof(result_buf_));
+        result_buf_[0] = 0x40;
+        result_buf_[1] = 0x04;
+        result_len_ = 7;
+        result_pos_ = 0;
+        phase_ = Phase::Result;
+        return;
+    }
+
+    phase_ = Phase::Execution;
+    pio_mode_ = !(dor_ & 0x08);
+
+    if (pio_mode_) {
+        spdlog::info("[{}] PIO WRITE mode: {} bytes to transfer", name(), sector_size_);
+    } else {
+        assert_drq_write(2);
+    }
+}
+
+void ISA_FloppyController::execute_format_track() {
+    // FORMAT TRACK command bytes:
+    //   [0] command  [1] HD|DS  [2] N  [3] SC (sectors/track)  [4] GPL  [5] D (fill byte)
+    format_n_ = cmd_buf_[2];
+    format_spt_ = cmd_buf_[3];
+    format_fill_ = cmd_buf_[5];
+    format_mode_ = true;
+    format_fields_received_ = 0;
+
+    // Use the drive's head from cmd_buf_[1] and current cylinder from PCN.
+    uint8_t drive = cmd_buf_[1] & 0x03;
+    uint8_t head  = (cmd_buf_[1] >> 2) & 0x01;
+    int cyl = pcn_[drive];
+
+    // Store C/H in cmd_buf_[2]/[3] so build_result_ok can reference them.
+    cmd_buf_[2] = static_cast<uint8_t>(cyl);
+    cmd_buf_[3] = head;
+    cmd_buf_[5] = static_cast<uint8_t>(format_n_);
+
+    sector_size_ = (format_n_ == 0) ? 128 : (128u << format_n_);
+    cur_sector_ = format_spt_;
+    eot_ = format_spt_;
+    xfer_ptr_ = 0;
+
+    spdlog::info("[{}] FORMAT TRACK: C={} H={} N={} SC={} fill=0x{:02X}",
+                 name(), cyl, head, format_n_, format_spt_, format_fill_);
+
+    phase_ = Phase::Execution;
+    pio_mode_ = false;
+    assert_drq_write(2);
+}
+
 // =========================================================================
 // DMA
 // =========================================================================
@@ -327,8 +430,40 @@ uint8_t ISA_FloppyController::on_dma_read() {
     return byte;
 }
 
+void ISA_FloppyController::on_dma_write(uint8_t val) {
+    spdlog::trace("[{}] on_dma_write: byte=0x{:02X} xfer_ptr={} sector={} format={}",
+                  name(), val, xfer_ptr_, cur_sector_, format_mode_);
+    if (format_mode_) {
+        // FORMAT TRACK: receive 4-byte address fields (C, H, R, N) per sector,
+        // then fill the sector with the fill byte.
+        // We ignore the address field content -- just count them.
+        format_fields_received_++;
+        if (format_fields_received_ % 4 == 0) {
+            // Completed one address field (4 bytes). Fill a sector.
+            int sec_idx = format_fields_received_ / 4;  // 1-based
+            uint32_t offset = chs_to_offset(cmd_buf_[2], (cmd_buf_[1] >> 2) & 1, sec_idx);
+            uint32_t sz = (format_n_ == 0) ? 128 : (128u << format_n_);
+            if (offset + sz <= image_.size())
+                std::memset(&image_[offset], format_fill_, sz);
+        }
+    } else {
+        // WRITE DATA: store byte into image.
+        if (sector_offset_ + xfer_ptr_ < image_.size())
+            image_[sector_offset_ + xfer_ptr_] = val;
+        xfer_ptr_++;
+
+        // Multi-sector: advance when sector boundary crossed.
+        if (xfer_ptr_ >= sector_size_ && cur_sector_ < eot_) {
+            advance_sector();
+            xfer_ptr_ = 0;
+        }
+    }
+}
+
 void ISA_FloppyController::on_dma_complete(int /*channel*/) {
-    spdlog::info("[{}] DMA complete: {} sectors transferred", name(), cur_sector_ - cmd_buf_[4] + 1);
+    spdlog::info("[{}] DMA complete: phase={} format={} xfer_ptr={} dor=0x{:02X}",
+                 name(), static_cast<int>(phase_), format_mode_, xfer_ptr_, dor_);
+    format_mode_ = false;
     build_result_ok();
 }
 
@@ -365,8 +500,12 @@ void ISA_FloppyController::build_result_ok() {
     phase_ = Phase::Result;
 
     // Fire IRQ 6 (if DMA/IRQ enabled in DOR).
-    if (dor_ & 0x08)
+    if (dor_ & 0x08) {
+        spdlog::info("[{}] build_result_ok: raising IRQ6, dor=0x{:02X}", name(), dor_);
         raise_irq(6);
+    } else {
+        spdlog::warn("[{}] build_result_ok: DOR bit 3 clear, NOT raising IRQ6, dor=0x{:02X}", name(), dor_);
+    }
 }
 
 // =========================================================================

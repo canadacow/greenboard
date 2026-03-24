@@ -58,8 +58,11 @@ protected:
     virtual uint8_t on_mmio_read(uint32_t addr) = 0;
     virtual void    on_mmio_write(uint32_t addr, uint8_t val) = 0;
 
-    // DMA: provide next byte for transfer. Subclass manages its own pointer.
+    // DMA read: provide next byte for device->memory transfer.
     virtual uint8_t on_dma_read() = 0;
+
+    // DMA write: receive next byte for memory->device transfer.
+    virtual void on_dma_write(uint8_t val) { (void)val; }
 
     // DMA: terminal count fired for this channel.
     virtual void on_dma_complete(int channel) = 0;
@@ -68,7 +71,8 @@ protected:
 
     void raise_irq(int n);
     void lower_irq(int n);
-    void assert_drq(int ch);
+    void assert_drq(int ch);          // device->memory (card drives SD)
+    void assert_drq_write(int ch);    // memory->device (card reads SD)
     void deassert_drq(int ch);
 
     // Bus read helpers (available to subclasses for advanced use).
@@ -111,6 +115,7 @@ private:
 
     // DMA state
     int dma_active_ch_ = -1;
+    bool dma_write_mode_ = false;  // true = memory->device (card receives bytes)
     uint8_t dma_channel_mask_ = 0x0E;  // default: channels 1-3
     uint8_t irq_line_mask_ = 0xFC;    // default: IRQ2-IRQ7
     bool owns_dma(int ch) const { return (dma_channel_mask_ & (1 << ch)) != 0; }

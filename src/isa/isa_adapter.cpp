@@ -90,11 +90,12 @@ void ISA_Adapter::install(IsaSlot& slot) {
         {sd_[0], sd_[1], sd_[2], sd_[3], sd_[4], sd_[5], sd_[6], sd_[7]},
         BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
         [this]() -> BidirDir {
-            // DMA: card drives data when ~DACKn is asserted for our channel.
+            // DMA: card drives data (Output) for device->memory reads,
+            // receives data (Input) for memory->device writes.
             if (dma_active()) {
                 for (int ch = 1; ch <= 3; ++ch)
                     if (dack_[ch].level() == Level::Low && ch == dma_active_ch_)
-                        return BidirDir::Output;
+                        return dma_write_mode_ ? BidirDir::Input : BidirDir::Output;
             }
             auto ior_lev = ior_.level();
             auto iow_lev = iow_.level();
@@ -129,6 +130,7 @@ void ISA_Adapter::on_power_on() {
     memr_prev_ = Level::HiZ;
     memw_prev_ = Level::HiZ;
     dma_active_ch_ = -1;
+    dma_write_mode_ = false;
     dma_ior_count_ = 0;
 }
 
@@ -143,38 +145,53 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     Level tc_cur = tc_.level();
 
     // --- DMA channels 1-3 ---
-    // Consume pending DACK: drive data one cycle after DACK fell.
-    if (dma_dack_pending_) {
-        dma_dack_pending_ = false;
-        uint8_t byte = on_dma_read();
-        drive_sd(byte);
-        dma_ior_count_ = 0;
-    }
-    for (int ch = 1; ch <= 3; ++ch) {
-        if (!owns_dma(ch)) continue;
-        Level dack_cur = dack_[ch].level();
-        // ~DACKn falling edge: defer data drive to next cycle.
-        if (dack_cur == Level::Low && dack_prev_[ch] != Level::Low && dma_active_ch_ == ch) {
-            dma_dack_pending_ = true;
+    if (!dma_write_mode_) {
+        // DMA READ (device -> memory): card drives SD with data from on_dma_read().
+        // Consume pending DACK: drive data one cycle after DACK fell.
+        if (dma_dack_pending_) {
+            dma_dack_pending_ = false;
+            uint8_t byte = on_dma_read();
+            drive_sd(byte);
+            dma_ior_count_ = 0;
         }
-        // ~DACKn rising edge: release data bus.
-        if (dack_cur != Level::Low && dack_prev_[ch] == Level::Low) {
-            release_sd();
+        for (int ch = 1; ch <= 3; ++ch) {
+            if (!owns_dma(ch)) continue;
+            Level dack_cur = dack_[ch].level();
+            if (dack_cur == Level::Low && dack_prev_[ch] != Level::Low && dma_active_ch_ == ch)
+                dma_dack_pending_ = true;
+            if (dack_cur != Level::Low && dack_prev_[ch] == Level::Low)
+                release_sd();
+            dack_prev_[ch] = dack_cur;
         }
-        dack_prev_[ch] = dack_cur;
-    }
-
-    // Block/demand mode: ~DACK stays Low across multiple bytes, 8237A
-    // pulses ~IOR for each byte. Only active when DACK was already Low
-    // on the previous cycle (not a fresh DACK assertion = single mode).
-    if (dma_active() && ior_cur == Level::Low && ior_prev_ != Level::Low) {
-        int ch = dma_active_ch_;
-        if (dack_[ch].level() == Level::Low && dack_prev_[ch] == Level::Low) {
-            if (dma_ior_count_ > 0) {
-                uint8_t byte = on_dma_read();
-                drive_sd(byte);
+        // Block/demand mode: 8237A pulses ~IOR for each byte.
+        if (dma_active() && ior_cur == Level::Low && ior_prev_ != Level::Low) {
+            int ch = dma_active_ch_;
+            if (dack_[ch].level() == Level::Low && dack_prev_[ch] == Level::Low) {
+                if (dma_ior_count_ > 0) {
+                    uint8_t byte = on_dma_read();
+                    drive_sd(byte);
+                }
+                dma_ior_count_++;
             }
-            dma_ior_count_++;
+        }
+    } else {
+        // DMA WRITE (memory -> device): card reads SD on ~IOW pulses.
+        for (int ch = 1; ch <= 3; ++ch) {
+            if (!owns_dma(ch)) continue;
+            dack_prev_[ch] = dack_[ch].level();
+        }
+        if (dma_dack_pending_) {
+            dma_dack_pending_ = false;
+            uint8_t byte = read_sd();
+            spdlog::trace("[{}] DMA write byte: 0x{:02X}", name(), byte);
+            on_dma_write(byte);
+        }
+        if (dma_active() && iow_cur == Level::Low && iow_prev_ != Level::Low) {
+            int ch = dma_active_ch_;
+            if (dack_[ch].level() == Level::Low) {
+                dma_dack_pending_ = true;
+                spdlog::trace("[{}] DMA write: IOW edge, dack pending", name());
+            }
         }
     }
 
@@ -277,6 +294,16 @@ void ISA_Adapter::lower_irq(int n) {
 void ISA_Adapter::assert_drq(int ch) {
     if (ch >= 1 && ch <= 3 && owns_dma(ch)) {
         dma_active_ch_ = ch;
+        dma_write_mode_ = false;
+        if (drq_sig_[ch])
+            drq_sig_[ch]->drive(Level::High);
+    }
+}
+
+void ISA_Adapter::assert_drq_write(int ch) {
+    if (ch >= 1 && ch <= 3 && owns_dma(ch)) {
+        dma_active_ch_ = ch;
+        dma_write_mode_ = true;
         if (drq_sig_[ch])
             drq_sig_[ch]->drive(Level::High);
     }

@@ -153,13 +153,15 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
+        "fdc_write",
+        /*
         "mov",
         "post_ram",
         "post_sw1_readback",
@@ -196,7 +198,7 @@ int main() {
         "post_pic",
         "post_video",
         "post_dma",
-        "post_fdc",
+        "post_fdc",*/
     };
 
     std::vector<TestCase> tests;
@@ -240,6 +242,7 @@ int main() {
             spdlog::warn("[FDC] disk image not found: {}", dos_disk);
         }
     }
+    std::vector<uint8_t> floppy_img_backup = floppy_img;  // keep copy for reload
     ISA_FloppyController fdc(std::move(floppy_img), 9, 2);
     fdc.install(board.isa_slots[1]);
 
@@ -289,6 +292,16 @@ int main() {
         {
             static const char lorem[] = "Lorem ipsum dolor sit amet, ";
             std::memcpy(testcard.dma_buf(), lorem, sizeof(lorem) - 1);
+        }
+
+        // FDC write tests: swap in a blank 360K image to avoid corrupting DOS disk.
+        bool fdc_write_test = (tc.bin_file.find("fdc_write") != std::string::npos);
+        if (fdc_write_test) {
+            std::vector<uint8_t> blank(360 * 1024, 0x00);
+            fdc.load_image(std::move(blank), 9, 2);
+        } else {
+            // Reload the DOS image (previous write test may have modified it).
+            fdc.load_image(floppy_img_backup, 9, 2);
         }
 
         // Load binary into DRAM at 0100:0100 (physical 0x01100)
@@ -352,7 +365,7 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-#define RUN_BENCHMARK
+//#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

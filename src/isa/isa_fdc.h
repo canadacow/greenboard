@@ -14,8 +14,9 @@ namespace bench {
 //   0x3F4  MSR   Main Status Register (read)
 //   0x3F5  FIFO  Data Register (command/result bytes)
 //
-// Supports: READ DATA (multi-sector), SPECIFY, RECALIBRATE, SEEK,
-// SENSE INTERRUPT STATUS, READ ID. Loads a raw disk image at construction.
+// Supports: READ DATA, WRITE DATA, FORMAT TRACK (multi-sector, DMA + PIO),
+// SPECIFY, RECALIBRATE, SEEK, SENSE INTERRUPT STATUS, READ ID.
+// Loads a raw disk image at construction.
 class ISA_FloppyController final : public ISA_Adapter {
 public:
     // disk_image: raw sector image (e.g. 360K .img file).
@@ -36,6 +37,7 @@ protected:
     uint8_t on_mmio_read(uint32_t addr) override;
     void    on_mmio_write(uint32_t addr, uint8_t val) override;
     uint8_t on_dma_read() override;
+    void    on_dma_write(uint8_t val) override;
     void    on_dma_complete(int channel) override;
 
 private:
@@ -68,6 +70,11 @@ private:
     bool pio_mode_ = false;        // true when DOR bit 3 is clear (no DMA)
     int cur_sector_ = 1;          // current 1-based sector number (advances multi-sector)
     int eot_ = 0;                 // end-of-track sector number from command
+    bool format_mode_ = false;    // true during FORMAT TRACK execution
+    uint8_t format_fill_ = 0;    // fill byte for FORMAT TRACK
+    int format_spt_ = 0;         // sectors per track for FORMAT TRACK
+    int format_n_ = 0;           // sector size code for FORMAT TRACK
+    int format_fields_received_ = 0;  // 4-byte address fields received so far
 
     // Current cylinder per drive (for SENSE INTERRUPT STATUS)
     uint8_t pcn_[4] = {};
@@ -82,6 +89,8 @@ private:
     // Command dispatch
     void start_command();
     void execute_read_data();
+    void execute_write_data();
+    void execute_format_track();
     void build_result_ok();
     bool advance_sector();  // move to next sector; returns false if past EOT
 
