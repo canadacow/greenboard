@@ -73,13 +73,6 @@ void IC_74S245::set_driving(Driving driving) {
 }
 
 void IC_74S245::on_cycle(Fiber /*caller*/) {
-    // driving_ is the sole authority (set by bus controller).
-    // No ~G or DIR pin checks -- the controller handles enable/direction.
-    update_outputs();
-}
-
-void IC_74S245::update_outputs() {
-
     // Direction is always set externally by the bus controller (8288/8237A)
     // via set_driving().  We never read the DIR pin -- the controller is the
     // authority, and driving_ feeds the bidir lambda for correct DAG ordering.

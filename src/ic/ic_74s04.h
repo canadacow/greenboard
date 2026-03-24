@@ -27,7 +27,14 @@ namespace bench {
 // Behavior (per gate):
 //   Y = ~A   (TTL: HiZ treated as High input -> Low output)
 //
+// Template parameter MASK: bit N = gate N+1.
+// Only gates with their bit set are evaluated and driven.
+//   U51: 0x01  (gate 1 only)
+//   U83: 0x1B  (gates 1,2,4,5)
+//   U99: 0x2B  (gates 1,2,4,6)
+//
 // Threading: CallbackComponent -- combinational, no fiber.
+template<uint8_t MASK = 0x3F>
 class IC_74S04 : public CallbackComponent {
 public:
     IC_74S04() : CallbackComponent("74S04") { set_description("Hex Inverter"); }
@@ -48,10 +55,12 @@ public:
         };
 
         for (int i = 0; i < 6; ++i) {
-            gates_[i].a = connect_pin(pins[i][0]);
-            gates_[i].y = pin(pins[i][1]);
-            declare_input(gates_[i].a);
-            declare_output(gates_[i].y);
+            if (MASK & (1 << i)) {
+                gates_[i].a = connect_pin(pins[i][0]);
+                gates_[i].y = pin(pins[i][1]);
+                declare_input(gates_[i].a);
+                declare_output(gates_[i].y);
+            }
         }
 
         // VCC
@@ -64,14 +73,14 @@ protected:
 
     void on_power_off() override { }
 
-    void on_cycle(Fiber /*caller*/) override { 
-        gates_[0].y.drive((Level)(-(int)gates_[0].a.level() | (int)Level::High));
-        gates_[1].y.drive((Level)(-(int)gates_[1].a.level() | (int)Level::High));
-        gates_[2].y.drive((Level)(-(int)gates_[2].a.level() | (int)Level::High));
-        gates_[3].y.drive((Level)(-(int)gates_[3].a.level() | (int)Level::High));
-        gates_[4].y.drive((Level)(-(int)gates_[4].a.level() | (int)Level::High));
-        gates_[5].y.drive((Level)(-(int)gates_[5].a.level() | (int)Level::High));
-     }
+    void on_cycle(Fiber /*caller*/) override {
+        if constexpr (MASK & 0x01) gates_[0].y.drive((Level)(-(int)gates_[0].a.level() | (int)Level::High));
+        if constexpr (MASK & 0x02) gates_[1].y.drive((Level)(-(int)gates_[1].a.level() | (int)Level::High));
+        if constexpr (MASK & 0x04) gates_[2].y.drive((Level)(-(int)gates_[2].a.level() | (int)Level::High));
+        if constexpr (MASK & 0x08) gates_[3].y.drive((Level)(-(int)gates_[3].a.level() | (int)Level::High));
+        if constexpr (MASK & 0x10) gates_[4].y.drive((Level)(-(int)gates_[4].a.level() | (int)Level::High));
+        if constexpr (MASK & 0x20) gates_[5].y.drive((Level)(-(int)gates_[5].a.level() | (int)Level::High));
+    }
 
 private:
 

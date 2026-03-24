@@ -58,7 +58,6 @@ protected:
     void on_cycle(Fiber caller) override;
 
 private:
-    void update_outputs();
     void release_outputs();
 
     Pin a_[8];   // A1=pin2 .. A8=pin9
