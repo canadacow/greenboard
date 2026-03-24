@@ -41,40 +41,21 @@ void IC_74S244::install(Socket& socket) {
     declare_input(pin_g2_);
     for (auto& b : grp1_) { declare_input(b.a); declare_input(b.y); declare_output(b.y); }
     for (auto& b : grp2_) { declare_input(b.a); declare_input(b.y); declare_output(b.y); }
-
-    #if 0
-    // Outputs are tri-stated when ~G is High
-    declare_bidir_block({grp1_[0].y, grp1_[1].y, grp1_[2].y, grp1_[3].y},
-                        BidirDir::HiZ | BidirDir::Output,
-                        [this]() { return pin_g1_.level() == Level::Low ? BidirDir::Output : BidirDir::HiZ; });
-    declare_bidir_block({grp2_[0].y, grp2_[1].y, grp2_[2].y, grp2_[3].y},
-                        BidirDir::HiZ | BidirDir::Output,
-                        [this]() { return pin_g2_.level() == Level::Low ? BidirDir::Output : BidirDir::HiZ; });
-    #endif
 }
 
 void IC_74S244::on_power_on() {
-    update_outputs();
 }
 
 void IC_74S244::on_power_off() {
-    for (auto& b : grp1_) b.y.release();
-    for (auto& b : grp2_) b.y.release();
 }
 
 void IC_74S244::on_cycle(Fiber /*caller*/) {
-    update_outputs();
-}
-
-void IC_74S244::update_outputs() {
     bool g1_en = pin_g1_.level() == Level::Low;
     bool g2_en = pin_g2_.level() == Level::Low;
 
     for (auto& b : grp1_) {
         if (g1_en)
             b.y.drive(b.a.level() == Level::High ? Level::High : Level::Low);
-        // When disabled, don't release -- another buffer may be driving the same bus.
-        // The bidir_block already tells the scheduler we're HiZ.
     }
     for (auto& b : grp2_) {
         if (g2_en)

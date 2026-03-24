@@ -49,7 +49,6 @@ protected:
     void on_cycle(Fiber caller) override;
 
 private:
-    void update_outputs();
 
     struct Buffer {
         Pin a, y;    // input, output
