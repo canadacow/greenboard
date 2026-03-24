@@ -4,10 +4,9 @@
 
 namespace bench {
 
-ISA_MDA::ISA_MDA() : ISA_Adapter("MDA") {}
+ISA_MDA::ISA_MDA() {}
 
 void ISA_MDA::on_power_on() {
-    ISA_Adapter::on_power_on();
     std::memset(fb_, 0, FB_SIZE);
     std::memset(crtc_reg_, 0, sizeof(crtc_reg_));
     crtc_index_ = 0;
@@ -43,16 +42,12 @@ uint8_t ISA_MDA::on_io_read(uint16_t port) {
             return mode_;
 
         case 0x3BA: {
-            // Status register.
-            // Bit 0: horizontal retrace (toggles on each read)
-            // Bit 3: video signal (toggles at lower rate)
-            // The BIOS TEST.10 polls for on->off and off->on transitions.
             ++status_counter_;
             uint8_t status = 0;
             if (status_counter_ & 1)
-                status |= 0x01;    // hsync
+                status |= 0x01;
             if (status_counter_ & 4)
-                status |= 0x08;    // video
+                status |= 0x08;
             return status;
         }
 
@@ -93,7 +88,6 @@ uint8_t ISA_MDA::on_mmio_read(uint32_t addr) {
 
 void ISA_MDA::on_mmio_write(uint32_t addr, uint8_t val) {
     uint32_t offset = addr - FB_BASE;
-    uint8_t old = fb_[offset];
     fb_[offset] = val;
 }
 

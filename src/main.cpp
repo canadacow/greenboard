@@ -5,6 +5,7 @@
 // The CPU starts executing at F000:FFF0 (the real reset vector).
 
 #include "board/board_wiring.h"
+#include "isa/isa_bus.h"
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
@@ -37,13 +38,13 @@ int main() {
     Board board;
     board.wire(bios_path, basic_u29, basic_u30, basic_u31, basic_u32);
 
-    // --- ISA cards ---
+    // --- ISA bus + cards ---
+    ISA_Bus isa_bus;
+    isa_bus.install(board.isa_slots[0]);
 
     // J1: Test card (I/O ports 0x80-0xFF, DMA channels 1+3)
     ISA_TestCard testcard;
-    testcard.set_dma_channels(0x0A);
-    testcard.set_irq_lines(0xBC);
-    testcard.install(board.isa_slots[0]);
+    isa_bus.insert_card(0, &testcard, 0x0A, 0xBC);
 
     // J2: Floppy disk controller (DMA channel 2, IRQ 6)
     std::string dos_disk = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
@@ -61,19 +62,17 @@ int main() {
         }
     }
     ISA_FloppyController fdc(std::move(floppy_img), 9, 2);
-    fdc.install(board.isa_slots[1]);
+    isa_bus.insert_card(1, &fdc, 0x04, 0x40);
 
     // J3: MDA card (4KB framebuffer at 0xB0000, I/O 0x3B0-0x3BB)
     ISA_MDA mda;
-    mda.install(board.isa_slots[2]);
+    isa_bus.insert_card(2, &mda);
 
     // --- Scheduler ---
     Scheduler scheduler;
     Signal::set_scheduler(&scheduler);
     board.register_all(scheduler);
-    scheduler.register_callback(&testcard);
-    scheduler.register_callback(&fdc);
-    scheduler.register_callback(&mda);
+    scheduler.register_callback(&isa_bus);
 
     // --- Keyboard ---
     testcard.set_kbd_ready_signal(&board.kbd_ready);

@@ -6,13 +6,10 @@ namespace bench {
 
 ISA_FloppyController::ISA_FloppyController(std::vector<uint8_t> disk_image,
                                            int sectors_per_track, int heads)
-    : ISA_Adapter("ISA-FDC", 0x04, 0x40)  // DMA ch2 (bit 2), IRQ6 (bit 6)
-    , image_(std::move(disk_image))
+    : image_(std::move(disk_image))
     , spt_(sectors_per_track)
     , heads_(heads)
-{
-    set_description("Floppy Disk Controller");
-}
+{}
 
 void ISA_FloppyController::load_image(std::vector<uint8_t> img, int spt, int hds) {
     image_ = std::move(img);
@@ -21,7 +18,6 @@ void ISA_FloppyController::load_image(std::vector<uint8_t> img, int spt, int hds
 }
 
 void ISA_FloppyController::on_power_on() {
-    ISA_Adapter::on_power_on();
     dor_ = 0;
     phase_ = Phase::Idle;
     cmd_len_ = 0;
@@ -96,7 +92,7 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
                     val = image_[sector_offset_ + xfer_ptr_];
                 xfer_ptr_++;
                 if (xfer_ptr_ >= sector_size_) {
-                    spdlog::info("[{}] PIO sector complete: sector {} ({} bytes)", name(), cur_sector_, xfer_ptr_);
+                    spdlog::info("[{}] PIO sector complete: sector {} ({} bytes)", name_, cur_sector_, xfer_ptr_);
                     if (advance_sector()) {
                         xfer_ptr_ = 0;  // next sector, keep reading
                     } else {
@@ -108,7 +104,7 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
             // Result phase: return status bytes.
             if (phase_ == Phase::Result && result_pos_ < result_len_) {
                 if (result_pos_ == 0)
-                    lower_irq(6);
+                    bus_->lower_irq(6);
                 uint8_t val = result_buf_[result_pos_++];
                 if (result_pos_ >= result_len_) {
                     phase_ = Phase::Idle;
@@ -136,7 +132,7 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                 irq_pending_ = true;
                 reset_sense_ = true;
                 if (val & 0x08)  // DMA/IRQ enabled
-                    raise_irq(6);
+                    bus_->raise_irq(6);
             } else if (!now_active) {
                 // Entering reset.
                 phase_ = Phase::Idle;
@@ -152,7 +148,7 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                     image_[sector_offset_ + xfer_ptr_] = val;
                 xfer_ptr_++;
                 if (xfer_ptr_ >= sector_size_) {
-                    spdlog::info("[{}] PIO write sector complete: sector {} ({} bytes)", name(), cur_sector_, xfer_ptr_);
+                    spdlog::info("[{}] PIO write sector complete: sector {} ({} bytes)", name_, cur_sector_, xfer_ptr_);
                     if (advance_sector()) {
                         xfer_ptr_ = 0;
                     } else {
@@ -192,7 +188,7 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                             break;
                         default:
                             cmd_expected_ = 1;  // unknown: just eat 1 byte
-                            spdlog::warn("[{}] unknown FDC command 0x{:02X} (raw=0x{:02X})", name(), cmd_id, val);
+                            spdlog::warn("[{}] unknown FDC command 0x{:02X} (raw=0x{:02X})", name_, cmd_id, val);
                             break;
                     }
                 }
@@ -265,7 +261,7 @@ void ISA_FloppyController::start_command() {
                 // Fire IRQ for seek completion (real FDC does this).
                 if (dor_ & 0x08) {  // DMA/IRQ enabled
                     irq_pending_ = true;
-                    raise_irq(6);
+                    bus_->raise_irq(6);
                 }
             }
             phase_ = Phase::Idle;
@@ -288,7 +284,7 @@ void ISA_FloppyController::start_command() {
             result_pos_ = 0;
             phase_ = Phase::Result;
             if (dor_ & 0x08)
-                raise_irq(6);
+                bus_->raise_irq(6);
             break;
         }
 
@@ -314,10 +310,10 @@ void ISA_FloppyController::execute_read_data() {
     xfer_ptr_ = 0;
 
     spdlog::info("[{}] READ DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X}",
-                 name(), cyl, head, sector, n, eot_, sector_size_, sector_offset_);
+                 name_, cyl, head, sector, n, eot_, sector_size_, sector_offset_);
 
     if (sector_offset_ + sector_size_ > image_.size()) {
-        spdlog::error("[{}] READ DATA: sector beyond image end", name());
+        spdlog::error("[{}] READ DATA: sector beyond image end", name_);
         // Set error in result and skip to result phase.
         std::memset(result_buf_, 0, sizeof(result_buf_));
         result_buf_[0] = 0x40;  // ST0: abnormal termination
@@ -333,10 +329,10 @@ void ISA_FloppyController::execute_read_data() {
     pio_mode_ = !(dor_ & 0x08);  // DOR bit 3 clear = PIO mode
 
     if (pio_mode_) {
-        spdlog::info("[{}] PIO mode: {} bytes to transfer", name(), sector_size_);
+        spdlog::info("[{}] PIO mode: {} bytes to transfer", name_, sector_size_);
         // CPU will poll MSR and read bytes from FIFO.
     } else {
-        assert_drq(2);
+        bus_->assert_drq(2);
     }
 }
 
@@ -356,10 +352,10 @@ void ISA_FloppyController::execute_write_data() {
     format_mode_ = false;
 
     spdlog::info("[{}] WRITE DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X}",
-                 name(), cyl, head, sector, n, eot_, sector_size_, sector_offset_);
+                 name_, cyl, head, sector, n, eot_, sector_size_, sector_offset_);
 
     if (sector_offset_ + sector_size_ > image_.size()) {
-        spdlog::error("[{}] WRITE DATA: sector beyond image end", name());
+        spdlog::error("[{}] WRITE DATA: sector beyond image end", name_);
         std::memset(result_buf_, 0, sizeof(result_buf_));
         result_buf_[0] = 0x40;
         result_buf_[1] = 0x04;
@@ -373,9 +369,9 @@ void ISA_FloppyController::execute_write_data() {
     pio_mode_ = !(dor_ & 0x08);
 
     if (pio_mode_) {
-        spdlog::info("[{}] PIO WRITE mode: {} bytes to transfer", name(), sector_size_);
+        spdlog::info("[{}] PIO WRITE mode: {} bytes to transfer", name_, sector_size_);
     } else {
-        assert_drq_write(2);
+        bus_->assert_drq_write(2);
     }
 }
 
@@ -404,11 +400,11 @@ void ISA_FloppyController::execute_format_track() {
     xfer_ptr_ = 0;
 
     spdlog::info("[{}] FORMAT TRACK: C={} H={} N={} SC={} fill=0x{:02X}",
-                 name(), cyl, head, format_n_, format_spt_, format_fill_);
+                 name_, cyl, head, format_n_, format_spt_, format_fill_);
 
     phase_ = Phase::Execution;
     pio_mode_ = false;
-    assert_drq_write(2);
+    bus_->assert_drq_write(2);
 }
 
 // =========================================================================
@@ -421,7 +417,7 @@ uint8_t ISA_FloppyController::on_dma_read() {
         byte = image_[sector_offset_ + xfer_ptr_];
     if (xfer_ptr_ < 4 || xfer_ptr_ == 511)
         spdlog::info("[{}] READ image[0x{:05X}] = 0x{:02X} (xfer={})",
-                     name(), sector_offset_ + xfer_ptr_, byte, xfer_ptr_);
+                     name_, sector_offset_ + xfer_ptr_, byte, xfer_ptr_);
     xfer_ptr_++;
 
     // Crossed a sector boundary? Advance to next sector so the DMA
@@ -435,7 +431,7 @@ uint8_t ISA_FloppyController::on_dma_read() {
 
 void ISA_FloppyController::on_dma_write(uint8_t val) {
     spdlog::trace("[{}] on_dma_write: byte=0x{:02X} xfer_ptr={} sector={} format={}",
-                  name(), val, xfer_ptr_, cur_sector_, format_mode_);
+                  name_, val, xfer_ptr_, cur_sector_, format_mode_);
     if (format_mode_) {
         // FORMAT TRACK: receive 4-byte address fields (C, H, R, N) per sector,
         // then fill the sector with the fill byte.
@@ -456,7 +452,7 @@ void ISA_FloppyController::on_dma_write(uint8_t val) {
             image_[idx] = val;
             if (xfer_ptr_ < 4 || xfer_ptr_ == 511)
                 spdlog::info("[{}] WRITE image[0x{:05X}] = 0x{:02X} (xfer={})",
-                             name(), idx, val, xfer_ptr_);
+                             name_, idx, val, xfer_ptr_);
         }
         xfer_ptr_++;
 
@@ -470,7 +466,7 @@ void ISA_FloppyController::on_dma_write(uint8_t val) {
 
 void ISA_FloppyController::on_dma_complete(int /*channel*/) {
     spdlog::info("[{}] DMA complete: phase={} format={} xfer_ptr={} dor=0x{:02X}",
-                 name(), static_cast<int>(phase_), format_mode_, xfer_ptr_, dor_);
+                 name_, static_cast<int>(phase_), format_mode_, xfer_ptr_, dor_);
     format_mode_ = false;
     build_result_ok();
 }
@@ -509,10 +505,10 @@ void ISA_FloppyController::build_result_ok() {
 
     // Fire IRQ 6 (if DMA/IRQ enabled in DOR).
     if (dor_ & 0x08) {
-        spdlog::info("[{}] build_result_ok: raising IRQ6, dor=0x{:02X}", name(), dor_);
-        raise_irq(6);
+        spdlog::info("[{}] build_result_ok: raising IRQ6, dor=0x{:02X}", name_, dor_);
+        bus_->raise_irq(6);
     } else {
-        spdlog::warn("[{}] build_result_ok: DOR bit 3 clear, NOT raising IRQ6, dor=0x{:02X}", name(), dor_);
+        spdlog::warn("[{}] build_result_ok: DOR bit 3 clear, NOT raising IRQ6, dor=0x{:02X}", name_, dor_);
     }
 }
 

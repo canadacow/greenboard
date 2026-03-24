@@ -1,5 +1,6 @@
 #pragma once
-#include "isa/isa_adapter.h"
+#include "isa/isa_card.h"
+#include "isa/isa_bus.h"
 #include <vector>
 #include <cstdint>
 
@@ -17,19 +18,20 @@ namespace bench {
 // Supports: READ DATA, WRITE DATA, FORMAT TRACK (multi-sector, DMA + PIO),
 // SPECIFY, RECALIBRATE, SEEK, SENSE INTERRUPT STATUS, READ ID.
 // Loads a raw disk image at construction.
-class ISA_FloppyController final : public ISA_Adapter {
+class ISA_FloppyController final : public ISA_Card {
 public:
     // disk_image: raw sector image (e.g. 360K .img file).
     // sectors_per_track, heads: geometry for CHS -> LBA translation.
     ISA_FloppyController(std::vector<uint8_t> disk_image,
                          int sectors_per_track = 9, int heads = 2);
 
+    const std::string& card_name() const override { return name_; }
+
     // Load a disk image after construction.
     void load_image(std::vector<uint8_t> img, int spt, int hds);
 
-protected:
+    // ISA_Card overrides
     void on_power_on() override;
-
     bool claims_port(uint16_t port) override;
     bool claims_mmio(uint32_t addr) override;
     uint8_t on_io_read(uint16_t port) override;
@@ -41,13 +43,15 @@ protected:
     void    on_dma_complete(int channel) override;
 
 private:
+    std::string name_{"ISA-FDC"};
+
     // Disk image
     std::vector<uint8_t> image_;
-    int spt_ = 9;    // sectors per track
+    int spt_ = 9;
     int heads_ = 2;
 
     // FDC registers
-    uint8_t dor_ = 0;    // Digital Output Register
+    uint8_t dor_ = 0;
 
     // FDC state machine
     enum class Phase { Idle, Command, Execution, Result };
@@ -55,33 +59,33 @@ private:
 
     // Command buffer
     uint8_t cmd_buf_[9] = {};
-    int cmd_len_ = 0;          // bytes received so far
-    int cmd_expected_ = 0;     // total bytes expected for current command
+    int cmd_len_ = 0;
+    int cmd_expected_ = 0;
 
     // Result buffer
     uint8_t result_buf_[7] = {};
-    int result_len_ = 0;       // total result bytes
-    int result_pos_ = 0;       // next result byte to return
+    int result_len_ = 0;
+    int result_pos_ = 0;
 
     // Execution state (sector read/write -- shared by DMA and PIO)
-    uint32_t sector_offset_ = 0;  // byte offset into image for current sector
+    uint32_t sector_offset_ = 0;
     uint16_t sector_size_ = 512;
-    uint16_t xfer_ptr_ = 0;       // bytes transferred so far within current sector
-    bool pio_mode_ = false;        // true when DOR bit 3 is clear (no DMA)
-    int cur_sector_ = 1;          // current 1-based sector number (advances multi-sector)
-    int eot_ = 0;                 // end-of-track sector number from command
-    bool format_mode_ = false;    // true during FORMAT TRACK execution
-    uint8_t format_fill_ = 0;    // fill byte for FORMAT TRACK
-    int format_spt_ = 0;         // sectors per track for FORMAT TRACK
-    int format_n_ = 0;           // sector size code for FORMAT TRACK
-    int format_fields_received_ = 0;  // 4-byte address fields received so far
+    uint16_t xfer_ptr_ = 0;
+    bool pio_mode_ = false;
+    int cur_sector_ = 1;
+    int eot_ = 0;
+    bool format_mode_ = false;
+    uint8_t format_fill_ = 0;
+    int format_spt_ = 0;
+    int format_n_ = 0;
+    int format_fields_received_ = 0;
 
     // Current cylinder per drive (for SENSE INTERRUPT STATUS)
     uint8_t pcn_[4] = {};
 
     // Interrupt pending
     bool irq_pending_ = false;
-    bool reset_sense_ = false;  // true = next SENSE INT returns 0xC0 (reset)
+    bool reset_sense_ = false;
 
     // MSR computation
     uint8_t read_msr() const;
@@ -92,7 +96,7 @@ private:
     void execute_write_data();
     void execute_format_track();
     void build_result_ok();
-    bool advance_sector();  // move to next sector; returns false if past EOT
+    bool advance_sector();
 
     // CHS -> byte offset
     uint32_t chs_to_offset(int cyl, int head, int sector) const;

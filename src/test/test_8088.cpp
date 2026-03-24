@@ -16,6 +16,7 @@
 // (physical 0x01100) in DRAM. DS=SS=0 after reset. Results checked at 0x0500+.
 
 #include "board/board_wiring.h"
+#include "isa/isa_bus.h"
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
@@ -220,12 +221,13 @@ int main() {
     auto& dram = board.dram;
     auto& all_traces = board.all_traces;
 
-    // ISA Test Card: plugs into J1, handles I/O ports > 0x7F and test IRQ triggers.
-    // DMA channels 1+3 only -- channel 2 belongs to the FDC.
+    // ISA bus: single component for all expansion cards.
+    ISA_Bus isa_bus;
+    isa_bus.install(board.isa_slots[0]);
+
+    // ISA Test Card: J1, I/O ports > 0x7F, DMA ch1+3, IRQ2-5,7.
     ISA_TestCard testcard;
-    testcard.set_dma_channels(0x0A);  // bits 1,3 = channels 1 and 3
-    testcard.set_irq_lines(0xBC);     // IRQ2-5,7 (not IRQ6 -- FDC owns it)
-    testcard.install(board.isa_slots[0]);
+    isa_bus.insert_card(0, &testcard, 0x0A, 0xBC);
 
     // Floppy Disk Controller: plugs into J2, uses DMA channel 2, IRQ 6.
     std::string dos_disk = std::string(ASSETS_DIR) + "/IBM DOS 3.30 360K Disks - Disk 01.img";
@@ -244,11 +246,11 @@ int main() {
     }
     std::vector<uint8_t> floppy_img_backup = floppy_img;  // keep copy for reload
     ISA_FloppyController fdc(std::move(floppy_img), 9, 2);
-    fdc.install(board.isa_slots[1]);
+    isa_bus.insert_card(1, &fdc, 0x04, 0x40);  // DMA ch2, IRQ6
 
-    // MDA card: plugs into J3, provides 4KB framebuffer at 0xB0000.
+    // MDA card: J3, framebuffer at 0xB0000.
     ISA_MDA mda;
-    mda.install(board.isa_slots[2]);
+    isa_bus.insert_card(2, &mda);
 
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
     // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.
@@ -256,9 +258,7 @@ int main() {
     Scheduler scheduler;
     Signal::set_scheduler(&scheduler);
     board.register_all(scheduler);
-    scheduler.register_callback(&testcard);
-    scheduler.register_callback(&fdc);
-    scheduler.register_callback(&mda);
+    scheduler.register_callback(&isa_bus);
 
     // Keyboard: bypasses U24 serial shift register, drives PA0-PA7 + IRQ1 directly.
     // Armed by test program writing to testcard port 0xFC.

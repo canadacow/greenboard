@@ -1,5 +1,6 @@
 #pragma once
-#include "isa/isa_adapter.h"
+#include "isa/isa_card.h"
+#include "isa/isa_bus.h"
 #include "test/test_keyboard.h"
 #include <cstring>
 #include <memory>
@@ -17,9 +18,11 @@ namespace bench {
 //     Port 0xF5: write channel (1-3) = deassert DRQn
 //     Port 0xF6: write IRQ number (2-7) for DMA completion notification
 //     The card drives sequential bytes from dma_buf_ on each ~DACKn pulse.
-class ISA_TestCard final : public ISA_Adapter {
+class ISA_TestCard final : public ISA_Card {
 public:
     ISA_TestCard();
+
+    const std::string& card_name() const override { return name_; }
 
     // Public accessors for test harness.
     uint8_t* io_data() { return io_.get(); }
@@ -37,11 +40,8 @@ public:
     static constexpr int DMA_BUF_SIZE = 256;
     uint8_t* dma_buf() { return dma_buf_; }
 
-
-protected:
+    // ISA_Card overrides
     void on_power_on() override;
-
-    // ISA_Adapter virtual overrides
     bool claims_port(uint16_t port) override;
     bool claims_mmio(uint32_t addr) override { return false; }
     uint8_t on_io_read(uint16_t port) override;
@@ -52,6 +52,8 @@ protected:
     void    on_dma_complete(int channel) override;
 
 private:
+    std::string name_{"ISA-TestCard"};
+
     // I/O port space (full 64K for test flexibility)
     std::unique_ptr<uint8_t[]> io_ = std::make_unique<uint8_t[]>(1 << 16);
 
@@ -61,10 +63,9 @@ private:
     uint8_t dma_irq_ = 5;  // IRQ to fire on DMA completion (default IRQ5)
 
     // Keyboard signals and component (optional)
-    Signal* kbd_ready_ = nullptr;   // driven High on port 0xFC write
-    Signal* kbd_ack_ = nullptr;     // pulsed on port 0xFD write
-    TestKeyboard* keyboard_ = nullptr;  // for port 0xFB scancode enqueue
-
+    Signal* kbd_ready_ = nullptr;
+    Signal* kbd_ack_ = nullptr;
+    TestKeyboard* keyboard_ = nullptr;
 };
 
 } // namespace bench
