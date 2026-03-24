@@ -50,6 +50,9 @@ struct Board {
     int la_block_  = SignalPool::allocate_block(24); // LA0-LA19 + 4 dummy: 74S373 Q outputs (BRD "A0-A19")
     int xa_block_  = SignalPool::allocate_block(24); // XA0-XA19 + 4 dummy: buffered via U15/U16/U17 (BRD "XA0-XA19")
     int d_block_   = SignalPool::allocate_block(8);  // D0-D7: system data bus (U18 74S373 D inputs)
+    int md_block_  = SignalPool::allocate_block(8);  // MD0-MD7: DRAM data bus (U12 B side)
+    int u14_a_block_ = SignalPool::allocate_block(8); // U14 A: ~IOR,~IOW,~MEMR,~MEMW + 4 pad
+    int u14_b_block_ = SignalPool::allocate_block(8); // U14 B: ~XIOR,~XIOW,~XMEMR,~XMEMW + 4 pad
 
     Signal vcc{"+5V"}, gnd{"GND"}, clk{"CLK"}, reset{"RESET"};
     Signal ready{"READY"}, nmi{"NMI", u97_block_}, intr{"INTR"}, test_pin{"~TEST"};
@@ -60,8 +63,9 @@ struct Board {
 
     // 8288 bus controller output signals
     Signal ale{"ALE"}, den{"~DEN"}, dtr{"DT/~R"};
-    Signal memr{"~MEMR"}, memw{"~MEMW"};
-    Signal ior_sig{"~IOR"}, iow_sig{"~IOW"}, inta_sig{"~INTA"};
+    Signal ior_sig{"~IOR", u14_a_block_}, iow_sig{"~IOW", u14_a_block_ + 1};
+    Signal memr{"~MEMR", u14_a_block_ + 2}, memw{"~MEMW", u14_a_block_ + 3};
+    Signal inta_sig{"~INTA"};
 
     // X-side signals: buffered through U13 (data) and U14 (control).
     // These reach PIT, PIC, DMA, ROMs, PPI, and other motherboard ICs.
@@ -71,7 +75,8 @@ struct Board {
     Signal xd4{"XD4", xd_block_ + 4}, xd5{"XD5", xd_block_ + 5};
     Signal xd6{"XD6", xd_block_ + 6}, xd7{"XD7", xd_block_ + 7};
     Signal* xd_arr[8] = {&xd0, &xd1, &xd2, &xd3, &xd4, &xd5, &xd6, &xd7};
-    Signal xior{"~XIOR"}, xiow{"~XIOW"}, xmemr{"~XMEMR"}, xmemw{"~XMEMW"};
+    Signal xior{"~XIOR", u14_b_block_}, xiow{"~XIOW", u14_b_block_ + 1};
+    Signal xmemr{"~XMEMR", u14_b_block_ + 2}, xmemw{"~XMEMW", u14_b_block_ + 3};
     Signal n_000290{"N-000290"};      // U27 gate 1 output -> U13 DIR
     // N-000304 is the ~XMEMW net through a series termination resistor.
     // Alias it to xmemw since we don't model the resistor.
@@ -129,8 +134,10 @@ struct Board {
     Signal dram_we{"~WE_DRAM"};
     Signal u83_mid{"U83_1_2"};  // intermediate: U83 pin2 -> pin3
     Signal addr_sel{"ADDR_SEL"};
-    Signal md0{"MD0"}, md1{"MD1"}, md2{"MD2"}, md3{"MD3"};
-    Signal md4{"MD4"}, md5{"MD5"}, md6{"MD6"}, md7{"MD7"};
+    Signal md0{"MD0", md_block_},     md1{"MD1", md_block_ + 1};
+    Signal md2{"MD2", md_block_ + 2}, md3{"MD3", md_block_ + 3};
+    Signal md4{"MD4", md_block_ + 4}, md5{"MD5", md_block_ + 5};
+    Signal md6{"MD6", md_block_ + 6}, md7{"MD7", md_block_ + 7};
     Signal mdp{"MDP"};
     Signal* md_arr[8] = {&md0, &md1, &md2, &md3, &md4, &md5, &md6, &md7};
 
@@ -263,6 +270,16 @@ struct Board {
     Signal u7_q_pad[4] = {
         Signal("U7_Q4", la_block_ + 20), Signal("U7_Q5", la_block_ + 21),
         Signal("U7_Q6", la_block_ + 22), Signal("U7_Q7", la_block_ + 23),
+    };
+
+    // U14 only uses 4 of 8 channels. Pad with dummies to keep PinBlock<8> contiguous.
+    Signal u14_a_pad[4] = {
+        Signal("U14_A5", u14_a_block_ + 4), Signal("U14_A6", u14_a_block_ + 5),
+        Signal("U14_A7", u14_a_block_ + 6), Signal("U14_A8", u14_a_block_ + 7),
+    };
+    Signal u14_b_pad[4] = {
+        Signal("U14_B5", u14_b_block_ + 4), Signal("U14_B6", u14_b_block_ + 5),
+        Signal("U14_B7", u14_b_block_ + 6), Signal("U14_B8", u14_b_block_ + 7),
     };
 
     // ROM-specific signals
@@ -568,13 +585,21 @@ struct Board {
         // Our IC_74S245 swaps: pin 1=~G, pin 19=DIR.
         // So wire: pin 1=~G=GND (always enabled), pin 19=DIR=~DMA_AEN.
         // DIR(~DMA_AEN) High=A->B (8288->X, CPU mode), Low=B->A (X->8288, DMA mode).
-        // Only 4 of 8 channels used; unused pins left unwired.
+        // 4 of 8 channels used; unused pins padded for PinBlock contiguity.
         xcvr14_socket.wire(1, gnd);              // ~G = GND (always enabled)
         xcvr14_socket.wire(2, ior_sig);          // A1 = ~IOR (from 8288)
         xcvr14_socket.wire(3, iow_sig);          // A2 = ~IOW
         xcvr14_socket.wire(4, memr);             // A3 = ~MEMR
         xcvr14_socket.wire(5, memw);             // A4 = ~MEMW
+        xcvr14_socket.wire(6, u14_a_pad[0]);     // A5 = pad
+        xcvr14_socket.wire(7, u14_a_pad[1]);     // A6 = pad
+        xcvr14_socket.wire(8, u14_a_pad[2]);     // A7 = pad
+        xcvr14_socket.wire(9, u14_a_pad[3]);     // A8 = pad
         xcvr14_socket.wire(10, gnd);
+        xcvr14_socket.wire(11, u14_b_pad[3]);    // B8 = pad
+        xcvr14_socket.wire(12, u14_b_pad[2]);    // B7 = pad
+        xcvr14_socket.wire(13, u14_b_pad[1]);    // B6 = pad
+        xcvr14_socket.wire(14, u14_b_pad[0]);    // B5 = pad
         xcvr14_socket.wire(15, xmemw);           // B4 = ~XMEMW
         xcvr14_socket.wire(16, xmemr);           // B3 = ~XMEMR
         xcvr14_socket.wire(17, xiow);            // B2 = ~XIOW

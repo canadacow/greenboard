@@ -60,8 +60,8 @@ protected:
 private:
     void release_outputs();
 
-    Pin a_[8];   // A1=pin2 .. A8=pin9
-    Pin b_[8];   // B1=pin18 .. B8=pin11
+    PinBlock<8> a_;   // A side (contiguous, pair-ordered)
+    PinBlock<8> b_;   // B side (contiguous, pair-ordered)
 
     enum class Driving driving_ = Driving::None;       // active (read by on_cycle)
     enum class Driving pending_driving_ = Driving::None; // staged (committed by bidir lambda)

@@ -1,5 +1,6 @@
 #include "ic/ic_74s245.h"
 #include <spdlog/spdlog.h>
+#include <cstdlib>
 
 namespace bench {
 
@@ -11,25 +12,72 @@ void IC_74S245::on_power_on() {
     pending_driving_ = Driving::None;
 }
 
+// Build a PinBlock<8> from socket pins, verifying contiguity.
+// Fatal error (not assert) so it fires in release builds.
+static PinBlock<8> make_block(Socket& socket, const int (&pins)[8], const char* side) {
+    PinBlock<8> pb;
+    Signal* s0 = socket.pin_signal(pins[0]);
+    if (!s0) {
+        spdlog::critical("74S245 {}: pin {} not wired", side, pins[0]);
+        std::exit(1);
+    }
+    pb.base = s0->pin().idx;
+    for (int i = 1; i < 8; ++i) {
+        Signal* s = socket.pin_signal(pins[i]);
+        if (!s) {
+            spdlog::critical("74S245 {}: pin {} not wired", side, pins[i]);
+            std::exit(1);
+        }
+        int idx = s->pin().idx;
+        if (idx != pb.base + i) {
+            spdlog::critical("74S245 {}: pin {} pool index {} != expected {} (not contiguous)",
+                             side, pins[i], idx, pb.base + i);
+            std::exit(1);
+        }
+    }
+    return pb;
+}
+
 void IC_74S245::install(Socket& socket) {
-    auto pin = [&](int p) -> Pin {
+    // Subscribe to all data pins.
+    for (int p = 2; p <= 9; ++p) {
         Signal* s = socket.pin_signal(p);
-        return s ? s->pin() : Pin{};
-    };
+        if (s) s->connect(this);
+    }
+    for (int p = 11; p <= 18; ++p) {
+        Signal* s = socket.pin_signal(p);
+        if (s) s->connect(this);
+    }
+
+    // Build PinBlocks in ascending pool-index order.
+    // A pins 2-9, B pins 18-11 (pair-matching: A1<->B1, A2<->B2, ...).
+    // One side is ascending-by-pin, the other descending -- depends on wiring.
+    Signal* a_lo = socket.pin_signal(2);
+    Signal* a_hi = socket.pin_signal(9);
+    if (!a_lo || !a_hi) {
+        spdlog::critical("74S245: A side pins 2/9 not wired");
+        std::exit(1);
+    }
+    bool a_asc = a_lo->pin().idx < a_hi->pin().idx;
+
+    if (a_asc) {
+        static constexpr int ap[] = {2,3,4,5,6,7,8,9};
+        static constexpr int bp[] = {18,17,16,15,14,13,12,11};
+        a_ = make_block(socket, ap, "A");
+        b_ = make_block(socket, bp, "B");
+    } else {
+        static constexpr int ap[] = {9,8,7,6,5,4,3,2};
+        static constexpr int bp[] = {11,12,13,14,15,16,17,18};
+        a_ = make_block(socket, ap, "A");
+        b_ = make_block(socket, bp, "B");
+    }
+
+    // Control signals.
     auto connect_pin = [&](int p) -> Pin {
         Signal* s = socket.pin_signal(p);
         if (s) s->connect(this);
         return s ? s->pin() : Pin{};
     };
-
-    // A side: A1=pin2 .. A8=pin9
-    for (int i = 0; i < 8; ++i)
-        a_[i] = connect_pin(2 + i);
-
-    // B side: B1=pin18, B2=pin17, ..., B8=pin11
-    for (int i = 0; i < 8; ++i)
-        b_[i] = connect_pin(18 - i);
-
     g_   = connect_pin(1);   // ~G
     dir_ = connect_pin(19);  // DIR
 
@@ -37,8 +85,14 @@ void IC_74S245::install(Socket& socket) {
     if (vcc) vcc->connect(this);
 
     declare_async_input(g_); declare_async_input(dir_);
-    for (int i = 0; i < 8; ++i) { declare_input(a_[i]); declare_output(a_[i]); }
-    for (int i = 0; i < 8; ++i) { declare_input(b_[i]); declare_output(b_[i]); }
+    for (int i = 0; i < 8; ++i) {
+        Pin p{a_.base + i};
+        declare_input(p); declare_output(p);
+    }
+    for (int i = 0; i < 8; ++i) {
+        Pin p{b_.base + i};
+        declare_input(p); declare_output(p);
+    }
 
     // A-side and B-side are anti-correlated:
     //   DIR=High -> A->B (A is input, B is output)
@@ -47,9 +101,13 @@ void IC_74S245::install(Socket& socket) {
     // Bidir direction comes from driving_ (set by bus controller via
     // set_driving()), NOT from the DIR pin.  This ensures the DAG is
     // ordered correctly on the same eval cycle the controller acts.
+    Pin a0{a_.base}, a1{a_.base+1}, a2{a_.base+2}, a3{a_.base+3};
+    Pin a4{a_.base+4}, a5{a_.base+5}, a6{a_.base+6}, a7{a_.base+7};
+    Pin b0{b_.base}, b1{b_.base+1}, b2{b_.base+2}, b3{b_.base+3};
+    Pin b4{b_.base+4}, b5{b_.base+5}, b6{b_.base+6}, b7{b_.base+7};
     declare_bidir_pair(
-        {a_[0], a_[1], a_[2], a_[3], a_[4], a_[5], a_[6], a_[7]},   // out_pins (A drives when B->A)
-        {b_[0], b_[1], b_[2], b_[3], b_[4], b_[5], b_[6], b_[7]},   // in_pins  (B drives when A->B)
+        {a0, a1, a2, a3, a4, a5, a6, a7},   // out_pins (A drives when B->A)
+        {b0, b1, b2, b3, b4, b5, b6, b7},   // in_pins  (B drives when A->B)
         BidirDir::HiZ | BidirDir::Input | BidirDir::Output,
         [this]() -> BidirDir {
             // Commit pending direction from bus controller.
@@ -77,14 +135,15 @@ void IC_74S245::on_cycle(Fiber /*caller*/) {
     // via set_driving().  We never read the DIR pin -- the controller is the
     // authority, and driving_ feeds the bidir lambda for correct DAG ordering.
 
+    Level buf[8];
     if (driving_ == Driving::A) {
-        for (int i = 0; i < 8; ++i)
-            a_[i].drive(b_[i].level());
+        b_.read(buf);
+        a_.drive(buf);
     }
 
     if (driving_ == Driving::B) {
-        for (int i = 0; i < 8; ++i)
-            b_[i].drive(a_[i].level());
+        a_.read(buf);
+        b_.drive(buf);
     }
 }
 
@@ -93,26 +152,27 @@ void IC_74S245::release_outputs() {
 }
 
 void IC_74S245::transfer(bool a_to_b) {
+    Level buf[8];
     if (a_to_b) {
         driving_ = Driving::None;
+        a_.read(buf);
         bool all_hiz = true;
         for (int i = 0; i < 8; ++i) {
-            if (a_[i].level() != Level::HiZ) { all_hiz = false; break; }
+            if (buf[i] != Level::HiZ) { all_hiz = false; break; }
         }
         if (!all_hiz) {
-            for (int i = 0; i < 8; ++i)
-                b_[i].drive(a_[i].level());
+            b_.drive(buf);
             driving_ = Driving::B;
         }
     } else {
         driving_ = Driving::None;
+        b_.read(buf);
         bool all_hiz = true;
         for (int i = 0; i < 8; ++i) {
-            if (b_[i].level() != Level::HiZ) { all_hiz = false; break; }
+            if (buf[i] != Level::HiZ) { all_hiz = false; break; }
         }
         if (!all_hiz) {
-            for (int i = 0; i < 8; ++i)
-                a_[i].drive(b_[i].level());
+            a_.drive(buf);
             driving_ = Driving::A;
         }
     }
