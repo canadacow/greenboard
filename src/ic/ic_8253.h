@@ -9,7 +9,7 @@ namespace bench {
 // 24-pin DIP. Three independent 16-bit down-counters, each with CLK,
 // GATE, and OUT pins. Programmed via data bus using ~CS, ~RD, ~WR.
 //
-// Each call to on_signal_change() is exactly one full PIT clock cycle.
+// Each call to on_cycle() is exactly one full PIT clock cycle.
 // The bidir lambda (sampled before evaluate) determines what the PIT does:
 //   Input  (~CS+~WR low): read data from bus, handle write
 //   Output (~CS+~RD low): drive data bus with counter value
@@ -34,7 +34,7 @@ public:
 
 protected:
     void on_power_on() override;
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
 
 private:
     struct Channel {

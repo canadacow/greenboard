@@ -83,7 +83,7 @@ void IC_ROM_40K::on_power_off() {
     spdlog::debug("[ROM] power off");
 }
 
-void IC_ROM_40K::on_signal_change(Fiber /*caller*/) {
+void IC_ROM_40K::on_cycle(Fiber /*caller*/) {
     // Find active bank (at most one ~CS Low at a time)
     int active = -1;
     for (int b = 0; b < 5; ++b) {

@@ -70,7 +70,7 @@ void IC_74S00_U81::on_power_off() {
         g.y.release();
 }
 
-void IC_74S00_U81::on_signal_change(Fiber /*caller*/) {
+void IC_74S00_U81::on_cycle(Fiber /*caller*/) {
     // Gate 2 first (drives RAS)
     {
         auto& g = gates_[1];

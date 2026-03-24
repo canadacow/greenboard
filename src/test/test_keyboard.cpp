@@ -92,7 +92,7 @@ void TestKeyboard::enqueue_string(const char* text) {
     }
 }
 
-void TestKeyboard::on_signal_change(Fiber /*caller*/) {
+void TestKeyboard::on_cycle(Fiber /*caller*/) {
     Level ready_cur = pin_ready_.level();
     Level ack_cur = pin_ack_.level();
     Level pb6_cur = pin_pb6_.level();

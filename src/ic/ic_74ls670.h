@@ -53,7 +53,7 @@ public:
 protected:
     void on_power_on() override;
     void on_power_off() override;
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
 
 private:
     void update();

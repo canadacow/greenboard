@@ -64,7 +64,7 @@ void IC_74S74::on_power_off() {
     }
 }
 
-void IC_74S74::on_signal_change(Fiber /*caller*/) {
+void IC_74S74::on_cycle(Fiber /*caller*/) {
     for (int i = 0; i < 2; ++i)
         update_ff(i);
 }

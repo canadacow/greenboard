@@ -27,7 +27,7 @@ void FiberComponent::power_off() {
     spdlog::debug("[{}] powered off (fiber)", name());
 }
 
-void FiberComponent::on_signal_change(Fiber caller) {
+void FiberComponent::on_cycle(Fiber caller) {
     if (!caller || !fiber_ || !alive_) return;
 
     return_fiber_ = caller;
@@ -40,7 +40,7 @@ void FiberComponent::run() {
     on_power_on();
     for (;;) {
         yield();
-        on_signal_change(nullptr);
+        on_cycle(nullptr);
     }
 #endif
 }

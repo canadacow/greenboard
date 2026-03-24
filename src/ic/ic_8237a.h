@@ -49,7 +49,7 @@ class IC_74LS670;
 //   CH0: DRAM refresh (auto-init, single transfer, DREQ0 from PIT ch1)
 //   CH1-CH3: available for ISA peripherals
 //
-// Callback IC -- never yields, completes all work in on_signal_change().
+// Callback IC -- never yields, completes all work in on_cycle().
 class IC_8237A : public CallbackComponent {
 public:
     IC_8237A();
@@ -71,7 +71,7 @@ public:
 
 protected:
     void on_power_on() override;
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
 
 private:
     void on_bus_write();

@@ -133,7 +133,7 @@ void IC_8237A::install(Socket& socket) {
     // ~EOP excluded: its pulse must persist across the SI transition
     // (eop_pending_ deasserts it next cycle).
     // DACKs included: bidir HiZ removes DAG edges in CPU mode, but
-    // on_signal_change re-drives them High so downstream enables (U48 G1)
+    // on_cycle re-drives them High so downstream enables (U48 G1)
     // see a stable High rather than floating HiZ.
     // HRQ: Output only during BusRequested (asserting HRQ), HiZ during
     // active DMA (S1-S4) since HRQ stays stable -- avoids DAG cycle
@@ -185,7 +185,7 @@ void IC_8237A::install(Socket& socket) {
         [this]() { return is_dma_active() ? BidirDir::Output : BidirDir::HiZ; });
 }
 
-void IC_8237A::on_signal_change(Fiber /*caller*/) {
+void IC_8237A::on_cycle(Fiber /*caller*/) {
     Level reset_cur = pin_reset_.level();
 
     Level iow_cur = iow_prev_;
@@ -237,7 +237,7 @@ void IC_8237A::on_signal_change(Fiber /*caller*/) {
     // evaluate_dreq() gates on HLDA Low per datasheet p.6.
     evaluate_dreq();
 
-    // Advance state machine. Each call to on_signal_change is one full cycle, always
+    // Advance state machine. Each call to on_cycle is one full cycle, always
     on_clk_falling();
 
     // DACKs are declare_output (always driven), so no re-drive needed.

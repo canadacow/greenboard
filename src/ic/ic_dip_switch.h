@@ -25,7 +25,7 @@ public:
     uint8_t value() const;
 
 protected:
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
     void on_power_on() override;
     void on_power_off() override;
 

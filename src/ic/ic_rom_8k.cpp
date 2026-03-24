@@ -70,7 +70,7 @@ void IC_ROM_8K::on_power_off() {
     }
 }
 
-void IC_ROM_8K::on_signal_change(Fiber /*caller*/) {
+void IC_ROM_8K::on_cycle(Fiber /*caller*/) {
     update_outputs();
 }
 

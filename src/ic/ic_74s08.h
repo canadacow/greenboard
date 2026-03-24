@@ -100,7 +100,7 @@ protected:
 
     void on_power_off() override { out_.release(); }
 
-    void on_signal_change(Fiber /*caller*/) override { update_outputs(); }
+    void on_cycle(Fiber /*caller*/) override { update_outputs(); }
 
 private:
     template<uint8_t MODE>

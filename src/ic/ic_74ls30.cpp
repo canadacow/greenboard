@@ -42,7 +42,7 @@ void IC_74LS30::on_power_on() { update_output(); }
 
 void IC_74LS30::on_power_off() { output_.release(); }
 
-void IC_74LS30::on_signal_change(Fiber /*caller*/) { update_output(); }
+void IC_74LS30::on_cycle(Fiber /*caller*/) { update_output(); }
 
 void IC_74LS30::update_output() {
     // Y = ~(A & B & C & D & E & F & G & H)

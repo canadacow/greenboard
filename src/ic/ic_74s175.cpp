@@ -60,7 +60,7 @@ void IC_74S175::on_power_off() {
     for (int i = 0; i < 4; ++i) { pin_q_[i].release(); pin_nq_[i].release(); }
 }
 
-void IC_74S175::on_signal_change(Fiber /*caller*/) {
+void IC_74S175::on_cycle(Fiber /*caller*/) {
     // ~CLR: async clear when driven Low.
     Level cur = pin_clr_.level();
     if (cur == Level::Low && clr_prev_ != Level::Low)

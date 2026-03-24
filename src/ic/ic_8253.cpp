@@ -80,7 +80,7 @@ void IC_8253::install(Socket& socket) {
 // Bidir lambda already set the bus direction before we get here.
 // =========================================================================
 
-void IC_8253::on_signal_change(Fiber /*caller*/) {
+void IC_8253::on_cycle(Fiber /*caller*/) {
     bool cs_low = pin_cs_.level() == Level::Low;
     bool wr_low = pin_wr_.level() == Level::Low;
     bool rd_low = pin_rd_.level() == Level::Low;

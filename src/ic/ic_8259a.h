@@ -27,7 +27,7 @@ namespace bench {
 // 5150 configuration: edge-triggered, single PIC (no cascade), master mode.
 // BIOS init: ICW1=0x13, ICW2=0x08 (IRQ0=INT 08h), ICW4=0x09 (8086 mode).
 //
-// Callback IC -- never yields, completes all work in on_signal_change().
+// Callback IC -- never yields, completes all work in on_cycle().
 class IC_8259A : public CallbackComponent {
 public:
     IC_8259A();
@@ -36,7 +36,7 @@ public:
 
 protected:
     void on_power_on() override;
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
 
 private:
     // Initialization state machine
@@ -95,7 +95,7 @@ private:
     InitState init_state_ = InitState::Ready;
     bool initialized_ = false;
 
-    // Edge tracking for on_signal_change
+    // Edge tracking for on_cycle
     Level wr_prev_ = Level::HiZ;
     Level cs_prev_ = Level::HiZ;
     Level rd_prev_ = Level::HiZ;

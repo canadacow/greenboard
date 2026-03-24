@@ -128,7 +128,7 @@ public:
 
 protected:
     // Called when a connected signal changes.
-    virtual void on_signal_change(Fiber caller) {}
+    virtual void on_cycle(Fiber caller) {}
     virtual void on_power_on() {}
     virtual void on_power_off() {}
 

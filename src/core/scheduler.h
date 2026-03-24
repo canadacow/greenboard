@@ -301,7 +301,7 @@ public:
 #ifdef BENCH_PIN_VALIDATION
             SignalPool::begin_component(plan[i]);
 #endif
-            plan[i]->on_signal_change(caller);
+            plan[i]->on_cycle(caller);
 #ifdef BENCH_PIN_VALIDATION
             SignalPool::end_component();
 #endif

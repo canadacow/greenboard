@@ -81,7 +81,7 @@ protected:
         if constexpr (MASK & 0x02) y2_.release();
     }
 
-    void on_signal_change(Fiber /*caller*/) override { update_outputs(); }
+    void on_cycle(Fiber /*caller*/) override { update_outputs(); }
 
 private:
     void update_outputs() {

@@ -82,7 +82,7 @@ public:
 
 protected:
     void on_power_on() override;
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
 
 private:
     // Bus cycle type decoded from S0-S2

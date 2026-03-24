@@ -44,7 +44,7 @@ void IC_TD1::on_power_off() {
     for (auto& p : pin_out_) p.release();
 }
 
-void IC_TD1::on_signal_change(Fiber /*caller*/) {
+void IC_TD1::on_cycle(Fiber /*caller*/) {
     Level in_now = pin_in_.level();
     // Drive outputs with previously captured value.
     for (auto& p : pin_out_) p.drive(pending_);

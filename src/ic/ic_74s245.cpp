@@ -72,7 +72,7 @@ void IC_74S245::set_driving(Driving driving) {
     pending_driving_ = driving;
 }
 
-void IC_74S245::on_signal_change(Fiber /*caller*/) {
+void IC_74S245::on_cycle(Fiber /*caller*/) {
     // driving_ is the sole authority (set by bus controller).
     // No ~G or DIR pin checks -- the controller handles enable/direction.
     update_outputs();

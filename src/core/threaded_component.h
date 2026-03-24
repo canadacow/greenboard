@@ -11,7 +11,7 @@ namespace bench {
 // A sequential/clocked IC that runs on its own thread.
 //
 // Reactive components (default): block on the mailbox, wake on signal
-// changes, call on_signal_change() to check pin levels.
+// changes, call on_cycle() to check pin levels.
 // Active components (e.g. oscillators): override run() with their own loop.
 class ThreadedComponent : public Component {
 public:

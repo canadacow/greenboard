@@ -55,7 +55,7 @@ void IC_74S373::on_power_on() {
     dma_output_ = false;
 }
 
-void IC_74S373::on_signal_change(Fiber /*caller*/) {
+void IC_74S373::on_cycle(Fiber /*caller*/) {
     Level le = le_.level();
 
     // LE falling edge: stop tracking. latch_[] already holds the last

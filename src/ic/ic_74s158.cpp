@@ -62,7 +62,7 @@ void IC_74S158::on_power_off() {
         m.y.release();
 }
 
-void IC_74S158::on_signal_change(Fiber /*caller*/) {
+void IC_74S158::on_cycle(Fiber /*caller*/) {
     update_outputs();
 }
 

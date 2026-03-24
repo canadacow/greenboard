@@ -17,7 +17,7 @@ namespace bench {
 //                  switches to the fiber, which runs until yield()
 //   power_off() -- deletes the fiber
 //
-// Reactive components (default run): loop { yield(); on_signal_change(); }
+// Reactive components (default run): loop { yield(); on_cycle(); }
 // Active components (e.g. 8088): override run() with their own loop,
 // calling yield() wherever they would have called wait_mailbox().
 class FiberComponent : public Component {
@@ -32,11 +32,11 @@ public:
     // Called by the wave executor, same as any other component.
     // If a caller fiber is set, resumes the fiber (which runs until yield()).
     // If no caller (pre-clock init), does nothing.
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
 
 protected:
     // Override for active components (e.g. CPU).
-    // Default: loop { yield(); on_signal_change(); }
+    // Default: loop { yield(); on_cycle(); }
     virtual void run();
 
     // Yield back to the scheduler (replaces wait_mailbox).

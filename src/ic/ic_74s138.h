@@ -91,7 +91,7 @@ protected:
             y_[i].release();
     }
 
-    void on_signal_change(Fiber /*caller*/) override {
+    void on_cycle(Fiber /*caller*/) override {
         update_outputs();
     }
 

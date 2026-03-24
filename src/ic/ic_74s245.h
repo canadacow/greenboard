@@ -40,7 +40,7 @@ public:
 
     // Force re-evaluation (used when a driving component folds this
     // transceiver's timing into its own wave, e.g. 8288 folding U8).
-    void evaluate_now() { on_signal_change(nullptr); }
+    void evaluate_now() { on_cycle(nullptr); }
 
     // Set direction from bus controller (8288/8237A).
     // This is the sole authority on direction -- the DIR pin is not read.
@@ -55,7 +55,7 @@ public:
 
 protected:
     void on_power_on() override;
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
 
 private:
     void update_outputs();
@@ -64,7 +64,7 @@ private:
     Pin a_[8];   // A1=pin2 .. A8=pin9
     Pin b_[8];   // B1=pin18 .. B8=pin11
 
-    enum class Driving driving_ = Driving::None;       // active (read by on_signal_change)
+    enum class Driving driving_ = Driving::None;       // active (read by on_cycle)
     enum class Driving pending_driving_ = Driving::None; // staged (committed by bidir lambda)
 
     Pin g_;    // Pin  1: ~G (enable)

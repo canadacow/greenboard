@@ -44,7 +44,7 @@ void IC_DipSwitch::on_power_off() {
         pos_[i].pin.drive(Level::HiZ);
 }
 
-void IC_DipSwitch::on_signal_change(Fiber /*caller*/) {
+void IC_DipSwitch::on_cycle(Fiber /*caller*/) {
     //drive_all();
 }
 

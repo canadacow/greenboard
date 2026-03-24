@@ -37,7 +37,7 @@ class IC_8253;  // forward decl for speaker support
 //   Port C upper = input (PCK, IO_CH_CK, T/C2, CASS_DATA_IN)
 //   Port C lower = output (directly connected to SW2 on Model B)
 //
-// Callback IC -- never yields, completes all work in on_signal_change().
+// Callback IC -- never yields, completes all work in on_cycle().
 class IC_8255A : public CallbackComponent {
 public:
     IC_8255A();
@@ -50,7 +50,7 @@ public:
     }
 
 protected:
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
 
 private:
     void on_bus_write();

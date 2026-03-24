@@ -67,7 +67,7 @@ void IC_8288::install(Socket& socket) {
     declare_output(pin_ior_); declare_output(pin_iow_); declare_output(pin_inta_);
 }
 
-void IC_8288::on_signal_change(Fiber /*caller*/) {
+void IC_8288::on_cycle(Fiber /*caller*/) {
     on_clk_rising();
 }
 

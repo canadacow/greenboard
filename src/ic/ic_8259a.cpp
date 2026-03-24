@@ -83,7 +83,7 @@ void IC_8259A::on_power_on() {
     inta_prev_ = Level::HiZ;
 }
 
-void IC_8259A::on_signal_change(Fiber /*caller*/) {
+void IC_8259A::on_cycle(Fiber /*caller*/) {
     Level wr_cur   = wr_.level();
     Level cs_cur   = cs_.level();
     Level rd_cur   = rd_.level();

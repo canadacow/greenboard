@@ -51,7 +51,7 @@ protected:
     }
     void on_power_on() override {}
     void on_power_off() override {}
-    void on_signal_change(Fiber) override {}
+    void on_cycle(Fiber) override {}
 };
 
 
@@ -154,15 +154,13 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::trace);
+    spdlog::set_level(spdlog::level::info);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "fdc_write",
-        
         "mov",
         "post_ram",
         "post_sw1_readback",
@@ -200,6 +198,7 @@ int main() {
         "post_video",
         "post_dma",
         "post_fdc",
+        "fdc_write",
     };
 
     std::vector<TestCase> tests;
@@ -365,7 +364,7 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-//#define RUN_BENCHMARK
+#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---

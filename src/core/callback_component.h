@@ -7,7 +7,7 @@ namespace bench {
 // An IC evaluated once per CLK edge via direct function call.
 //
 // No fiber context switch overhead. Use for any IC that completes
-// all work in a single on_signal_change() invocation.
+// all work in a single on_cycle() invocation.
 //
 // Pin direction declarations (declare_input/declare_output) feed the
 // Scheduler's dependency DAG. Components are topologically sorted

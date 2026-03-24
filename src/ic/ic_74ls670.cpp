@@ -74,7 +74,7 @@ void IC_74LS670::on_power_off() {
     }
 }
 
-void IC_74LS670::on_signal_change(Fiber /*caller*/) { update(); }
+void IC_74LS670::on_cycle(Fiber /*caller*/) { update(); }
 
 void IC_74LS670::update() {
     // Write: transparent when ~WE=Low

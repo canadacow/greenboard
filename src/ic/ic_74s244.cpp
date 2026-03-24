@@ -62,7 +62,7 @@ void IC_74S244::on_power_off() {
     for (auto& b : grp2_) b.y.release();
 }
 
-void IC_74S244::on_signal_change(Fiber /*caller*/) {
+void IC_74S244::on_cycle(Fiber /*caller*/) {
     update_outputs();
 }
 

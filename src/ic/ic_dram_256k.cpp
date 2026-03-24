@@ -98,7 +98,7 @@ void IC_DRAM_256K::on_power_off() {
     spdlog::debug("[DRAM] power off");
 }
 
-void IC_DRAM_256K::on_signal_change(Fiber /*caller*/) {
+void IC_DRAM_256K::on_cycle(Fiber /*caller*/) {
 
     // Find the active bank: the one with ~RAS Low (only one at a time).
     // On ~RAS rising edge, the previously active bank needs processing too,

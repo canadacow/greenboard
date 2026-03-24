@@ -74,7 +74,7 @@ void IC_8255A::install(Socket& socket) {
     declare_input(pin_a0_); declare_input(pin_a1_); declare_input(pin_reset_);
 }
 
-void IC_8255A::on_signal_change(Fiber /*caller*/) {
+void IC_8255A::on_cycle(Fiber /*caller*/) {
     Level reset_cur = pin_reset_.level();
     Level wr_cur = pin_wr_.level();
     Level cs_cur = pin_cs_.level();

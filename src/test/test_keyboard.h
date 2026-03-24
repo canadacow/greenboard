@@ -27,7 +27,7 @@ public:
     void enqueue_string(const char* text);
 
 protected:
-    void on_signal_change(Fiber caller) override;
+    void on_cycle(Fiber caller) override;
     void on_power_on() override;
 
 private:
