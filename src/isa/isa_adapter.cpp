@@ -214,67 +214,67 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     // Skip if DMA is active (either our channel or bus-wide AEN).
     bool addr_readable = aen_.level() != Level::High;
     if (addr_readable) {
-    if (write_pending_) {
-        uint16_t port = static_cast<uint16_t>(read_address());
-        uint8_t val = read_sd();
-        if (claims_port(port))
-            on_io_write(port, val);
-        write_pending_ = false;
-    } else if (iow_cur == Level::Low && iow_prev_ != Level::Low) {
-        write_pending_ = true;
-    }
-    iow_prev_ = iow_cur;
-
-    if (read_pending_) {
-        bool any_dack = false;
-        for (int ch = 1; ch <= 3; ++ch)
-            if (dack_[ch].level() == Level::Low) any_dack = true;
-        if (!any_dack) {
+        if (write_pending_) {
             uint16_t port = static_cast<uint16_t>(read_address());
-            if (claims_port(port)) {
-                read_byte_ = on_io_read(port);
+            uint8_t val = read_sd();
+            if (claims_port(port))
+                on_io_write(port, val);
+            write_pending_ = false;
+        } else if (iow_cur == Level::Low && iow_prev_ != Level::Low) {
+            write_pending_ = true;
+        }
+        iow_prev_ = iow_cur;
+
+        if (read_pending_) {
+            bool any_dack = false;
+            for (int ch = 1; ch <= 3; ++ch)
+                if (dack_[ch].level() == Level::Low) any_dack = true;
+            if (!any_dack) {
+                uint16_t port = static_cast<uint16_t>(read_address());
+                if (claims_port(port)) {
+                    read_byte_ = on_io_read(port);
+                    drive_sd(read_byte_);
+                }
+            }
+            read_pending_ = false;
+        } else if (ior_cur == Level::Low && ior_prev_ != Level::Low) {
+            read_pending_ = true;
+        } else if (!dma_active()) {
+            if (ior_cur == Level::Low && data_driven_) {
                 drive_sd(read_byte_);
+            } else if (ior_cur != Level::Low && data_driven_) {
+                release_sd();
             }
         }
-        read_pending_ = false;
-    } else if (ior_cur == Level::Low && ior_prev_ != Level::Low) {
-        read_pending_ = true;
-    } else if (!dma_active()) {
-        if (ior_cur == Level::Low && data_driven_) {
-            drive_sd(read_byte_);
-        } else if (ior_cur != Level::Low && data_driven_) {
-            release_sd();
-        }
-    }
-    ior_prev_ = ior_cur;
+        ior_prev_ = ior_cur;
 
-    // --- MMIO ---
-    Level memr_cur = memr_.level();
-    Level memw_cur = memw_.level();
+        // --- MMIO ---
+        Level memr_cur = memr_.level();
+        Level memw_cur = memw_.level();
 
-    if (mem_write_pending_) {
-        uint32_t addr = read_address();
-        if (claims_mmio(addr)) {
-            uint8_t val = read_sd();
-            on_mmio_write(addr, val);
+        if (mem_write_pending_) {
+            uint32_t addr = read_address();
+            if (claims_mmio(addr)) {
+                uint8_t val = read_sd();
+                on_mmio_write(addr, val);
+            }
+            mem_write_pending_ = false;
+        } else if (memw_cur == Level::Low && memw_prev_ != Level::Low) {
+            uint32_t addr = read_address();
+            if (claims_mmio(addr))
+                mem_write_pending_ = true;
         }
-        mem_write_pending_ = false;
-    } else if (memw_cur == Level::Low && memw_prev_ != Level::Low) {
-        uint32_t addr = read_address();
-        if (claims_mmio(addr))
-            mem_write_pending_ = true;
-    }
-    memw_prev_ = memw_cur;
+        memw_prev_ = memw_cur;
 
-    if (memr_cur == Level::Low) {
-        uint32_t addr = read_address();
-        if (claims_mmio(addr)) {
-            drive_sd(on_mmio_read(addr));
+        if (memr_cur == Level::Low) {
+            uint32_t addr = read_address();
+            if (claims_mmio(addr)) {
+                drive_sd(on_mmio_read(addr));
+            }
+        } else if (memr_prev_ == Level::Low) {
+            if (data_driven_) release_sd();
         }
-    } else if (memr_prev_ == Level::Low) {
-        if (data_driven_) release_sd();
-    }
-    memr_prev_ = memr_cur;
+        memr_prev_ = memr_cur;
     } else {
         // DMA active: still update prev trackers so edges aren't stale.
         ior_prev_ = ior_cur;

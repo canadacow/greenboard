@@ -161,7 +161,7 @@ int main() {
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
         "fdc_write",
-        /*
+        
         "mov",
         "post_ram",
         "post_sw1_readback",
@@ -198,7 +198,7 @@ int main() {
         "post_pic",
         "post_video",
         "post_dma",
-        "post_fdc",*/
+        "post_fdc",
     };
 
     std::vector<TestCase> tests;
