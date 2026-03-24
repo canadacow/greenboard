@@ -196,7 +196,12 @@ void ISA_Adapter::on_signal_change(Fiber /*caller*/) {
     }
 
     // T/C rising edge: DMA transfer complete. Deassert DRQn, notify subclass.
-    if (tc_cur == Level::High && tc_prev_ != Level::High && dma_active()) {
+    if (tc_cur != tc_prev_) {
+        spdlog::info("[{}] T/C changed: {} -> {} dma_active_ch={} write_mode={}",
+                     name(), static_cast<int>(tc_prev_), static_cast<int>(tc_cur),
+                     dma_active_ch_, dma_write_mode_);
+    }
+    if (tc_cur != tc_prev_ && tc_prev_ != Level::HiZ && dma_active()) {
         int ch = dma_active_ch_;
         dma_active_ch_ = -1;
         if (ch >= 1 && ch <= 3 && drq_sig_[ch])

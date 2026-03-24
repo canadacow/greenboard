@@ -437,7 +437,7 @@ org 0x0100
     mov ah, 0x02            ; N=2
     call nec_out
     jc .done
-    mov ah, 0x09            ; EOT
+    mov ah, 0x02            ; EOT=2 (single sector)
     call nec_out
     jc .done
     mov ah, 0x2A            ; GPL
@@ -503,13 +503,13 @@ org 0x0100
     mov ah, 0x02            ; sector 2
     call nec_out
     jc .done
-    mov ah, 0x02
+    mov ah, 0x02            ; N=2
     call nec_out
     jc .done
-    mov ah, 0x09
+    mov ah, 0x02            ; EOT=2 (single sector)
     call nec_out
     jc .done
-    mov ah, 0x2A
+    mov ah, 0x2A            ; GPL
     call nec_out
     jc .done
     mov ah, 0xFF

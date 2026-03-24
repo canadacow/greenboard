@@ -73,7 +73,7 @@ uint8_t ISA_FloppyController::read_msr() const {
                 msr = 0x10;  // BUSY (DMA execution in progress)
             break;
         case Phase::Result:
-            msr = 0xC0;  // RQM=1, DIO=1 (FDC->host)
+            msr = 0xD0;  // RQM=1, DIO=1, BUSY=1 (FDC->host)
             break;
     }
     return msr;
@@ -419,6 +419,9 @@ uint8_t ISA_FloppyController::on_dma_read() {
     uint8_t byte = 0x00;
     if (sector_offset_ + xfer_ptr_ < image_.size())
         byte = image_[sector_offset_ + xfer_ptr_];
+    if (xfer_ptr_ < 4 || xfer_ptr_ == 511)
+        spdlog::info("[{}] READ image[0x{:05X}] = 0x{:02X} (xfer={})",
+                     name(), sector_offset_ + xfer_ptr_, byte, xfer_ptr_);
     xfer_ptr_++;
 
     // Crossed a sector boundary? Advance to next sector so the DMA
@@ -448,8 +451,13 @@ void ISA_FloppyController::on_dma_write(uint8_t val) {
         }
     } else {
         // WRITE DATA: store byte into image.
-        if (sector_offset_ + xfer_ptr_ < image_.size())
-            image_[sector_offset_ + xfer_ptr_] = val;
+        size_t idx = sector_offset_ + xfer_ptr_;
+        if (idx < image_.size()) {
+            image_[idx] = val;
+            if (xfer_ptr_ < 4 || xfer_ptr_ == 511)
+                spdlog::info("[{}] WRITE image[0x{:05X}] = 0x{:02X} (xfer={})",
+                             name(), idx, val, xfer_ptr_);
+        }
         xfer_ptr_++;
 
         // Multi-sector: advance when sector boundary crossed.
