@@ -21,8 +21,19 @@ public:
     ISA_MDA();
 
     uint8_t* framebuffer() { return fb_; }
+    const uint8_t* crtc_regs() const { return crtc_reg_; }
+    uint8_t mode_register() const { return mode_; }
     static constexpr uint32_t FB_BASE = 0xB0000;
     static constexpr uint32_t FB_SIZE = 4096;
+
+    // CRTC register indices (MC6845).
+    static constexpr int CRTC_CURSOR_START  = 10;  // R10: cursor start scan line
+    static constexpr int CRTC_CURSOR_END    = 11;  // R11: cursor end scan line
+    static constexpr int CRTC_START_ADDR_H  = 12;  // R12: display start address (high)
+    static constexpr int CRTC_START_ADDR_L  = 13;  // R13: display start address (low)
+    static constexpr int CRTC_CURSOR_H      = 14;  // R14: cursor position (high)
+    static constexpr int CRTC_CURSOR_L      = 15;  // R15: cursor position (low)
+    static constexpr int CRTC_MAX_SCANLINE  = 9;   // R9: max scan line address (char height - 1)
 
 protected:
     void on_power_on() override;

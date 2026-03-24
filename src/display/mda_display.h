@@ -22,6 +22,7 @@ namespace bench {
 class Scheduler;
 class IC_8088;
 class IC_8237A;
+class ISA_MDA;
 class MemoryView;
 
 class MdaDisplay {
@@ -33,7 +34,8 @@ public:
     // Blocks until the window is up and rendering.
     void start(const uint8_t* vram, const uint64_t* clk_cycles = nullptr,
                Scheduler* scheduler = nullptr, IC_8088* cpu = nullptr,
-               const MemoryView* mem = nullptr, IC_8237A* dma = nullptr);
+               const MemoryView* mem = nullptr, IC_8237A* dma = nullptr,
+               const ISA_MDA* mda_card = nullptr);
 
     // Stop the display thread and close the window.
     void stop();
@@ -50,6 +52,7 @@ private:
     IC_8088* cpu_ = nullptr;
     const MemoryView* mem_ = nullptr;
     IC_8237A* dma_ = nullptr;
+    const ISA_MDA* mda_card_ = nullptr;
     bool dbg_visible_ = true;
 
     void render_loop(std::stop_token stop);

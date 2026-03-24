@@ -24,6 +24,7 @@
 #include "display/mda_display.h"
 #include "core/scheduler.h"
 #include "ic/ic_8088.h"
+#include "isa/isa_mda.h"
 #include "debug/memory_view.h"
 #include "ic/ic_8237a.h"
 #include <Zydis/Zydis.h>
@@ -102,6 +103,12 @@ struct DxState {
     ComPtr<ID2D1SolidColorBrush> greenBrush;
     ComPtr<ID2D1SolidColorBrush> brightGreenBrush;
     ComPtr<ID2D1SolidColorBrush> blackBrush;
+    ComPtr<ID2D1SolidColorBrush> underlineBrush;  // dim green for underline
+
+    // MDA card (for CRTC cursor registers)
+    const ISA_MDA* mda_card = nullptr;
+    uint64_t blink_counter = 0;   // frame counter for character attribute blink
+    uint8_t cursor_counter_ = 0;  // 5-bit counter, increments per frame (vsync)
 
     // MHz tracking
     const uint64_t* clk_cycles = nullptr;
@@ -200,6 +207,7 @@ bool DxState::init(HWND hw, int w, int h) {
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.85f, 0.0f), &greenBrush);
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 1.0f, 0.0f), &brightGreenBrush);
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &blackBrush);
+    d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.65f, 0.0f), &underlineBrush);
 
     // ImGui -- scale font + style for high-DPI.
     // Load the font at the scaled pixel size (not FontGlobalScale, which
@@ -229,13 +237,84 @@ void DxState::render_mda(const uint8_t* vram) {
     d2dCtx->BeginDraw();
     d2dCtx->Clear(D2D1::ColorF(D2D1::ColorF::Black));
 
+    blink_counter++;
+
+    // Read CRTC cursor registers (Option A: direct read, no sync).
+    // R10: cursor start scan line (bits 4:0), bits 6:5 = cursor mode
+    //      00 = visible steady, 01 = invisible, 10 = blink 1/16, 11 = blink 1/32
+    // R11: cursor end scan line (bits 4:0)
+    // R14:R15: cursor position (character offset from start of display buffer)
+    // R12:R13: display start address
+    // R9: max scan line (character height - 1, normally 0x0D = 13 for 14-line chars)
+    int cursor_pos = -1;
+    int cursor_start_sl = 0, cursor_end_sl = 0;
+    int cursor_mode = 0;  // 0=steady, 1=invisible, 2=blink/16, 3=blink/32
+    int max_scanline = 13;
+    int display_start = 0;
+    bool cursor_visible = false;
+
+    if (mda_card) {
+        const uint8_t* cr = mda_card->crtc_regs();
+        cursor_start_sl = cr[ISA_MDA::CRTC_CURSOR_START] & 0x1F;
+        cursor_mode     = (cr[ISA_MDA::CRTC_CURSOR_START] >> 5) & 0x03;
+        cursor_end_sl   = cr[ISA_MDA::CRTC_CURSOR_END] & 0x1F;
+        cursor_pos      = (cr[ISA_MDA::CRTC_CURSOR_H] << 8) | cr[ISA_MDA::CRTC_CURSOR_L];
+        display_start   = (cr[ISA_MDA::CRTC_START_ADDR_H] << 8) | cr[ISA_MDA::CRTC_START_ADDR_L];
+        max_scanline    = cr[ISA_MDA::CRTC_MAX_SCANLINE] & 0x1F;
+        if (max_scanline == 0) max_scanline = 13;
+
+        // MC6845 cursor blink from Verilog reference implementation:
+        // https://github.com/yeokm1/graphics-gremlin-hdmi/blob/main/verilog/crtc6845.v
+        //
+        // 5-bit cursor_counter increments once per frame (vsync).
+        // Blink signal:
+        //   assign blink = (c_start[6:5] == 2'b00)
+        //                | (c_start[5] ? cursor_counter[4] : cursor_counter[3]);
+        //
+        //   Bits 6:5  Behavior
+        //   --------  -------------------------------------------
+        //   00        No blink (cursor always visible)
+        //   01        Cursor disabled (invisible)
+        //   10        Blink at frame_rate / 16 (counter bit 3)
+        //   11        Blink at frame_rate / 32 (counter bit 4)
+        //
+        // Final visibility:
+        //   cursor = (addr match) & (scanline in range) & blink
+        //          & (c_start[6:5] != 2'b01) & display_enable
+        //
+        // No wrap-around: if start > end, scanline range is empty = invisible.
+
+        // Simulate the 5-bit cursor_counter (increments per frame = per render call).
+        cursor_counter_ = (cursor_counter_ + 1) & 0x1F;
+
+        bool blink_sig;
+        if (cursor_mode == 0b00) {
+            blink_sig = true;  // always on
+        } else {
+            // c_start[5] selects counter bit: 0 -> bit 3, 1 -> bit 4
+            blink_sig = (cursor_mode & 1)
+                ? ((cursor_counter_ >> 4) & 1)
+                : ((cursor_counter_ >> 3) & 1);
+        }
+
+        cursor_visible = (cursor_mode != 0b01)  // not disabled
+                       && blink_sig
+                       && (cursor_start_sl <= cursor_end_sl);  // no wrap = invisible
+
+        // Adjust cursor_pos relative to display_start.
+        cursor_pos -= display_start;
+    }
+
+    // Character attribute blink: bit 7 = blink at ~1.875 Hz (1/32 field rate).
+    bool blink_on = ((blink_counter / 16) & 1) == 0;
+
     if (vram) {
         for (int row = 0; row < MDA_ROWS; ++row) {
             for (int col = 0; col < MDA_COLS; ++col) {
-                int off = (row * MDA_COLS + col) * 2;
+                int char_idx = row * MDA_COLS + col;
+                int off = char_idx * 2;
                 uint8_t ch = vram[off];
                 uint8_t attr = vram[off + 1];
-                if (attr == 0x00) continue;
 
                 float x  = floorf(col * cellW);
                 float y  = floorf(row * cellH);
@@ -244,42 +323,101 @@ void DxState::render_mda(const uint8_t* vram) {
                 float mx = x + (x2 - x) * 0.5f;
                 float my = y + (y2 - y) * 0.5f;
 
-                ID2D1SolidColorBrush* brush = greenBrush.Get();
-                if (attr & 0x08) brush = brightGreenBrush.Get();
+                // MDA attribute decoding per IBM Technical Reference:
+                //   BG(RGB) FG(RGB)  Function
+                //   000     000      Non-display (invisible)
+                //   000     001      Underline
+                //   000     111      Normal (white on black)
+                //   111     000      Reverse video
+                //   Bit 3 (intensity): brighter foreground
+                //   Bit 7 (blink): character blinks
+                uint8_t bg_rgb = (attr >> 4) & 0x07;
+                uint8_t fg_rgb = attr & 0x07;
+                bool intensity = (attr & 0x08) != 0;
+                bool blink_attr = (attr & 0x80) != 0;
 
-                if ((attr & 0x77) == 0x70) {
+                // If blink attribute set and we're in the off phase, hide character.
+                if (blink_attr && !blink_on) {
+                    // Show background only (character hidden).
+                    if (bg_rgb == 0x07) {
+                        // Reverse video background stays.
+                        d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), greenBrush.Get());
+                    }
+                    // Still need to draw cursor even when char is blinked off.
+                    goto draw_cursor;
+                }
+
+                if (fg_rgb == 0 && bg_rgb == 0) {
+                    // Non-display: invisible. Skip character but still draw cursor.
+                    goto draw_cursor;
+                }
+
+                if (bg_rgb == 0x07) {
+                    // Reverse video: green background, black foreground.
                     d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), greenBrush.Get());
-                    brush = blackBrush.Get();
+
+                    // Draw character in black.
+                    if (ch != 0x20) {
+                        wchar_t wc = cp437_to_unicode(ch);
+                        d2dCtx->DrawText(&wc, 1, textFormat.Get(),
+                            D2D1::RectF(x, y, x2, y2), blackBrush.Get());
+                    }
+                    goto draw_cursor;
                 }
 
-                switch (ch) {
-                case 0xDB: d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), brush); break;
-                case 0xDC: d2dCtx->FillRectangle(D2D1::RectF(x, my, x2, y2), brush); break;
-                case 0xDF: d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, my), brush); break;
-                case 0xDD: d2dCtx->FillRectangle(D2D1::RectF(x, y, mx, y2), brush); break;
-                case 0xDE: d2dCtx->FillRectangle(D2D1::RectF(mx, y, x2, y2), brush); break;
-                case 0xB0:
-                    brush->SetOpacity(0.25f);
-                    d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), brush);
-                    brush->SetOpacity(1.0f);
-                    break;
-                case 0xB1:
-                    brush->SetOpacity(0.50f);
-                    d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), brush);
-                    brush->SetOpacity(1.0f);
-                    break;
-                case 0xB2:
-                    brush->SetOpacity(0.75f);
-                    d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), brush);
-                    brush->SetOpacity(1.0f);
-                    break;
-                case 0x20: break;
-                default: {
-                    wchar_t wc = cp437_to_unicode(ch);
-                    d2dCtx->DrawText(&wc, 1, textFormat.Get(),
-                        D2D1::RectF(x, y, x2, y2), brush);
-                    break;
+                {
+                    // Normal or underline.
+                    ID2D1SolidColorBrush* brush = intensity ? brightGreenBrush.Get() : greenBrush.Get();
+
+                    // Draw character.
+                    switch (ch) {
+                    case 0xDB: d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), brush); break;
+                    case 0xDC: d2dCtx->FillRectangle(D2D1::RectF(x, my, x2, y2), brush); break;
+                    case 0xDF: d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, my), brush); break;
+                    case 0xDD: d2dCtx->FillRectangle(D2D1::RectF(x, y, mx, y2), brush); break;
+                    case 0xDE: d2dCtx->FillRectangle(D2D1::RectF(mx, y, x2, y2), brush); break;
+                    case 0xB0:
+                        brush->SetOpacity(0.25f);
+                        d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), brush);
+                        brush->SetOpacity(1.0f);
+                        break;
+                    case 0xB1:
+                        brush->SetOpacity(0.50f);
+                        d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), brush);
+                        brush->SetOpacity(1.0f);
+                        break;
+                    case 0xB2:
+                        brush->SetOpacity(0.75f);
+                        d2dCtx->FillRectangle(D2D1::RectF(x, y, x2, y2), brush);
+                        brush->SetOpacity(1.0f);
+                        break;
+                    case 0x20: break;
+                    default: {
+                        wchar_t wc = cp437_to_unicode(ch);
+                        d2dCtx->DrawText(&wc, 1, textFormat.Get(),
+                            D2D1::RectF(x, y, x2, y2), brush);
+                        break;
+                    }
+                    }
+
+                    // Underline: FG RGB = 001. Draw a line at scan line 12 (of 0-13).
+                    if (fg_rgb == 0x01) {
+                        float scanH = (y2 - y) / (max_scanline + 1);
+                        float ulY = y + scanH * 12.0f;
+                        d2dCtx->FillRectangle(D2D1::RectF(x, ulY, x2, ulY + scanH), brush);
+                    }
                 }
+
+            draw_cursor:
+                // MC6845 hardware cursor.
+                // Ref: crtc6845.v -- cursor visible when scanline >= start AND <= end.
+                // No wrap-around: start > end = empty range = invisible.
+                // Cursor is a filled block spanning start..end scan lines.
+                if (cursor_visible && char_idx == cursor_pos) {
+                    float scanH = (y2 - y) / (max_scanline + 1);
+                    float cy1 = y + scanH * cursor_start_sl;
+                    float cy2 = y + scanH * (cursor_end_sl + 1);
+                    d2dCtx->FillRectangle(D2D1::RectF(x, cy1, x2, cy2), greenBrush.Get());
                 }
             }
         }
@@ -649,6 +787,7 @@ void MdaDisplay::render_loop(std::stop_token stop) {
     dx.cpu = cpu_;
     dx.mem = mem_;
     dx.dma = dma_;
+    dx.mda_card = mda_card_;
     dx.dbg_visible = &dbg_visible_;
     if (!dx.init(hwnd, winW, winH)) {
         spdlog::error("[MDA Display] Failed to init DX11");
@@ -681,13 +820,15 @@ void MdaDisplay::render_loop(std::stop_token stop) {
 
 void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
                        Scheduler* scheduler, IC_8088* cpu,
-                       const MemoryView* mem, IC_8237A* dma) {
+                       const MemoryView* mem, IC_8237A* dma,
+                       const ISA_MDA* mda_card) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
     cpu_ = cpu;
     mem_ = mem;
     dma_ = dma;
+    mda_card_ = mda_card;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });

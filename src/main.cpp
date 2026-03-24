@@ -122,7 +122,7 @@ int main() {
     MdaDisplay mda_display;
     scheduler.set_cpu(board.cpu);
     mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
-                       &scheduler, board.cpu, &memview, board.dma_ic);
+                       &scheduler, board.cpu, &memview, board.dma_ic, &mda);
 
     // Start paused. Pre-set the debugger view to the reset vector.
     scheduler.pause();
