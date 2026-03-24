@@ -107,8 +107,16 @@ struct DxState {
 
     // MDA card (for CRTC cursor registers)
     const ISA_MDA* mda_card = nullptr;
-    uint64_t blink_counter = 0;   // frame counter for character attribute blink
-    uint8_t cursor_counter_ = 0;  // 5-bit counter, increments per frame (vsync)
+
+    // Blink timing: derived from QPC wall clock, independent of render frame rate.
+    // Real MDA field rate: 18.432 MHz dot clock / (882 chars * 370 lines) = ~56.5 Hz.
+    // The 6845's 5-bit cursor_counter increments once per field.
+    // We compute: fields_elapsed = (qpc_now - qpc_start) * 56.5 / qpc_freq
+    // Then cursor_counter = fields_elapsed & 0x1F.
+    // Character attribute blink (bit 7) uses the same counter at 1/32 field rate.
+    LARGE_INTEGER qpc_freq_ = {};
+    LARGE_INTEGER qpc_start_ = {};
+    static constexpr double MDA_FIELD_HZ = 18432000.0 / (882.0 * 370.0);  // ~56.5 Hz
 
     // MHz tracking
     const uint64_t* clk_cycles = nullptr;
@@ -209,6 +217,10 @@ bool DxState::init(HWND hw, int w, int h) {
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &blackBrush);
     d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.65f, 0.0f), &underlineBrush);
 
+    // QPC for blink timing (frame-rate independent).
+    QueryPerformanceFrequency(&qpc_freq_);
+    QueryPerformanceCounter(&qpc_start_);
+
     // ImGui -- scale font + style for high-DPI.
     // Load the font at the scaled pixel size (not FontGlobalScale, which
     // just stretches the already-rasterized atlas and looks blurry).
@@ -237,7 +249,12 @@ void DxState::render_mda(const uint8_t* vram) {
     d2dCtx->BeginDraw();
     d2dCtx->Clear(D2D1::ColorF(D2D1::ColorF::Black));
 
-    blink_counter++;
+    // Compute blink counter from wall clock at MDA field rate (~56.5 Hz).
+    LARGE_INTEGER qpc_now;
+    QueryPerformanceCounter(&qpc_now);
+    double elapsed_sec = double(qpc_now.QuadPart - qpc_start_.QuadPart) / qpc_freq_.QuadPart;
+    uint32_t fields_elapsed = static_cast<uint32_t>(elapsed_sec * MDA_FIELD_HZ);
+    uint8_t cursor_counter = fields_elapsed & 0x1F;  // 5-bit counter
 
     // Read CRTC cursor registers (Option A: direct read, no sync).
     // R10: cursor start scan line (bits 4:0), bits 6:5 = cursor mode
@@ -263,50 +280,48 @@ void DxState::render_mda(const uint8_t* vram) {
         max_scanline    = cr[ISA_MDA::CRTC_MAX_SCANLINE] & 0x1F;
         if (max_scanline == 0) max_scanline = 13;
 
-        // MC6845 cursor blink from Verilog reference implementation:
-        // https://github.com/yeokm1/graphics-gremlin-hdmi/blob/main/verilog/crtc6845.v
+        // MC6845 cursor blink per IBM BIOS source (PCBIOS.ASM):
         //
-        // 5-bit cursor_counter increments once per frame (vsync).
-        // Blink signal:
-        //   assign blink = (c_start[6:5] == 2'b00)
-        //                | (c_start[5] ? cursor_counter[4] : cursor_counter[3]);
+        //   "** HARDWARE WILL ALWAYS CAUSE BLINK"
+        //   "** SETTING BIT 5 OR 6 WILL CAUSE ERRATIC BLINKING
+        //       OR NO CURSOR AT ALL"
         //
-        //   Bits 6:5  Behavior
+        // The cursor always blinks.  There is no steady (non-blinking) mode.
+        // BIOS programs R10 = 0x0B (bits 6:5 = 00, start = 11).
+        //
+        //   Bits 6:5  Behavior (real MDA hardware)
         //   --------  -------------------------------------------
-        //   00        No blink (cursor always visible)
-        //   01        Cursor disabled (invisible)
-        //   10        Blink at frame_rate / 16 (counter bit 3)
-        //   11        Blink at frame_rate / 32 (counter bit 4)
+        //   00        Blink at 1/16 field rate (~3.75 Hz at ~60 Hz)
+        //   01        Erratic / no cursor
+        //   10        Erratic / no cursor
+        //   11        Blink at 1/32 field rate (~1.875 Hz)
         //
-        // Final visibility:
-        //   cursor = (addr match) & (scanline in range) & blink
-        //          & (c_start[6:5] != 2'b01) & display_enable
+        // 5-bit counter incremented once per frame (vsync).
+        // Bit 5 selects counter bit: 0 -> bit 3 (fast), 1 -> bit 4 (slow).
         //
-        // No wrap-around: if start > end, scanline range is empty = invisible.
+        // No wrap-around: start > end = empty scanline range = invisible.
+        //
+        // Ref: crtc6845.v for counter/bit-select logic (correct for blink
+        //      timing, wrong about mode 00 being "always on").
+        //      IBM PCBIOS.ASM for definitive mode 00 = always blink.
 
-        // Simulate the 5-bit cursor_counter (increments per frame = per render call).
-        cursor_counter_ = (cursor_counter_ + 1) & 0x1F;
-
-        bool blink_sig;
-        if (cursor_mode == 0b00) {
-            blink_sig = true;  // always on
+        if (cursor_mode == 0b01 || cursor_mode == 0b10) {
+            cursor_visible = false;  // erratic / no cursor per BIOS
         } else {
-            // c_start[5] selects counter bit: 0 -> bit 3, 1 -> bit 4
-            blink_sig = (cursor_mode & 1)
-                ? ((cursor_counter_ >> 4) & 1)
-                : ((cursor_counter_ >> 3) & 1);
+            // Bit 5 selects blink rate: 0 = counter[3], 1 = counter[4].
+            bool blink_sig = (cursor_mode & 1)
+                ? ((cursor_counter >> 4) & 1)
+                : ((cursor_counter >> 3) & 1);
+            cursor_visible = blink_sig && (cursor_start_sl <= cursor_end_sl);
         }
-
-        cursor_visible = (cursor_mode != 0b01)  // not disabled
-                       && blink_sig
-                       && (cursor_start_sl <= cursor_end_sl);  // no wrap = invisible
 
         // Adjust cursor_pos relative to display_start.
         cursor_pos -= display_start;
     }
 
-    // Character attribute blink: bit 7 = blink at ~1.875 Hz (1/32 field rate).
-    bool blink_on = ((blink_counter / 16) & 1) == 0;
+    // Character attribute blink: bit 7 = blink at 1/32 field rate.
+    // Uses counter[4] (same as cursor mode 11), toggling every 16 fields.
+    bool blink_on = ((cursor_counter >> 4) & 1) == 0;
 
     if (vram) {
         for (int row = 0; row < MDA_ROWS; ++row) {
