@@ -99,6 +99,7 @@ mov word [0x0500], 0x0000
 mov word [0x0502], 0x0000
 mov word [0x0504], 0x0000
 mov word [0x0506], 0x0000
+mov byte [0x05F0], 0x00         ; generic IRQ6 flag
 
 ; Zero DMA target buffer
 mov di, DMA_BUF_OFFSET
@@ -182,11 +183,65 @@ mov dx, FDC_DOR
 mov al, 0x0C                    ; FDC enable + DMA/IRQ enable (no motor yet)
 out dx, al
 
-; Brief delay after coming out of reset
-mov cx, 10
-.post_reset_delay:
-    nop
-    loop .post_reset_delay
+; Handle post-reset IRQ6 (real NEC 765 fires IRQ on reset deassert).
+; Must drain this before any data transfer or PIC won't deliver again.
+sti
+mov cx, 0xFFFF
+.reset_irq_wait:
+    cmp byte [0x05F0], 0
+    jne .reset_irq_got
+    loop .reset_irq_wait
+.reset_irq_got:
+    cli
+    mov byte [0x05F0], 0        ; clear generic IRQ flag
+    mov word [0x0504], 0x0000   ; reset data-transfer IRQ flag
+
+; SENSE INTERRUPT STATUS -- drain the 2 result bytes
+mov dx, FDC_MSR
+mov cx, 50
+.sense_wait1:
+    in al, dx
+    test al, 0x80
+    jnz .sense_rdy1
+    loop .sense_wait1
+    jmp .sense_done
+.sense_rdy1:
+    test al, 0x40               ; DIO=0 means command phase
+    jnz .sense_done             ; already in result? skip send
+    mov al, 0x08                ; SENSE INTERRUPT STATUS
+    mov dx, FDC_FIFO
+    out dx, al
+    ; Read ST0
+    mov dx, FDC_MSR
+    mov cx, 50
+.sense_wait2:
+    in al, dx
+    test al, 0x80
+    jz .sense_wait2l
+    test al, 0x40
+    jnz .sense_read_st0
+.sense_wait2l:
+    loop .sense_wait2
+    jmp .sense_done
+.sense_read_st0:
+    mov dx, FDC_FIFO
+    in al, dx                   ; ST0 (discard)
+    ; Read PCN
+    mov dx, FDC_MSR
+    mov cx, 50
+.sense_wait3:
+    in al, dx
+    test al, 0x80
+    jz .sense_wait3l
+    test al, 0x40
+    jnz .sense_read_pcn
+.sense_wait3l:
+    loop .sense_wait3
+    jmp .sense_done
+.sense_read_pcn:
+    mov dx, FDC_FIFO
+    in al, dx                   ; PCN (discard)
+.sense_done:
 
 ; =====================================================================
 ; Test 1: Read MSR -- check RQM bit
@@ -443,7 +498,8 @@ read_cmd_s2:                    ; PIO: read sector 2
 ; =====================================================================
 irq6_handler:
     push ax
-    mov word [0x0504], 0x0001   ; flag: IRQ 6 fired
+    mov word [0x0504], 0x0001   ; flag: IRQ 6 fired (for data xfer test)
+    mov byte [0x05F0], 0xFF     ; generic IRQ6 flag (for reset/seek waits)
     ; Send EOI to PIC
     mov al, 0x20
     out 0x20, al

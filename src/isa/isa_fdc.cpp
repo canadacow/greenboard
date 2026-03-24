@@ -313,24 +313,23 @@ void ISA_FloppyController::execute_read_data() {
 // =========================================================================
 
 uint8_t ISA_FloppyController::on_dma_read() {
-    if (sector_offset_ + xfer_ptr_ < image_.size()) {
-        uint8_t byte = image_[sector_offset_ + xfer_ptr_];
-        xfer_ptr_++;
-        return byte;
-    }
+    uint8_t byte = 0x00;
+    if (sector_offset_ + xfer_ptr_ < image_.size())
+        byte = image_[sector_offset_ + xfer_ptr_];
     xfer_ptr_++;
-    return 0x00;
+
+    // Crossed a sector boundary? Advance to next sector so the DMA
+    // controller can keep pulling bytes across multiple sectors.
+    if (xfer_ptr_ >= sector_size_ && cur_sector_ < eot_) {
+        advance_sector();
+        xfer_ptr_ = 0;
+    }
+    return byte;
 }
 
 void ISA_FloppyController::on_dma_complete(int /*channel*/) {
-    spdlog::info("[{}] DMA sector complete: sector {} ({} bytes)", name(), cur_sector_, xfer_ptr_);
-    if (advance_sector()) {
-        // More sectors to transfer -- start next sector.
-        xfer_ptr_ = 0;
-        assert_drq(2);
-    } else {
-        build_result_ok();
-    }
+    spdlog::info("[{}] DMA complete: {} sectors transferred", name(), cur_sector_ - cmd_buf_[4] + 1);
+    build_result_ok();
 }
 
 bool ISA_FloppyController::advance_sector() {

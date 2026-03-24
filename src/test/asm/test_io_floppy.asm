@@ -78,6 +78,7 @@ mov di, 0x0500
 mov cx, 16              ; 32 bytes = 16 words
 xor ax, ax
 rep stosw
+mov byte [0x05F0], 0x00         ; generic IRQ6 flag
 
 ; #####################################################################
 ; PART 1: I/O PORT TESTS
@@ -226,10 +227,64 @@ mov dx, FDC_DOR
 mov al, 0x0C
 out dx, al
 
-mov cx, 10
-.post_reset_delay:
-    nop
-    loop .post_reset_delay
+; Handle post-reset IRQ6
+sti
+mov cx, 0xFFFF
+.reset_irq_wait:
+    cmp byte [0x05F0], 0
+    jne .reset_irq_got
+    loop .reset_irq_wait
+.reset_irq_got:
+    cli
+    mov byte [0x05F0], 0
+    mov word [0x0514], 0x0000   ; reset data-transfer IRQ flag
+
+; SENSE INTERRUPT STATUS after reset
+mov dx, FDC_MSR
+mov cx, 50
+.sense_wait1:
+    in al, dx
+    test al, 0x80
+    jnz .sense_rdy1
+    loop .sense_wait1
+    jmp .sense_done
+.sense_rdy1:
+    test al, 0x40
+    jnz .sense_done
+    mov al, 0x08
+    mov dx, FDC_FIFO
+    out dx, al
+    ; Read ST0
+    mov dx, FDC_MSR
+    mov cx, 50
+.sense_wait2:
+    in al, dx
+    test al, 0x80
+    jz .sense_wait2l
+    test al, 0x40
+    jnz .sense_read_st0
+.sense_wait2l:
+    loop .sense_wait2
+    jmp .sense_done
+.sense_read_st0:
+    mov dx, FDC_FIFO
+    in al, dx
+    ; Read PCN
+    mov dx, FDC_MSR
+    mov cx, 50
+.sense_wait3:
+    in al, dx
+    test al, 0x80
+    jz .sense_wait3l
+    test al, 0x40
+    jnz .sense_read_pcn
+.sense_wait3l:
+    loop .sense_wait3
+    jmp .sense_done
+.sense_read_pcn:
+    mov dx, FDC_FIFO
+    in al, dx
+.sense_done:
 
 ; Read MSR
 mov dx, FDC_MSR
@@ -351,7 +406,8 @@ irq3_handler:
 ; =====================================================================
 irq6_handler:
     push ax
-    mov word [0x0514], 0x0001
+    mov word [0x0514], 0x0001   ; data-transfer IRQ flag
+    mov byte [0x05F0], 0xFF     ; generic IRQ6 flag
     mov al, 0x20
     out 0x20, al
     pop ax
