@@ -37,6 +37,8 @@ void IC_8284A::run(std::stop_token stop) {
     thread_set_time_critical();
     thread_pin_to_pcores();
 
+    clk_cycles_ = 0;
+
     // Convert this thread to a fiber so we can switch to component fibers.
     Fiber self = fiber_convert_thread();
 
