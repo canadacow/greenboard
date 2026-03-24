@@ -46,8 +46,8 @@ private:
     std::array<uint8_t, 256 * 1024> ram_{};
     std::array<uint8_t, 256 * 1024> parity_{};  // 1 bit per byte
 
-    // Address pins (shared -- same net for all 36 chips)
-    Pin pin_a_[8];    // A0..A7
+    // Address pins (shared -- same net for all 36 chips, contiguous in pool)
+    PinBlock<8> pin_a_;    // MA0..MA7
 
     // Shared control
     Pin pin_we_;      // ~WE

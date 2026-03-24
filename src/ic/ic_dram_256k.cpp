@@ -1,5 +1,7 @@
 #include "ic/ic_dram_256k.h"
 #include <spdlog/spdlog.h>
+#include <intrin.h>
+#include <cstdlib>
 
 namespace bench {
 
@@ -22,15 +24,15 @@ void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank
     // Shared signals -- grab from first chip of bank 0
     Socket& chip0 = bank0[0];
 
-    // 4164 address pins -> address bits
-    pin_a_[0] = pin(chip0, 5);    // A0
-    pin_a_[1] = pin(chip0, 7);    // A1
-    pin_a_[2] = pin(chip0, 6);    // A2
-    pin_a_[3] = pin(chip0, 12);   // A3
-    pin_a_[4] = pin(chip0, 11);   // A4
-    pin_a_[5] = pin(chip0, 10);   // A5
-    pin_a_[6] = pin(chip0, 13);   // A6
-    pin_a_[7] = pin(chip0, 9);    // A7
+    // 4164 address pins -> MA bus (scrambled pin numbering, contiguous pool).
+    // Build PinBlock from MA0-MA7 pool order: find base from any address pin.
+    // Pins 5,7,6,12,11,10,13,9 = MA0..MA7, but pool is ma_block_+0..+7.
+    Signal* ma0 = chip0.pin_signal(5);  // MA0
+    if (!ma0) {
+        spdlog::critical("[DRAM] MA0 (pin 5) not wired");
+        std::exit(1);
+    }
+    pin_a_.base = ma0->pin().idx;
 
     pin_we_  = connect_pin(chip0, 3);   // ~WE (set at T1, read at ~CAS time)
     pin_vcc_ = connect_pin(chip0, 8);   // VCC
@@ -53,7 +55,7 @@ void IC_DRAM_256K::install(std::vector<Socket>& bank0, std::vector<Socket>& bank
     }
 
     // Pin directions for wiring visualization.
-    for (int i = 0; i < 8; ++i) declare_input(pin_a_[i]);   // MA0-MA7
+    for (int i = 0; i < 8; ++i) declare_input(Pin{pin_a_.base + i});   // MA0-MA7
     declare_async_input(pin_we_);                              // ~WE (driven at T1, sampled at ~CAS)
     for (int b = 0; b < 4; ++b) {
         declare_input(banks_[b].ras);                         // ~RAS
@@ -206,12 +208,11 @@ void IC_DRAM_256K::on_cycle(Fiber /*caller*/) {
 }
 
 uint8_t IC_DRAM_256K::read_address() const {
-    uint8_t addr = 0;
-    for (int i = 0; i < 8; ++i) {
-        if (pin_a_[i].level() == Level::High)
-            addr |= (1 << i);
-    }
-    return addr;
+    // 8 contiguous Level bytes -> 8-bit address mask.
+    // Load as uint64, compare bytes > 0 via movemask.
+    const auto* p = reinterpret_cast<const __m128i*>(&SignalPool::levels[pin_a_.base]);
+    return static_cast<uint8_t>(
+        _mm_movemask_epi8(_mm_cmpgt_epi8(_mm_loadu_si128(p), _mm_setzero_si128())));
 }
 
 } // namespace bench

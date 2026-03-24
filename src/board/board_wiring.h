@@ -51,6 +51,7 @@ struct Board {
     int xa_block_  = SignalPool::allocate_block(24); // XA0-XA19 + 4 dummy: buffered via U15/U16/U17 (BRD "XA0-XA19")
     int d_block_   = SignalPool::allocate_block(8);  // D0-D7: system data bus (U18 74S373 D inputs)
     int md_block_  = SignalPool::allocate_block(8);  // MD0-MD7: DRAM data bus (U12 B side)
+    int ma_block_  = SignalPool::allocate_block(8);  // MA0-MA7: DRAM address mux outputs
     int u14_a_block_ = SignalPool::allocate_block(8); // U14 A: ~IOR,~IOW,~MEMR,~MEMW + 4 pad
     int u14_b_block_ = SignalPool::allocate_block(8); // U14 B: ~XIOR,~XIOW,~XMEMR,~XMEMW + 4 pad
 
@@ -125,8 +126,10 @@ struct Board {
     Signal spkr_mix{"N-000325"};      // U63 gate 4 output (SPKR_DATA NAND T/C_2_OUT)
 
     // DRAM signals
-    Signal dram_ma0{"MA0"}, dram_ma1{"MA1"}, dram_ma2{"MA2"}, dram_ma3{"MA3"};
-    Signal dram_ma4{"MA4"}, dram_ma5{"MA5"}, dram_ma6{"MA6"}, dram_ma7{"MA7"};
+    Signal dram_ma0{"MA0", ma_block_},     dram_ma1{"MA1", ma_block_ + 1};
+    Signal dram_ma2{"MA2", ma_block_ + 2}, dram_ma3{"MA3", ma_block_ + 3};
+    Signal dram_ma4{"MA4", ma_block_ + 4}, dram_ma5{"MA5", ma_block_ + 5};
+    Signal dram_ma6{"MA6", ma_block_ + 6}, dram_ma7{"MA7", ma_block_ + 7};
     Signal* dram_ma_arr[8] = {&dram_ma0, &dram_ma1, &dram_ma2, &dram_ma3,
                               &dram_ma4, &dram_ma5, &dram_ma6, &dram_ma7};
     Signal ras{"RAS"};
