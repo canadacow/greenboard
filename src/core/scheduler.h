@@ -2,6 +2,7 @@
 #include "core/signal.h"
 #include "core/callback_component.h"
 #include "core/fiber_component.h"
+#include "ic/ic_8088.h"
 #include <array>
 #include <cassert>
 #include <cinttypes>
@@ -386,16 +387,13 @@ public:
         steps_.fetch_add(1, std::memory_order_relaxed);
         dbg_wake_.store(1, std::memory_order_release);
     }
-    // Step one instruction: run cycles until IP changes, then pause.
-    // ip_ptr must point to the CPU's reg_ip_ (stable across cycles).
-    void step_instruction(const uint16_t* ip_ptr) {
-        dbg_ip_ptr_ = ip_ptr;
-        dbg_ip_start_ = *ip_ptr;
+    // Step one instruction: run cycles until the CPU's instruction counter changes.
+    void step_instruction() {
+        dbg_instr_start_ = dbg_cpu_->instr_count();
         step_instr_.store(true, std::memory_order_relaxed);
         dbg_wake_.store(1, std::memory_order_release);
     }
-    // Give the scheduler a pointer to the CPU's IP for instruction stepping.
-    void set_cpu_ip(const uint16_t* ip_ptr) { dbg_ip_ptr_ = ip_ptr; }
+    void set_cpu(IC_8088* cpu) { dbg_cpu_ = cpu; }
 
     // Set the pool base index for the 20-bit address bus (LA0-LA19).
     // Called by board wiring so evaluate() can pre-compute bus_address.
@@ -407,8 +405,8 @@ private:
     std::atomic<int>  steps_{0};
     std::atomic<bool> step_instr_{false};
     std::atomic<int>  dbg_wake_{0};   // written by UI to break umwait
-    const uint16_t*   dbg_ip_ptr_ = nullptr;
-    uint16_t          dbg_ip_start_ = 0;
+    IC_8088*          dbg_cpu_ = nullptr;
+    uint64_t          dbg_instr_start_ = 0;
     uint64_t          dbg_last_tsc_ = 0;
     // ~50ms at 3GHz = 150M ticks. Conservative -- any cycle gap this large
     // means a debugger froze us (normal cycle is ~600 ticks at 4.77MHz).
@@ -417,11 +415,11 @@ private:
     // Block the clock thread while paused, using umwait to sleep efficiently.
     // Called at the top of evaluate(); predicted-not-taken when running normally.
     void pause_gate() {
-        // Instruction stepping: let cycles through until IP changes.
+        // Instruction stepping: let cycles through until instr_count changes.
         if (step_instr_.load(std::memory_order_relaxed)) {
-            if (dbg_ip_ptr_ && *dbg_ip_ptr_ != dbg_ip_start_) {
+            if (dbg_cpu_ && dbg_cpu_->instr_count() != dbg_instr_start_) {
                 step_instr_.store(false, std::memory_order_relaxed);
-                // IP changed -- fall through to the sleep loop below.
+                // Instruction completed -- fall through to sleep.
             } else {
                 return;  // same instruction, keep running
             }

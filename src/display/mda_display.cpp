@@ -400,8 +400,8 @@ void DxState::render_debugger() {
     bool do_step_instr = ImGui::Button("Step (F10)");
     if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, true))
         do_step_instr = true;
-    if (do_step_instr && cpu)
-        scheduler->step_instruction(cpu->ip_ptr());
+    if (do_step_instr)
+        scheduler->step_instruction();
     ImGui::SameLine();
     // Step Cycle (F11) -- single CLK cycle
     bool do_step_cycle = ImGui::Button("Cycle (F11)");
@@ -590,6 +590,10 @@ void DxState::present() {
 static LRESULT CALLBACK MdaWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
         return true;
+    // F10 generates WM_SYSKEYDOWN -- don't let DefWindowProc eat it for
+    // menu activation, otherwise F10 requires two presses.
+    if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp == VK_F10)
+        return 0;
     if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }

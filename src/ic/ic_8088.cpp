@@ -154,6 +154,7 @@ void IC_8088::run() {
             continue;
         }
         execute();
+        yield();  // instruction boundary -- decode/execute takes at least 1 cycle
     }
 
     drive_status_passive();
@@ -1298,6 +1299,8 @@ void IC_8088::execute() {
             pc_interrupt(vector);
         }
     }
+
+    ++instr_count_;
 }
 
 } // namespace bench

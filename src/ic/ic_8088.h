@@ -311,7 +311,9 @@ public:
     enum Flag { CF=40, PF=41, AF=42, ZF=43, SF=44, TF=45, IF=46, DF=47, OF=48 };
     TState t_state() const { return t_state_; }
     BusT bus_t() const { return bus_t_; }
+    uint64_t instr_count() const { return instr_count_; }
 private:
+    uint64_t instr_count_ = 0;
 
     // Start address (set via constructor, applied in cpu_reset)
     uint16_t start_cs_;
