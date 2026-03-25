@@ -29,6 +29,7 @@ int main() {
     // --- Wire the motherboard ---
     std::string bios_path  = "assets/BIOS_IBM5150_27OCT82_1501476_U33.BIN";
     //std::string bios_path = "docs/Troubleshooting/SuperSoft Landmark Diagnostic BIOS/5150 or 5160 _ 2764 _ 8KB.BIN";
+    //std::string bios_path = "assets/GLABIOS_0.4.1_8X.ROM";
     //std::string bios_path = "docs/Anonymous BIOS/pcxtbios25/PCXTBIOS.BIN";
     std::string basic_u29  = "assets/IBM 5150 - Cassette BASIC version C1.10 - U29 - 5000019.bin";
     std::string basic_u30  = "assets/IBM 5150 - Cassette BASIC version C1.10 - U30 - 5000021.bin";

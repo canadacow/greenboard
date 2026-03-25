@@ -115,6 +115,19 @@ private:
     ComPtr<ID3D11ShaderResourceView> rt_srv_;
     int rt_w_ = 0, rt_h_ = 0;
 
+    // Component overlay texture (rasterized from SVG)
+    ComPtr<ID3D11ShaderResourceView> overlay_srv_;
+    ComPtr<ID3D11PixelShader> overlay_ps_;
+    ComPtr<ID3D11Buffer> overlay_cb_;
+    int overlay_w_ = 0, overlay_h_ = 0;
+    float overlay_alpha_ = 0.7f;
+    bool overlay_visible_ = true;
+    // SVG -> board coordinate transform
+    float overlay_scale_x_ = 0, overlay_scale_y_ = 0;
+    float overlay_off_x_ = 0, overlay_off_y_ = 0;
+
+    bool load_overlay(const char* png_path);
+    void render_overlay_to_rt(ID3D11DeviceContext* ctx, int w, int h);
     void ensure_rt(ID3D11DeviceContext* ctx, int w, int h);
 };
 

@@ -75,7 +75,7 @@ add_executable(bench
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis nlohmann_json::nlohmann_json d3d11 d2d1 dwrite dxgi d3dcompiler)
+target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis nlohmann_json::nlohmann_json d3d11 d2d1 dwrite dxgi d3dcompiler windowscodecs)
 target_compile_definitions(bench PRIVATE
     PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
 )

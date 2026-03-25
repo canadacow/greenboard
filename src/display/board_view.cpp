@@ -2,12 +2,15 @@
 #include "core/signal.h"
 
 #include <d3dcompiler.h>
+#include <wincodec.h>
 #include <nlohmann/json.hpp>
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 #include <fstream>
 #include <cmath>
 #include <algorithm>
+#include <initializer_list>
+#include <unordered_set>
 
 using Microsoft::WRL::ComPtr;
 using json = nlohmann::json;
@@ -75,9 +78,21 @@ float sd_segment(float2 p, float2 a, float2 b) {
 }
 
 // Layer visibility check via bitmask.
+// flags: 0=top, 1=bot, 2=via, 3=pad, 4=filled_box, 5=board_outline
 bool layer_visible(uint flags) {
-    // flags: 0=top, 1=bot, 2=via, 3=pad, 4=outline
-    return (layer_mask & (1u << min(flags, 4u))) != 0;
+    uint bit = min(flags, 5u);
+    // Bits 4 and 5 both map to the "outline" toggle (bit 4 in mask).
+    if (bit == 5u) bit = 4u;
+    return (layer_mask & (1u << bit)) != 0;
+}
+
+// SDF: distance from point to axis-aligned box (min,max corners).
+// Negative inside, positive outside.
+float sd_box(float2 p, float2 box_min, float2 box_max) {
+    float2 center = (box_min + box_max) * 0.5;
+    float2 half_sz = (box_max - box_min) * 0.5;
+    float2 d = abs(p - center) - half_sz;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
 }
 
 float4 ps_main(VS_OUT input) : SV_Target {
@@ -86,53 +101,135 @@ float4 ps_main(VS_OUT input) : SV_Target {
     // Pixel size in board-space (for anti-aliasing).
     float px = view_size.x / screen_size.x;
 
-    float min_dist = 1e9;
-    uint  closest  = 0;
+    // Pass 1: traces, vias, pads (flags 0-3) and board outline strokes (flag 5).
+    float trace_dist = 1e9;
+    uint  trace_idx  = 0;
+
+    // Pass 2: filled IC boxes (flag 4).
+    float box_dist = 1e9;
+    uint  box_idx  = 0;
 
     for (uint i = 0; i < seg_count; i++) {
-        if (!layer_visible(segs[i].flags)) continue;
+        uint fl = segs[i].flags;
+        if (!layer_visible(fl)) continue;
 
-        // AABB early-out: expand segment bbox by half_w + 2px AA margin.
-        float margin = segs[i].half_w + px * 2.0;
-        float2 mn = min(float2(segs[i].x1, segs[i].y1),
-                        float2(segs[i].x2, segs[i].y2)) - margin;
-        float2 mx = max(float2(segs[i].x1, segs[i].y1),
-                        float2(segs[i].x2, segs[i].y2)) + margin;
-        if (p.x < mn.x || p.x > mx.x || p.y < mn.y || p.y > mx.y)
-            continue;
-
-        float d = sd_segment(p, float2(segs[i].x1, segs[i].y1),
-                                float2(segs[i].x2, segs[i].y2));
-        d -= segs[i].half_w;
-
-        if (d < min_dist) {
-            min_dist = d;
-            closest  = i;
+        if (fl == 4u) {
+            // Filled box: (x1,y1)=min, (x2,y2)=max.
+            float2 bmin = float2(segs[i].x1, segs[i].y1);
+            float2 bmax = float2(segs[i].x2, segs[i].y2);
+            // Quick AABB with margin for border.
+            float margin = px * 4.0;
+            if (p.x < bmin.x - margin || p.x > bmax.x + margin ||
+                p.y < bmin.y - margin || p.y > bmax.y + margin)
+                continue;
+            float d = sd_box(p, bmin, bmax);
+            if (d < box_dist) { box_dist = d; box_idx = i; }
+        } else {
+            // Line segment SDF (traces, vias, pads, board outline).
+            float margin = segs[i].half_w + px * 2.0;
+            float2 mn = min(float2(segs[i].x1, segs[i].y1),
+                            float2(segs[i].x2, segs[i].y2)) - margin;
+            float2 mx = max(float2(segs[i].x1, segs[i].y1),
+                            float2(segs[i].x2, segs[i].y2)) + margin;
+            if (p.x < mn.x || p.x > mx.x || p.y < mn.y || p.y > mx.y)
+                continue;
+            float d = sd_segment(p, float2(segs[i].x1, segs[i].y1),
+                                    float2(segs[i].x2, segs[i].y2));
+            d -= segs[i].half_w;
+            if (d < trace_dist) { trace_dist = d; trace_idx = i; }
         }
     }
 
-    // Background: dark PCB green.
-    float4 bg = bg_color;
+    // --- Composite: background -> IC fill -> traces -> IC border ---
+    float4 result = bg_color;
 
-    if (min_dist > px * 2.0)
-        return bg;
+    // IC fill: dark body when inside box.
+    float border_w = px * 2.0;  // border thickness in board space
+    if (box_dist < border_w) {
+        float4 fill = float4(0.06, 0.06, 0.06, 1.0);  // dark IC body
+        float fill_aa = smoothstep(-px * 0.75, px * 0.75, box_dist);
+        result = lerp(fill, result, fill_aa);
+    }
 
-    float4 seg_color = unpack_rgba(segs[closest].rgba);
+    // Traces on top of fill.
+    if (trace_dist < px * 2.0) {
+        float4 seg_color = unpack_rgba(segs[trace_idx].rgba);
 
-    // Modulate color by live signal level.
-    uint lvl = net_levels[segs[closest].net];
-    if (lvl == 2u)       seg_color.rgb *= 2.0;                        // High: bright
-    else if (lvl == 0u)  seg_color.rgb *= 0.25;                       // Low: dim
-    else if (lvl == 1u)  seg_color.rgb = float3(0.25, 0.25, 0.25);   // HiZ: gray
-    // else 0xFF (unbound): use base color as-is.
+        // Modulate color by live signal level.
+        uint lvl = net_levels[segs[trace_idx].net];
+        if (lvl == 2u)       seg_color.rgb *= 2.0;
+        else if (lvl == 0u)  seg_color.rgb *= 0.25;
+        else if (lvl == 1u)  seg_color.rgb = float3(0.25, 0.25, 0.25);
 
-    // Highlight: brighten if this net is selected.
-    if (highlight_net != 0 && segs[closest].net == highlight_net)
-        seg_color = lerp(seg_color, float4(1, 1, 1, 1), 0.5);
+        // Highlight net.
+        if (highlight_net != 0 && segs[trace_idx].net == highlight_net)
+            seg_color = lerp(seg_color, float4(1, 1, 1, 1), 0.5);
 
-    // Anti-alias: smooth transition over 1.5 pixels.
-    float aa = smoothstep(-px * 0.75, px * 0.75, min_dist);
-    return lerp(seg_color, bg, aa);
+        float aa = smoothstep(-px * 0.75, px * 0.75, trace_dist);
+        result = lerp(seg_color, result, aa);
+    }
+
+    // IC border on top of everything: bright stroke at box edge.
+    if (box_dist > -border_w && box_dist < border_w) {
+        float4 border_color = float4(0.7, 0.7, 0.7, 1.0);
+        // Distance to the edge itself (abs of box SDF).
+        float edge_dist = abs(box_dist) - border_w * 0.5;
+        float edge_aa = smoothstep(-px * 0.75, px * 0.75, edge_dist);
+        result = lerp(border_color, result, edge_aa);
+    }
+
+    return result;
+}
+)HLSL";
+
+// Overlay shader: samples component PNG texture, mapped to board coordinates.
+static const char* k_overlay_shader = R"HLSL(
+
+Texture2D overlay_tex : register(t0);
+SamplerState samp     : register(s0);
+
+cbuffer OverlayCB : register(b0) {
+    float2 view_min;
+    float2 view_size;
+    float2 screen_size;
+    // SVG -> board transform: board_xy = svg_xy * scale + offset
+    float2 ovl_scale;   // mils per SVG unit
+    float2 ovl_offset;  // board origin offset (mils)
+    float2 ovl_svg_size; // SVG viewBox size (pixels in source)
+    float  alpha;
+    float  _pad;
+};
+
+struct VS_OUT {
+    float4 pos : SV_Position;
+    float2 uv  : TEXCOORD0;
+};
+
+VS_OUT ovl_vs(uint id : SV_VertexID) {
+    VS_OUT o;
+    o.uv  = float2((id << 1) & 2, id & 2);
+    o.pos = float4(o.uv * 2.0 - 1.0, 0.0, 1.0);
+    o.pos.y = -o.pos.y;
+    return o;
+}
+
+float4 ovl_ps(VS_OUT input) : SV_Target {
+    // Screen pixel -> board space.
+    float2 board_p = view_min + input.uv * view_size;
+
+    // Board space -> SVG space.
+    float2 svg_p = (board_p - ovl_offset) / ovl_scale;
+
+    // SVG space -> UV [0,1].
+    float2 uv = svg_p / ovl_svg_size;
+
+    // Out of bounds: fully transparent.
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
+        return float4(0, 0, 0, 0);
+
+    float4 c = overlay_tex.Sample(samp, uv);
+    c.a *= alpha;
+    return c;
 }
 )HLSL";
 
@@ -244,22 +341,32 @@ bool BoardView::load_json(const char* path) {
             segments_.push_back(s);
         }
 
-        // Outlines
-        for (auto& o : c["outline"]) {
-            float lx1 = o["x1"].get<float>(), ly1 = o["y1"].get<float>();
-            float lx2 = o["x2"].get<float>(), ly2 = o["y2"].get<float>();
-
+        // IC filled box: compute AABB of outline segments, store as (min, max).
+        if (!c["outline"].empty()) {
+            float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f;
+            for (auto& o : c["outline"]) {
+                float lx1 = o["x1"].get<float>(), ly1 = o["y1"].get<float>();
+                float lx2 = o["x2"].get<float>(), ly2 = o["y2"].get<float>();
+                float wx1, wy1, wx2, wy2;
+                xform(lx1, ly1, wx1, wy1);
+                xform(lx2, ly2, wx2, wy2);
+                bx0 = (std::min)({bx0, wx1, wx2});
+                by0 = (std::min)({by0, wy1, wy2});
+                bx1 = (std::max)({bx1, wx1, wx2});
+                by1 = (std::max)({by1, wy1, wy2});
+            }
+            // flag=4: filled box. x1,y1 = min corner; x2,y2 = max corner.
             GpuSegment s;
-            xform(lx1, ly1, s.x1, s.y1);
-            xform(lx2, ly2, s.x2, s.y2);
-            s.half_w = 1.5f;  // thin outline
+            s.x1 = bx0; s.y1 = by0;
+            s.x2 = bx1; s.y2 = by1;
+            s.half_w = 0;  // unused for box
             s.net = 0;
             s.flags = 4;
             s.rgba = COL_OUTLINE;
             segments_.push_back(s);
         }
 
-        // Label
+        // Label (centered on IC body)
         CompLabel lbl;
         lbl.ref = c["ref"].get<std::string>();
         lbl.value = c.value("value", "");
@@ -268,7 +375,7 @@ bool BoardView::load_json(const char* path) {
         labels_.push_back(std::move(lbl));
     }
 
-    // Board outline
+    // Board outline (flag=5: stroke, same layer bit as outline)
     for (auto& o : j["board_outline"]) {
         GpuSegment s;
         s.x1 = o["x1"].get<float>();
@@ -277,7 +384,7 @@ bool BoardView::load_json(const char* path) {
         s.y2 = o["y2"].get<float>();
         s.half_w = 5.0f;
         s.net = 0;
-        s.flags = 4;
+        s.flags = 5;
         s.rgba = COL_BOARD;
         segments_.push_back(s);
     }
@@ -369,6 +476,98 @@ bool BoardView::create_gpu_resources(ID3D11Device* device) {
     lvd.Buffer.NumElements = lvl_count;
     device->CreateShaderResourceView(lvl_buf_.Get(), &lvd, &lvl_srv_);
 
+    // Overlay shader (component PNG on top of traces)
+    auto ovl_vs = compile_shader(k_overlay_shader, "ovl_vs", "vs_5_0");
+    auto ovl_ps = compile_shader(k_overlay_shader, "ovl_ps", "ps_5_0");
+    if (ovl_vs && ovl_ps) {
+        // Reuse vs_ for the fullscreen triangle (same pattern).
+        device->CreatePixelShader(ovl_ps->GetBufferPointer(),
+                                  ovl_ps->GetBufferSize(), nullptr, &overlay_ps_);
+        // Overlay constant buffer (bigger than ViewCB, needs own buffer).
+        D3D11_BUFFER_DESC ocb = {};
+        ocb.ByteWidth = 64;  // 4 float2 + 2 floats + pad = 48 -> round to 64
+        ocb.Usage = D3D11_USAGE_DYNAMIC;
+        ocb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        ocb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        device->CreateBuffer(&ocb, nullptr, &overlay_cb_);
+    }
+
+    return true;
+}
+
+// ========================================================================
+// PNG overlay loading (WIC)
+// ========================================================================
+
+bool BoardView::load_overlay(const char* png_path) {
+    ComPtr<IWICImagingFactory> wic;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+                                  CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic));
+    if (FAILED(hr)) return false;
+
+    // Convert path to wide string.
+    int len = MultiByteToWideChar(CP_UTF8, 0, png_path, -1, nullptr, 0);
+    std::vector<wchar_t> wpath(len);
+    MultiByteToWideChar(CP_UTF8, 0, png_path, -1, wpath.data(), len);
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    hr = wic->CreateDecoderFromFilename(wpath.data(), nullptr,
+                                         GENERIC_READ, WICDecodeMetadataCacheOnLoad,
+                                         &decoder);
+    if (FAILED(hr)) {
+        spdlog::error("[BoardView] Cannot open overlay PNG: {}", png_path);
+        return false;
+    }
+
+    ComPtr<IWICBitmapFrameDecode> frame;
+    decoder->GetFrame(0, &frame);
+
+    ComPtr<IWICFormatConverter> converter;
+    wic->CreateFormatConverter(&converter);
+    converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA,
+                          WICBitmapDitherTypeNone, nullptr, 0.0,
+                          WICBitmapPaletteTypeCustom);
+
+    UINT w = 0, h = 0;
+    converter->GetSize(&w, &h);
+
+    std::vector<uint8_t> pixels(w * h * 4);
+    converter->CopyPixels(nullptr, w * 4, static_cast<UINT>(pixels.size()),
+                          pixels.data());
+
+    // Create DX11 texture.
+    D3D11_TEXTURE2D_DESC td = {};
+    td.Width = w;
+    td.Height = h;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_IMMUTABLE;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA srd = {};
+    srd.pSysMem = pixels.data();
+    srd.SysMemPitch = w * 4;
+
+    ComPtr<ID3D11Texture2D> tex;
+    device_->CreateTexture2D(&td, &srd, &tex);
+    device_->CreateShaderResourceView(tex.Get(), nullptr, &overlay_srv_);
+
+    overlay_w_ = static_cast<int>(w);
+    overlay_h_ = static_cast<int>(h);
+
+    // SVG viewBox 3577x2534 -> BRD coords in mils.
+    // Board outline edges align to the viewBox edges.
+    float board_w = bounds_[2] - bounds_[0];
+    float board_h = bounds_[3] - bounds_[1];
+    overlay_scale_x_ = board_w / 3577.0f;
+    overlay_scale_y_ = board_h / 2534.0f;
+    overlay_off_x_ = bounds_[0];
+    overlay_off_y_ = bounds_[1];
+
+    spdlog::info("[BoardView] Overlay loaded: {}x{} px, scale ({:.3f}, {:.3f}) mils/svg",
+                 w, h, overlay_scale_x_, overlay_scale_y_);
     return true;
 }
 
@@ -464,6 +663,77 @@ void BoardView::render_to_texture(ID3D11DeviceContext* ctx, int w, int h) {
     ID3D11ShaderResourceView* null_srvs[2] = { nullptr, nullptr };
     ctx->PSSetShaderResources(0, 2, null_srvs);
 
+    // --- Overlay pass: composite component PNG on top ---
+    if (overlay_visible_ && overlay_srv_ && overlay_ps_) {
+        // Enable alpha blending.
+        D3D11_BLEND_DESC bld = {};
+        bld.RenderTarget[0].BlendEnable = TRUE;
+        bld.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        bld.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        bld.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bld.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        bld.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        bld.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bld.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        ComPtr<ID3D11BlendState> blend;
+        device_->CreateBlendState(&bld, &blend);
+        ctx->OMSetBlendState(blend.Get(), nullptr, 0xFFFFFFFF);
+
+        // Update overlay constant buffer.
+        struct alignas(16) OverlayCB {
+            float view_min_x, view_min_y;
+            float view_size_x, view_size_y;
+            float screen_w, screen_h;
+            float scale_x, scale_y;
+            float off_x, off_y;
+            float svg_w, svg_h;
+            float alpha;
+            float _pad[3];
+        };
+        OverlayCB ocb;
+        float view_w = (float)w / zoom_;
+        float view_h = (float)h / zoom_;
+        ocb.view_min_x = pan_x_ - view_w * 0.5f;
+        ocb.view_min_y = pan_y_ - view_h * 0.5f;
+        ocb.view_size_x = view_w;
+        ocb.view_size_y = view_h;
+        ocb.screen_w = (float)w;
+        ocb.screen_h = (float)h;
+        ocb.scale_x = overlay_scale_x_;
+        ocb.scale_y = overlay_scale_y_;
+        ocb.off_x = overlay_off_x_;
+        ocb.off_y = overlay_off_y_;
+        ocb.svg_w = 3577.0f;
+        ocb.svg_h = 2534.0f;
+        ocb.alpha = overlay_alpha_;
+        ocb._pad[0] = ocb._pad[1] = ocb._pad[2] = 0;
+
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        ctx->Map(overlay_cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        memcpy(mapped.pData, &ocb, sizeof(ocb));
+        ctx->Unmap(overlay_cb_.Get(), 0);
+
+        ctx->VSSetShader(vs_.Get(), nullptr, 0);  // reuse fullscreen tri VS
+        ctx->PSSetShader(overlay_ps_.Get(), nullptr, 0);
+        ctx->PSSetConstantBuffers(0, 1, overlay_cb_.GetAddressOf());
+        ctx->PSSetShaderResources(0, 1, overlay_srv_.GetAddressOf());
+
+        // Linear sampler for texture filtering.
+        D3D11_SAMPLER_DESC sd = {};
+        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        ComPtr<ID3D11SamplerState> sampler;
+        device_->CreateSamplerState(&sd, &sampler);
+        ctx->PSSetSamplers(0, 1, sampler.GetAddressOf());
+
+        ctx->Draw(3, 0);
+
+        // Cleanup.
+        ID3D11ShaderResourceView* null_srv = nullptr;
+        ctx->PSSetShaderResources(0, 1, &null_srv);
+        ctx->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+    }
+
     // Restore state
     ctx->OMSetRenderTargets(1, old_rtv.GetAddressOf(), old_dsv.Get());
     ctx->RSSetViewports(1, &old_vp);
@@ -514,6 +784,10 @@ bool BoardView::init(ID3D11Device* device, const char* json_path) {
     }
     if (!create_gpu_resources(device)) return false;
 
+    // Component overlay (non-fatal if missing).
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    load_overlay("assets/board_components.png");
+
     // Center view on board
     pan_x_ = (bounds_[0] + bounds_[2]) * 0.5f;
     pan_y_ = (bounds_[1] + bounds_[3]) * 0.5f;
@@ -540,6 +814,26 @@ void BoardView::bind_signals(const std::unordered_map<std::string, int>& brd_map
     signals_bound_ = (bound > 0);
     spdlog::info("[BoardView] Bound {}/{} nets to live signals",
                  bound, net_names_.size());
+
+    // Reverse check: board signals whose pool index is not reached by any BRD net.
+    std::unordered_set<int> bound_pools;
+    for (auto& [_, pool_idx] : net_to_pool_)
+        bound_pools.insert(pool_idx);
+
+    // Deduplicate: multiple brd_map entries can point to the same pool index (aliases).
+    // Group by pool index, report once per unbound signal.
+    std::unordered_map<int, std::string> unbound;
+    for (auto& [brd_name, pool_idx] : brd_map) {
+        if (bound_pools.find(pool_idx) == bound_pools.end()) {
+            // Only keep first name per pool index.
+            if (unbound.find(pool_idx) == unbound.end())
+                unbound[pool_idx] = brd_name;
+        }
+    }
+    for (auto& [pool_idx, name] : unbound)
+        spdlog::warn("[BoardView] Signal '{}' (pool {}) has no BRD trace", name, pool_idx);
+    if (!unbound.empty())
+        spdlog::info("[BoardView] {} board signals without BRD traces", unbound.size());
 }
 
 void BoardView::update_signal_levels(ID3D11DeviceContext* ctx) {
@@ -597,6 +891,15 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
     ImGui::Checkbox("Via", &via); ImGui::SameLine();
     ImGui::Checkbox("Pad", &pad); ImGui::SameLine();
     ImGui::Checkbox("Outline", &out); ImGui::SameLine();
+    if (overlay_srv_) {
+        bool ov = overlay_visible_;
+        ImGui::Checkbox("Comp", &ov); ImGui::SameLine();
+        if (ov != overlay_visible_) { overlay_visible_ = ov; dirty_ = true; }
+        ImGui::SetNextItemWidth(80);
+        if (ImGui::SliderFloat("##alpha", &overlay_alpha_, 0.0f, 1.0f, "%.1f"))
+            dirty_ = true;
+        ImGui::SameLine();
+    }
 
     uint32_t new_mask = (top ? 1 : 0) | (bot ? 2 : 0) | (via ? 4 : 0) |
                         (pad ? 8 : 0) | (out ? 16 : 0);
@@ -720,24 +1023,38 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
             }
         }
 
-        // --- Component labels (draw on top at sufficient zoom) ---
-        if (zoom_ > 0.5f) {
+        // --- Component labels (draw on top of filled IC bodies) ---
+        if (zoom_ > 0.3f && (layer_mask_ & 16)) {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             float font_scale = (std::min)(zoom_ * 8.0f, 14.0f);
-            if (font_scale >= 5.0f) {
+            if (font_scale >= 4.0f) {
                 for (auto& lbl : labels_) {
                     float sx = cursor.x + (lbl.x - pan_x_) * zoom_ + w * 0.5f;
                     float sy = cursor.y + (lbl.y - pan_y_) * zoom_ + h * 0.5f;
-                    if (sx >= cursor.x && sx <= cursor.x + w &&
-                        sy >= cursor.y && sy <= cursor.y + h) {
-                        dl->AddText(nullptr, font_scale,
-                                    ImVec2(sx + 2, sy + 2),
-                                    IM_COL32(0, 0, 0, 180),
-                                    lbl.ref.c_str());
-                        dl->AddText(nullptr, font_scale,
-                                    ImVec2(sx, sy),
-                                    IM_COL32(255, 255, 255, 220),
-                                    lbl.ref.c_str());
+                    if (sx < cursor.x || sx > cursor.x + w ||
+                        sy < cursor.y || sy > cursor.y + h)
+                        continue;
+
+                    // Shadow + text for ref designator.
+                    dl->AddText(nullptr, font_scale,
+                                ImVec2(sx + 1, sy + 1),
+                                IM_COL32(0, 0, 0, 200),
+                                lbl.ref.c_str());
+                    dl->AddText(nullptr, font_scale,
+                                ImVec2(sx, sy),
+                                IM_COL32(255, 255, 220, 240),
+                                lbl.ref.c_str());
+
+                    // Value (chip name) below ref when zoomed in more.
+                    if (font_scale >= 7.0f && !lbl.value.empty()) {
+                        dl->AddText(nullptr, font_scale * 0.75f,
+                                    ImVec2(sx + 1, sy + font_scale + 1),
+                                    IM_COL32(0, 0, 0, 160),
+                                    lbl.value.c_str());
+                        dl->AddText(nullptr, font_scale * 0.75f,
+                                    ImVec2(sx, sy + font_scale),
+                                    IM_COL32(180, 180, 255, 200),
+                                    lbl.value.c_str());
                     }
                 }
             }

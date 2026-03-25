@@ -1813,6 +1813,28 @@ struct Board {
         map("N-000286", "HRQ");
         map("N-000281", "~EOP");
         map("N-000304", "~XMEMW"); // series termination
+        map("N-000280", "ADSTB");  // U35 pin 8
+
+        // PIC / CPU:
+        map("N-000178", "INTR");   // U2 pin 17 (8259A INT -> 8088 INTR)
+        map("N-000202", "~TEST");  // U3 pin 23
+
+        // PIT:
+        map("U34.21", "PIT_CLK");  // actually OUT0, but PIT CLK net in BRD
+        map("U34.22", "PIT_~RD");  // U34 pin 22
+        map("U34.23", "PIT_~WR");  // U34 pin 23
+        map("N-000259", "~PIT_CS");// U66 pin 11 (Y2)
+
+        // 8284A:
+        map("PWR_GOOD", "RES");    // U11 pin 11
+
+        // DRAM:
+        map("~WE", "~WE_DRAM");   // DRAM write enable
+        map("N-000307", "U83_1_2");// U83 pin 4 inverter output
+
+        // ISA-side buffered signals (U15 outputs):
+        map("AEN_BRD", "ISA_AEN");       // U15 pin 15
+        map("~DACK_0_BRD", "ISA_~DACK0");// U15 pin 17
 
         return m;
     }
