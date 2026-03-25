@@ -489,7 +489,7 @@ void DxState::render_overlay() {
     if (ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false) && dbg_visible)
         *dbg_visible = !*dbg_visible;
 
-    // --- Stats HUD (bottom-right, clickable to pause/resume) ---
+    // --- Status + Menu HUD (bottom-right) ---
     {
         ImGuiWindowFlags flags =
             ImGuiWindowFlags_NoDecoration |
@@ -498,13 +498,28 @@ void DxState::render_overlay() {
             ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_NoFocusOnAppearing;
 
-        ImGui::SetNextWindowBgAlpha(0.4f);
+        ImGui::SetNextWindowBgAlpha(0.6f);
         ImGui::SetNextWindowPos(
             ImVec2((float)winW - 10.0f, (float)winH - 10.0f),
             ImGuiCond_Always,
             ImVec2(1.0f, 1.0f));
 
         ImGui::Begin("##stats", nullptr, flags);
+
+        // Menu button
+        if (ImGui::Button("Menu"))
+            ImGui::OpenPopup("MainMenu");
+
+        if (ImGui::BeginPopup("MainMenu")) {
+            if (ImGui::MenuItem("System"))       {}  // TODO
+            if (ImGui::MenuItem("Board"))        board_view.toggle();
+            if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
+            if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
+            if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
+            ImGui::EndPopup();
+        }
+
+        // Status: PAUSED or MHz (clickable to toggle)
         bool paused = scheduler && scheduler->is_paused();
         if (paused)
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "PAUSED");
@@ -621,13 +636,7 @@ void DxState::render_debugger() {
         scheduler->step_cycle();
     ImGui::EndDisabled();
 
-    // --- Second toolbar row: Mem, Bus, breakpoint, T-state, DMA ---
-    if (ImGui::Button("Mem"))
-        mem_view_open = !mem_view_open;
-    ImGui::SameLine();
-    if (ImGui::Button("Bus"))
-        bus_view_open = !bus_view_open;
-    ImGui::SameLine();
+    // --- Second toolbar row: breakpoint, T-state, DMA ---
     ImGui::Text("Break:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(90);

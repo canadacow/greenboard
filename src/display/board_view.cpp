@@ -905,7 +905,8 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
                         (pad ? 8 : 0) | (out ? 16 : 0);
     if (new_mask != layer_mask_) { layer_mask_ = new_mask; dirty_ = true; }
 
-    if (ImGui::Button("Fit")) {
+    if (ImGui::Button("Fit") || needs_fit_) {
+        needs_fit_ = false;
         pan_x_ = (bounds_[0] + bounds_[2]) * 0.5f;
         pan_y_ = (bounds_[1] + bounds_[3]) * 0.5f;
         ImVec2 avail = ImGui::GetContentRegionAvail();

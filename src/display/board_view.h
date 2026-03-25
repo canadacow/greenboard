@@ -88,6 +88,7 @@ private:
     float pan_x_ = 0, pan_y_ = 0;  // board-space center
     float zoom_ = 1.0f;             // pixels per mil
     bool open_ = false;
+    bool needs_fit_ = true;  // fit to window on first show
     uint32_t highlight_net_ = 0;
     uint32_t layer_mask_ = 0x1F;    // all layers visible
     bool dirty_ = true;             // redraw only when something changes
