@@ -965,6 +965,17 @@ void DxState::render_bus_analyzer() {
         ImGui::Separator();
     }
 
+    // Last completed bus transaction (from CPU)
+    if (cpu) {
+        static const char* tx_names[] = {
+            "INTA", "IOR", "IOW", "HALT", "FETCH", "MEMR", "MEMW", "---"
+        };
+        auto& tx = cpu->last_bus_tx();
+        ImGui::TextColored(yel, "Last: %-5s [%05X] = %02X",
+                           tx_names[tx.type & 7], tx.addr, tx.data);
+        ImGui::Separator();
+    }
+
     ImGui::TextColored(grn, "LA[19:0]=%05X   AD[7:0]=%02X", la_val, ad_val);
     ImGui::TextColored(grn, " D[7:0] =%02X     XD[7:0]=%02X    MD[7:0]=%02X", d_val, xd_val, md_val);
 

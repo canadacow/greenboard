@@ -312,7 +312,16 @@ public:
     TState t_state() const { return t_state_; }
     BusT bus_t() const { return bus_t_; }
     uint64_t instr_count() const { return instr_count_; }
+
+    // Last bus transaction (for debugger bus analyzer)
+    struct BusTx {
+        uint32_t addr = 0;
+        uint8_t data = 0;
+        uint8_t type = 7;  // BUS_PASSIVE
+    };
+    const BusTx& last_bus_tx() const { return last_bus_tx_; }
 private:
+    BusTx last_bus_tx_;
     uint64_t instr_count_ = 0;
 
     // Start address (set via constructor, applied in cpu_reset)

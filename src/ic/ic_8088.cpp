@@ -250,6 +250,7 @@ uint8_t IC_8088::bus_read_byte(uint32_t address, uint8_t bus_type) {
     // T4 -- bus cycle complete
     t_state_ = TState::T4;
     uint8_t data = read_data();
+    last_bus_tx_ = {address & 0xFFFFF, data, bus_type};
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk("T4 bus_read");                                // T4
     t_state_ = TState::Ti;
@@ -283,6 +284,7 @@ void IC_8088::bus_write_byte(uint32_t address, uint8_t value) {
     // T4 -- bus cycle complete, release data bus
     t_state_ = TState::T4;
     release_data();
+    last_bus_tx_ = {address & 0xFFFFF, value, BUS_MEMW};
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk("T4 bus_write");                               // T4
     t_state_ = TState::Ti;
@@ -326,6 +328,7 @@ uint8_t IC_8088::io_read_byte(uint16_t port) {
     // T4 -- bus cycle complete
     t_state_ = TState::T4;
     uint8_t data = read_data();
+    last_bus_tx_ = {port, data, BUS_IOR};
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk("T4 io_read");                                 // T4
     t_state_ = TState::Ti;
@@ -359,6 +362,7 @@ void IC_8088::io_write_byte(uint16_t port, uint8_t value) {
     // T4 -- bus cycle complete, release data bus
     t_state_ = TState::T4;
     release_data();
+    last_bus_tx_ = {port, value, BUS_IOW};
     bus_t_ = BusT::T1;  // next perm sees S0-S2 as Output for upcoming T1
     full_wait_clk("T4 io_write");                                // T4
     t_state_ = TState::Ti;
@@ -542,6 +546,7 @@ void IC_8088::pc_interrupt(uint8_t interrupt_num) {
     reg_ip_ = bus_read_word(4 * interrupt_num);
     spdlog::info("[8088] INT {:02X} from {:04X}:{:04X} -> {:04X}:{:04X}",
                  interrupt_num, from_cs, from_ip, regs16()[REG_CS], reg_ip_);
+    if (interrupt_num == 0x34) __debugbreak();
     regs8()[FLAG_TF] = 0;
     regs8()[FLAG_IF] = 0;
 }
@@ -1286,7 +1291,7 @@ void IC_8088::execute() {
             // INTA bus cycle: two back-to-back INTA pulses.
             // Each pulse is a full 4-T-state bus cycle, same as bus_read_byte.
 
-            // First INTA pulse (PIC latches request) -- 4 T-states
+            // First INTA pulse (PIC latches request) -- 4+ T-states
             t_state_ = TState::T1;
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             full_wait_clk("T1 INTA Pulse 1");                    // T1
@@ -1296,11 +1301,14 @@ void IC_8088::execute() {
             t_state_ = TState::T3;
             drive_status_passive();
             full_wait_clk("T3 INTA Pulse 1");                    // T3
+            t_state_ = TState::Tw;
+            while (pin_ready_.level() != Level::High)
+                full_wait_clk("Tw INTA Pulse 1");                // Tw
             t_state_ = TState::T4;
             bus_t_ = BusT::T1;
             full_wait_clk("T4 INTA Pulse 1");                    // T4
 
-            // Second INTA pulse (PIC drives vector on data bus) -- 4 T-states
+            // Second INTA pulse (PIC drives vector on data bus) -- 4+ T-states
             t_state_ = TState::T1;
             drive_status((BUS_INTA >> 2) & 1, (BUS_INTA >> 1) & 1, BUS_INTA & 1);
             full_wait_clk("T1 INTA Pulse 2");                    // T1
@@ -1310,8 +1318,21 @@ void IC_8088::execute() {
             t_state_ = TState::T3;
             drive_status_passive();
             full_wait_clk("T3 INTA Pulse 2");                    // T3
+            t_state_ = TState::Tw;
+            while (pin_ready_.level() != Level::High)
+                full_wait_clk("Tw INTA Pulse 2");                // Tw
             t_state_ = TState::T4;
             uint8_t vector = read_data();
+            {
+                // Log bus state at INTA T4 for debugging bus contention.
+                uint8_t ad_bus = 0;
+                for (int i = 0; i < 8; ++i)
+                    if (pin_ad_[i].level() == Level::High) ad_bus |= (1 << i);
+                spdlog::info("[8088] INTA T4: vector read=0x{:02X}, AD bus=0x{:02X}, "
+                             "INTR={}, READY={}",
+                             vector, ad_bus,
+                             (int)pin_intr_.level(), (int)pin_ready_.level());
+            }
             bus_t_ = BusT::T1;
             full_wait_clk("T4 INTA Pulse 2");                    // T4
             t_state_ = TState::Ti;

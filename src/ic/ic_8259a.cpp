@@ -281,6 +281,8 @@ void IC_8259A::on_inta_falling() {
                 vector = vector_base_ | inta_level_;
             else
                 vector = vector_base_ | (inta_level_ << 2);
+            spdlog::info("[8259A] INTA2: IRQ{} -> vector 0x{:02X} (base=0x{:02X}, IRR=0x{:02X}, ISR=0x{:02X}, IMR=0x{:02X})",
+                         inta_level_, vector, vector_base_, irr_, isr_, imr_);
             drive_data(vector);
 
             if (auto_eoi_)
