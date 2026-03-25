@@ -66,7 +66,7 @@ org 0x0100
 ; DMA channel 2 ports
 FDC_DMA_ADDR equ 0x04      ; channel 2 base address (byte-flipped)
 FDC_DMA_CNT  equ 0x05      ; channel 2 word count (byte-flipped)
-FDC_DMA_PAGE equ 0x82      ; channel 2 page register (BRD: U19 RA=~DACK3, RB=~DACK2)
+FDC_DMA_PAGE equ 0x81      ; channel 2 page register (port 0x81 per BIOS)
 DMA_MASK     equ 0x0A      ; single mask register
 DMA_MODE     equ 0x0B      ; mode register
 DMA_FLIPFLOP equ 0x0C      ; clear byte pointer flip-flop
