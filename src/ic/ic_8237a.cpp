@@ -481,6 +481,10 @@ void IC_8237A::on_clk_falling() {
     case State::BusRequested:
         if (pin_hlda_.level() == Level::High) {
             state_ = State::S1;
+            // Enable page register outputs one cycle early so the bidir
+            // lambda sees dma_output=true at the start of the S1 eval.
+            u18_->set_dma_output(true);
+            u19_->set_dma_output(true);
         } else {
             break;
         }
@@ -505,6 +509,14 @@ void IC_8237A::on_clk_falling() {
         // Drive DB0-DB7 with upper address byte (A8-A15) for 74S373 latch
         uint8_t upper = static_cast<uint8_t>(ch.current_address >> 8);
         drive_data(upper);
+
+        // Log full 20-bit DMA address (first byte of each transfer only)
+        if (active_ch_ == 2 && ch.current_address == ch.base_address) {
+            uint8_t page = u19_ ? u19_->reg(1) : 0;  // page reg[1] = CH2
+            uint32_t full_addr = (uint32_t(page) << 16) | ch.current_address;
+            // Read actual LA16-LA19 from the signal pool to verify page outputs
+            uint32_t bus_addr = SignalPool::bus_address;
+        }
         prev_upper_addr_ = upper;
 
         // ADSTB high -- will fall at S2 entry, latching upper address

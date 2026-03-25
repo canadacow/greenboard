@@ -537,16 +537,11 @@ void IC_8088::set_opcode(uint8_t opcode) {
 void IC_8088::pc_interrupt(uint8_t interrupt_num) {
     set_opcode(0xCD);
     make_flags();
-    uint16_t from_cs = regs16()[REG_CS];
-    uint16_t from_ip = reg_ip_;
     push16((uint16_t)scratch_uint_);
     push16(regs16()[REG_CS]);
     push16(reg_ip_);
     regs16()[REG_CS] = bus_read_word(4 * interrupt_num + 2);
     reg_ip_ = bus_read_word(4 * interrupt_num);
-    spdlog::info("[8088] INT {:02X} from {:04X}:{:04X} -> {:04X}:{:04X}",
-                 interrupt_num, from_cs, from_ip, regs16()[REG_CS], reg_ip_);
-    if (interrupt_num == 0x34) __debugbreak();
     regs8()[FLAG_TF] = 0;
     regs8()[FLAG_IF] = 0;
 }
@@ -657,10 +652,6 @@ void IC_8088::execute() {
             reg_ip_ = rmem16(op_from_addr_);
             op_result_ = reg_ip_; // suppress flags
             set_opcode(0x9A);
-            spdlog::info("[8088] {} {} -> {:04X}:{:04X}",
-                         (i_reg_ & 2) ? "CALL" : "JMP",
-                         (i_reg_ & 1) ? "far" : "near",
-                         regs16()[REG_CS], reg_ip_);
         } else {
             // PUSH r/m
             i_w_ = 1;
@@ -995,12 +986,8 @@ void IC_8088::execute() {
                     i_data2_ = fetch_word(3);
                     reg_ip_ = 0;
                     regs16()[REG_CS] = (uint16_t)i_data2_;
-                    spdlog::info("[8088] JMP far -> {:04X}:{:04X}",
-                                 regs16()[REG_CS], reg_ip_ + (int16_t)i_data0_);
                 } else { // CALL near
                     push16(reg_ip_);
-                    spdlog::info("[8088] CALL near -> {:04X}:{:04X}",
-                                 regs16()[REG_CS], reg_ip_ + (int16_t)i_data0_);
                 }
             }
             reg_ip_ += (int16_t)i_data0_;
@@ -1079,9 +1066,6 @@ void IC_8088::execute() {
         if (extra_) regs16()[REG_CS] = pop16(); // RETF or IRET
         if (extra_ & 2) set_flags(pop16()); // IRET
         else if (!i_d_) regs16()[REG_SP] += fetch_word(1); // RET/RETF imm16
-        spdlog::info("[8088] {} -> {:04X}:{:04X}",
-                     (extra_ & 2) ? "IRET" : (extra_ ? "RETF" : "RET"),
-                     regs16()[REG_CS], reg_ip_);
         break;
     }
     case 20: { // MOV r/m, imm
@@ -1168,7 +1152,6 @@ void IC_8088::execute() {
         push16(reg_ip_ + 5);
         regs16()[REG_CS] = (uint16_t)i_data2_;
         reg_ip_ = (uint16_t)i_data0_;
-        spdlog::info("[8088] CALL far -> {:04X}:{:04X}", regs16()[REG_CS], reg_ip_);
         break;
     case 33: // PUSHF
         make_flags();
@@ -1323,16 +1306,6 @@ void IC_8088::execute() {
                 full_wait_clk("Tw INTA Pulse 2");                // Tw
             t_state_ = TState::T4;
             uint8_t vector = read_data();
-            {
-                // Log bus state at INTA T4 for debugging bus contention.
-                uint8_t ad_bus = 0;
-                for (int i = 0; i < 8; ++i)
-                    if (pin_ad_[i].level() == Level::High) ad_bus |= (1 << i);
-                spdlog::info("[8088] INTA T4: vector read=0x{:02X}, AD bus=0x{:02X}, "
-                             "INTR={}, READY={}",
-                             vector, ad_bus,
-                             (int)pin_intr_.level(), (int)pin_ready_.level());
-            }
             bus_t_ = BusT::T1;
             full_wait_clk("T4 INTA Pulse 2");                    // T4
             t_state_ = TState::Ti;

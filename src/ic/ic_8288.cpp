@@ -248,9 +248,6 @@ void IC_8288::on_clk_rising() {
         pin_ale_.drive(Level::Low);
         bool cen = pin_cen_.level() == Level::High;
         if (cen && !commanding_) {
-            if (cycle_ == BusCycle::INTA)
-                spdlog::info("[8288] INTA assert: CEN={}, inhibited={}, ~AEN pin={}, ~DEN={}",
-                             cen, inhibited_, (int)pin_aen_.level(), (int)pin_den_.level());
             switch (cycle_) {
                 case BusCycle::INTA:  pin_inta_.drive(Level::Low); break;
                 case BusCycle::IOR:   pin_ior_.drive(Level::Low);  break;
