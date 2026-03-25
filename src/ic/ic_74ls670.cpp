@@ -64,7 +64,6 @@ void IC_74LS670::install(Socket& socket) {
 void IC_74LS670::on_power_on() {
     driving_ = false;
     dma_output_ = false;
-    we_prev_ = Level::HiZ;
     for (auto& r : regs_) r = 0;
 }
 
@@ -78,32 +77,20 @@ void IC_74LS670::on_power_off() {
 void IC_74LS670::on_cycle(Fiber /*caller*/) { update(); }
 
 void IC_74LS670::update() {
-    // Write: transparent when ~WE=Low, but ignore if all data pins are
-    // HiZ (bus released). On real hardware the bus stays driven while
-    // ~WE is Low; in our DAG the transceiver may release first.
+    // Write: transparent when ~WE=Low
     if (pin_we_.level() == Level::Low) {
-        // Check if any data pin is actually driven (not all HiZ)
-        bool any_driven = false;
+        int wa = ((pin_wb_.level() == Level::High) ? 2 : 0)
+               | ((pin_wa_.level() == Level::High) ? 1 : 0);
+        uint8_t data = 0;
         for (int i = 0; i < 4; ++i) {
-            if (pin_d_[i].level() != Level::HiZ) { any_driven = true; break; }
+            if (pin_d_[i].level() == Level::High)
+                data |= (1 << i);
         }
-        if (any_driven) {
-            int wa = ((pin_wb_.level() == Level::High) ? 2 : 0)
-                   | ((pin_wa_.level() == Level::High) ? 1 : 0);
-            uint8_t data = 0;
-            for (int i = 0; i < 4; ++i) {
-                if (pin_d_[i].level() == Level::High)
-                    data |= (1 << i);
-            }
-            if (regs_[wa] != data)
-            regs_[wa] = data;
-        }
+        regs_[wa] = data;
     }
 
-    // Read: outputs driven when ~RE=Low or DMA override.
-    // dma_output_ is set by the 8237A one cycle ahead because ~DMA_AEN
-    // hasn't propagated to ~RE yet at S1 when the address is first driven.
-    if (pin_re_.level() == Level::Low || dma_output_) {
+    // Read: outputs driven when ~RE=Low, tri-stated when High
+    if (pin_re_.level() == Level::Low) {
         // 74LS670: read address has A as MSB, B as LSB (opposite of write side)
         int ra = ((pin_ra_.level() == Level::High) ? 2 : 0)
                | ((pin_rb_.level() == Level::High) ? 1 : 0);

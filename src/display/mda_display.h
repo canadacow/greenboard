@@ -26,6 +26,7 @@ class IC_8088;
 class IC_8237A;
 class ISA_MDA;
 class MemoryView;
+class TestKeyboard;
 
 // Pool indices for bus analyzer display.
 struct BusProbe {
@@ -56,7 +57,8 @@ public:
                Scheduler* scheduler = nullptr, IC_8088* cpu = nullptr,
                const MemoryView* mem = nullptr, IC_8237A* dma = nullptr,
                const ISA_MDA* mda_card = nullptr,
-               const BusProbe* bus = nullptr);
+               const BusProbe* bus = nullptr,
+               TestKeyboard* kbd = nullptr);
 
     // Bind BRD net names to live signals for board view.
     // Call after start() returns (board_view is initialized by then).
@@ -79,6 +81,7 @@ private:
     IC_8237A* dma_ = nullptr;
     const ISA_MDA* mda_card_ = nullptr;
     const BusProbe* bus_probe_ = nullptr;
+    TestKeyboard* kbd_ = nullptr;
     bool dbg_visible_ = true;
 
     // Pending board signal binding (set from main thread, consumed by render thread).

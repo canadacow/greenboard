@@ -27,6 +27,7 @@
 #include "ic/ic_8088.h"
 #include "isa/isa_mda.h"
 #include "debug/memory_view.h"
+#include "test/test_keyboard.h"
 #include "ic/ic_8237a.h"
 #include <Zydis/Zydis.h>
 #include <spdlog/spdlog.h>
@@ -1054,6 +1055,8 @@ void DxState::present() {
 // Window
 // ========================================================================
 
+static TestKeyboard* s_kbd = nullptr;  // set by render_loop before window creation
+
 static LRESULT CALLBACK MdaWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
         return true;
@@ -1061,11 +1064,31 @@ static LRESULT CALLBACK MdaWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // menu activation, otherwise F10 requires two presses.
     if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp == VK_F10)
         return 0;
+
+    // Forward keyboard events to the emulated keyboard.
+    // Only when ImGui doesn't want keyboard input (not typing in a text field).
+    if (s_kbd && ImGui::GetCurrentContext() && !ImGui::GetIO().WantCaptureKeyboard) {
+        if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
+            uint8_t xt = TestKeyboard::vk_to_xt((int)wp);
+            if (xt) {
+                spdlog::info("[KBD] VK 0x{:02X} -> XT make 0x{:02X}", (int)wp, xt);
+                s_kbd->inject_key(xt);
+            }
+        } else if (msg == WM_KEYUP || msg == WM_SYSKEYUP) {
+            uint8_t xt = TestKeyboard::vk_to_xt((int)wp);
+            if (xt) {
+                spdlog::info("[KBD] VK 0x{:02X} -> XT break 0x{:02X}", (int)wp, xt | 0x80);
+                s_kbd->inject_key(xt | 0x80);
+            }
+        }
+    }
+
     if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 void MdaDisplay::render_loop(std::stop_token stop) {
+    s_kbd = kbd_;
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     int monW = GetSystemMetrics(SM_CXSCREEN);
@@ -1138,7 +1161,8 @@ void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
                        Scheduler* scheduler, IC_8088* cpu,
                        const MemoryView* mem, IC_8237A* dma,
                        const ISA_MDA* mda_card,
-                       const BusProbe* bus) {
+                       const BusProbe* bus,
+                       TestKeyboard* kbd) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -1147,6 +1171,7 @@ void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
     dma_ = dma;
     mda_card_ = mda_card;
     bus_probe_ = bus;
+    kbd_ = kbd;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });

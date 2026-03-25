@@ -3,6 +3,7 @@
 #include "core/signal.h"
 #include <vector>
 #include <cstdint>
+#include <atomic>
 
 namespace bench {
 
@@ -25,6 +26,11 @@ public:
 
     void enqueue(uint8_t scancode);
     void enqueue_string(const char* text);
+
+    // Live key injection from the UI thread.
+    // Thread-safe: writes to an atomic ring consumed by on_cycle.
+    void inject_key(uint8_t scancode);
+    static uint8_t vk_to_xt(int vk);  // Windows VK_ -> XT make code (0 = unmapped)
 
 protected:
     void on_cycle(Fiber caller) override;
@@ -55,6 +61,12 @@ private:
     Level pb6_prev_ = Level::HiZ;
     Level pb7_prev_ = Level::HiZ;
     uint8_t pa_driven_ = 0;           // current PA value (re-driven every cycle like U24)
+
+    // Live key injection ring buffer (UI thread -> sim thread)
+    static constexpr int INJECT_RING = 64;
+    uint8_t inject_ring_[INJECT_RING] = {};
+    std::atomic<int> inject_head_{0};
+    std::atomic<int> inject_tail_{0};
 
     static const uint8_t ascii_to_make_[128];
     static const bool    ascii_needs_shift_[128];

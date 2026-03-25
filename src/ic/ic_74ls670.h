@@ -43,7 +43,6 @@ public:
     /// is effectively cross-cycle, not combinational.
     void set_async_inputs() { async_d_ = true; }
     uint8_t reg(int i) const { return regs_[i & 3]; }
-    Level pin_re_level() const { return pin_re_.level(); }
 
     // DMA output override: when true, bidir lambda returns Output
     // regardless of ~RE pin level. Set by 8237A one cycle ahead.
@@ -68,7 +67,6 @@ private:
     Pin pin_we_;       // ~WE: pin 12
 
     uint8_t regs_[4] = {};  // 4 x 4-bit registers
-    Level we_prev_ = Level::HiZ;
     bool async_d_ = false;
     bool driving_ = false;  // true when Q pins are actively driven (~RE=Low)
     bool dma_output_ = false;

@@ -481,10 +481,6 @@ void IC_8237A::on_clk_falling() {
     case State::BusRequested:
         if (pin_hlda_.level() == Level::High) {
             state_ = State::S1;
-            // Enable page register outputs one cycle early so the bidir
-            // lambda sees dma_output=true at the start of the S1 eval.
-            u18_->set_dma_output(true);
-            u19_->set_dma_output(true);
         } else {
             break;
         }
