@@ -274,6 +274,7 @@ public:
             const auto* p = reinterpret_cast<const __m256i*>(&SignalPool::levels[bus_address_base_]);
             SignalPool::bus_address = _mm256_movemask_epi8(
                 _mm256_cmpgt_epi8(_mm256_loadu_si256(p), _mm256_setzero_si256())) & 0xFFFFF;
+            _mm256_zeroupper();  // Clear AVX state so eval loop calls don't pay vzeroupper per-call.
         }
         static constexpr uint64_t dir_to_digit[] = {0, 0, 1, 0, 2};  // indexed by uint8_t(BidirDir)
         uint64_t perm = 0, mul = 1;

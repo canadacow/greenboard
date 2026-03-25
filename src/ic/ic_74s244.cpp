@@ -53,13 +53,15 @@ void IC_74S244::on_cycle(Fiber /*caller*/) {
     bool g1_en = pin_g1_.level() == Level::Low;
     bool g2_en = pin_g2_.level() == Level::Low;
 
-    for (auto& b : grp1_) {
-        if (g1_en)
+    if (g1_en) {
+        for (auto& b : grp1_) {
             b.y.drive(b.a.level() == Level::High ? Level::High : Level::Low);
+        }
     }
-    for (auto& b : grp2_) {
-        if (g2_en)
+    if (g2_en) {
+        for (auto& b : grp2_) {
             b.y.drive(b.a.level() == Level::High ? Level::High : Level::Low);
+        }
     }
 }
 
