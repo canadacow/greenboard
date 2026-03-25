@@ -22,6 +22,7 @@
 #include <imgui_impl_dx11.h>
 
 #include "display/mda_display.h"
+#include "display/board_view.h"
 #include "core/scheduler.h"
 #include "ic/ic_8088.h"
 #include "isa/isa_mda.h"
@@ -111,6 +112,9 @@ struct DxState {
     // Bus probe (signal pool indices for bus analyzer)
     const BusProbe* bus_probe = nullptr;
     bool bus_view_open = false;
+
+    // PCB board view
+    BoardView board_view;
 
     // Blink timing: derived from QPC wall clock, independent of render frame rate.
     // Real MDA field rate: 18.432 MHz dot clock / (882 chars * 370 lines) = ~56.5 Hz.
@@ -257,6 +261,10 @@ bool DxState::init(HWND hw, int w, int h) {
     // Zydis: 8086 real mode disassembler
     ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_REAL_16, ZYDIS_STACK_WIDTH_16);
     ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL);
+
+    // PCB board view
+    if (!board_view.init(device.Get(), "assets/board_traces.json"))
+        return false;
 
     return true;
 }
@@ -519,6 +527,11 @@ void DxState::render_overlay() {
     // --- Bus analyzer (separate window) ---
     if (bus_view_open && bus_probe)
         render_bus_analyzer();
+
+    // --- PCB board view (F2 toggle) ---
+    if (ImGui::IsKeyPressed(ImGuiKey_F2, false))
+        board_view.toggle();
+    board_view.imgui_window(ctx.Get());
 
     ImGui::Render();
 
