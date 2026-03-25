@@ -50,6 +50,7 @@ public:
     // Power on/off all registered components (called by PSU on clock thread).
     // Order: callbacks first, then fibers (mirrors the old manual sequence).
     void power_on_all() {
+        dbg_last_tsc_ = 0;  // reset so first cycle doesn't false-trigger debugger pause
         for (auto* cc : callbacks_) cc->power_on();
         for (auto* fc : fibers_)    fc->power_on();
     }
@@ -251,7 +252,16 @@ public:
         if (paused_.load(std::memory_order_relaxed)) [[unlikely]]
             pause_gate();
 
-        #if 0
+        // Address breakpoint: pause when CPU reaches a specific CS:IP.
+        if (dbg_break_addr_ != UINT32_MAX && dbg_cpu_) [[unlikely]] {
+            uint32_t linear = (uint32_t(dbg_cpu_->regs16_ro()[IC_8088::CS]) << 4) + dbg_cpu_->ip();
+            if (linear == dbg_break_addr_) {
+                paused_.store(true, std::memory_order_relaxed);
+                dbg_break_addr_ = UINT32_MAX;  // one-shot
+            }
+        }
+
+        #if 1
         // Auto-pause on VS debugger resume: if wall time between two cycles
         // exceeds ~50ms worth of TSC ticks, a debugger must have frozen us.
         // __rdtsc() is ~1 cycle, so this is essentially free.
@@ -402,6 +412,9 @@ public:
     }
     void set_cpu(IC_8088* cpu) { dbg_cpu_ = cpu; }
 
+    // Pause when CPU reaches a linear address (one-shot). UINT32_MAX = disabled.
+    void set_break_address(uint32_t linear) { dbg_break_addr_ = linear; }
+
     // Set the pool base index for the 20-bit address bus (LA0-LA19).
     // Called by board wiring so evaluate() can pre-compute bus_address.
     void set_bus_address_base(int base) { bus_address_base_ = base; }
@@ -417,6 +430,7 @@ private:
     uint64_t          dbg_instr_start_ = 0;
     uint16_t          dbg_over_ip_ = 0;
     uint16_t          dbg_over_sp_ = 0;
+    uint32_t          dbg_break_addr_ = UINT32_MAX;
     uint64_t          dbg_last_tsc_ = 0;
     // ~50ms at 3GHz = 150M ticks. Conservative -- any cycle gap this large
     // means a debugger froze us (normal cycle is ~600 ticks at 4.77MHz).

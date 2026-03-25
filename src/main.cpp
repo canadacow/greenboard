@@ -125,6 +125,7 @@ int main() {
 
     // Start paused. Pre-set the debugger view to the reset vector.
     scheduler.pause();
+    scheduler.set_break_address(0x07C00);  // pause when BIOS jumps to boot sector
 
     // --- Power on ---
     spdlog::info("=== Power on ===");
@@ -134,8 +135,9 @@ int main() {
     board.clk_gen->power_on();
     board.clk_gen->psu_power_on();
 
-    // Run until the CPU halts or the display window is closed.
-    while (!board.cpu->halted() && mda_display.running())
+    // Run until the display window is closed.
+    // CPU HLT pauses the scheduler but keeps the window alive for inspection.
+    while (mda_display.running())
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // --- Power off ---
