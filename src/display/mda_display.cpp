@@ -141,10 +141,21 @@ struct DxState {
     uint16_t view_ip = 0;
     bool view_init = false;
 
+    // Memory viewer
+    bool mem_view_open = false;
+    char mem_addr_buf[16] = "0000:0000";
+    uint32_t mem_view_addr = 0;
+
+    // Breakpoint
+    char brk_addr_buf[16] = "";
+    static constexpr int MEM_ROWS = 16;
+    static constexpr int MEM_COLS = 16;
+
     bool init(HWND hwnd, int w, int h);
     void render_mda(const uint8_t* vram);
     void render_overlay();
     void render_debugger();
+    void render_memory_viewer();
     void present();
 };
 
@@ -496,6 +507,10 @@ void DxState::render_overlay() {
     if (dbg_visible && *dbg_visible && scheduler)
         render_debugger();
 
+    // --- Memory viewer (separate window) ---
+    if (mem_view_open && mem)
+        render_memory_viewer();
+
     ImGui::Render();
 
     ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
@@ -506,10 +521,10 @@ void DxState::render_debugger() {
     static constexpr int DISASM_LINES = 21;  // total visible lines
     static constexpr int MID_LINE = DISASM_LINES / 2;  // IP target row
 
-    // Layout:  1 toolbar + 1 separator + 1 CLK line + 3 register lines +
-    //          1 separator + DISASM_LINES disasm = DISASM_LINES + 7 content lines
+    // Layout:  2 toolbar rows + 1 separator + 1 CLK line + 3 register lines +
+    //          1 flags + 1 separator + DISASM_LINES disasm = DISASM_LINES + 8 content lines
     // Plus title bar + frame padding.
-    static constexpr int CONTENT_LINES = DISASM_LINES + 7;
+    static constexpr int CONTENT_LINES = DISASM_LINES + 8;
     // "F000:FFFF  FF FF FF FF FF FF  mov word [bp+si+0x1234], 0x5678"
     // = ~60 chars.  Consolas at 14px base: char width ~ 8.4px * dpi_scale.
     static constexpr int LINE_CHARS = 62;
@@ -583,13 +598,32 @@ void DxState::render_debugger() {
         scheduler->step_cycle();
     ImGui::EndDisabled();
 
+    // --- Second toolbar row: Mem, breakpoint, T-state, DMA ---
+    if (ImGui::Button("Mem"))
+        mem_view_open = !mem_view_open;
+    ImGui::SameLine();
+    ImGui::Text("Break:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90);
+    if (ImGui::InputText("##brk", brk_addr_buf, sizeof(brk_addr_buf),
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+        unsigned seg = 0, off = 0;
+        uint32_t linear = UINT32_MAX;
+        if (sscanf(brk_addr_buf, "%x:%x", &seg, &off) == 2)
+            linear = ((seg << 4) + off) & 0xFFFFF;
+        else if (sscanf(brk_addr_buf, "%x", &off) == 1)
+            linear = off & 0xFFFFF;
+        scheduler->set_break_address(linear);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("seg:off or linear. Enter to set.");
+
     if (!cpu) { ImGui::End(); return; }
 
-    // --- Status bar ---
     {
         static const char* t_names[] = {"Ti", "T1", "T2", "T3", "Tw", "T4"};
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), " %s",
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s",
             t_names[static_cast<int>(cpu->t_state())]);
     }
     if (dma) {
@@ -601,9 +635,9 @@ void DxState::render_debugger() {
         const char* ds = dma_names[static_cast<int>(dma->state())];
         int ch = dma->active_channel();
         if (ch >= 0)
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), " DMA:%s/CH%d", ds, ch);
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "DMA:%s/CH%d", ds, ch);
         else
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), " DMA:%s", ds);
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "DMA:%s", ds);
     }
 
     ImGui::Separator();
@@ -747,6 +781,92 @@ void DxState::render_debugger() {
                 "%04X:%04X  %-18s %s", cs, lines[i].addr,
                 lines[i].hex, lines[i].text);
         }
+    }
+
+    ImGui::End();
+}
+
+void DxState::render_memory_viewer() {
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    ImGui::SetNextWindowSize(ImVec2(580, 380), ImGuiCond_Once);
+
+    if (!ImGui::Begin("Memory", &mem_view_open, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+
+    // Address input: accepts "SSSS:OOOO" or "XXXXX" (linear)
+    ImGui::SetNextItemWidth(120);
+    if (ImGui::InputText("##addr", mem_addr_buf, sizeof(mem_addr_buf),
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+        unsigned seg = 0, off = 0;
+        if (sscanf(mem_addr_buf, "%x:%x", &seg, &off) == 2)
+            mem_view_addr = ((seg << 4) + off) & 0xFFFFF;
+        else if (sscanf(mem_addr_buf, "%x", &off) == 1)
+            mem_view_addr = off & 0xFFFFF;
+    }
+    ImGui::SameLine();
+    // Quick-jump buttons
+    if (cpu) {
+        const uint16_t* r = cpu->regs16_ro();
+        if (ImGui::Button("SS:SP")) {
+            mem_view_addr = ((r[IC_8088::SS] << 4) + r[IC_8088::SP]) & 0xFFFFF;
+            snprintf(mem_addr_buf, sizeof(mem_addr_buf), "%04X:%04X",
+                     r[IC_8088::SS], r[IC_8088::SP]);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("DS:SI")) {
+            mem_view_addr = ((r[IC_8088::DS] << 4) + r[IC_8088::SI]) & 0xFFFFF;
+            snprintf(mem_addr_buf, sizeof(mem_addr_buf), "%04X:%04X",
+                     r[IC_8088::DS], r[IC_8088::SI]);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("ES:DI")) {
+            mem_view_addr = ((r[IC_8088::ES] << 4) + r[IC_8088::DI]) & 0xFFFFF;
+            snprintf(mem_addr_buf, sizeof(mem_addr_buf), "%04X:%04X",
+                     r[IC_8088::ES], r[IC_8088::DI]);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("CS:IP")) {
+            mem_view_addr = ((r[IC_8088::CS] << 4) + cpu->ip()) & 0xFFFFF;
+            snprintf(mem_addr_buf, sizeof(mem_addr_buf), "%04X:%04X",
+                     r[IC_8088::CS], cpu->ip());
+        }
+    }
+
+    // Mouse wheel scrolling (1 row = 16 bytes)
+    float wheel = ImGui::GetIO().MouseWheel;
+    if (ImGui::IsWindowHovered() && wheel != 0.0f) {
+        int delta = -(int)wheel * MEM_COLS;
+        mem_view_addr = (mem_view_addr + delta) & 0xFFFFF;
+    }
+
+    ImGui::Separator();
+
+    // Header
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+        "         00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  ASCII");
+
+    // Rows
+    for (int row = 0; row < MEM_ROWS; ++row) {
+        uint32_t row_addr = (mem_view_addr + row * MEM_COLS) & 0xFFFFF;
+        uint8_t data[16];
+        mem->read(row_addr, data, MEM_COLS);
+
+        char hex[64];
+        int p = 0;
+        for (int i = 0; i < 16; ++i) {
+            if (i == 8) hex[p++] = ' ';
+            p += snprintf(hex + p, sizeof(hex) - p, "%02X ", data[i]);
+        }
+
+        char ascii[17];
+        for (int i = 0; i < 16; ++i)
+            ascii[i] = (data[i] >= 0x20 && data[i] < 0x7F) ? (char)data[i] : '.';
+        ascii[16] = '\0';
+
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+            "%05X  %s %s", row_addr, hex, ascii);
     }
 
     ImGui::End();

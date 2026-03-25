@@ -125,7 +125,6 @@ int main() {
 
     // Start paused. Pre-set the debugger view to the reset vector.
     scheduler.pause();
-    scheduler.set_break_address(0x07C00);  // pause when BIOS jumps to boot sector
 
     // --- Power on ---
     spdlog::info("=== Power on ===");
