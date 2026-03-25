@@ -109,6 +109,16 @@ void ISA_Bus::insert_card(int slot_idx, ISA_Card* card,
     if (slot_idx >= card_count_)
         card_count_ = slot_idx + 1;
 
+    // Populate O(1) lookup tables.
+    for (int p = 0; p < IO_PORTS; ++p)
+        if (card->claims_port(static_cast<uint16_t>(p)))
+            port_map_[p] = card;
+    for (int pg = 0; pg < MMIO_PAGES; ++pg) {
+        uint32_t base = static_cast<uint32_t>(pg) << 12;
+        if (card->claims_mmio(base))
+            mmio_map_[pg] = card;
+    }
+
     // Map DMA channels to this card.
     for (int ch = 1; ch <= 3; ++ch)
         if (dma_ch_mask & (1 << ch))
@@ -352,18 +362,6 @@ void ISA_Bus::release_sd() {
     }
 }
 
-ISA_Card* ISA_Bus::find_port_owner(uint16_t port) {
-    for (int i = 0; i < card_count_; ++i)
-        if (cards_[i] && cards_[i]->claims_port(port))
-            return cards_[i];
-    return nullptr;
-}
-
-ISA_Card* ISA_Bus::find_mmio_owner(uint32_t addr) {
-    for (int i = 0; i < card_count_; ++i)
-        if (cards_[i] && cards_[i]->claims_mmio(addr))
-            return cards_[i];
-    return nullptr;
-}
+// find_port_owner / find_mmio_owner are now inline O(1) lookups in isa_bus.h.
 
 } // namespace bench

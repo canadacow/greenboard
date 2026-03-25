@@ -90,9 +90,16 @@ private:
     void     drive_sd(uint8_t val);
     void     release_sd();
 
-    // Find card that claims a port/address.
-    ISA_Card* find_port_owner(uint16_t port);
-    ISA_Card* find_mmio_owner(uint32_t addr);
+    // O(1) port/MMIO lookup tables, populated at insert_card time.
+    // I/O: 10-bit address space (0x000-0x3FF) = 1024 entries.
+    // MMIO: 4KB pages over first 1MB = 256 entries.
+    static constexpr int IO_PORTS = 1024;
+    static constexpr int MMIO_PAGES = 256;  // 1MB / 4KB
+    ISA_Card* port_map_[IO_PORTS] = {};
+    ISA_Card* mmio_map_[MMIO_PAGES] = {};
+
+    ISA_Card* find_port_owner(uint16_t port) { return port < IO_PORTS ? port_map_[port] : nullptr; }
+    ISA_Card* find_mmio_owner(uint32_t addr) { return addr < (MMIO_PAGES * 4096) ? mmio_map_[addr >> 12] : nullptr; }
 };
 
 } // namespace bench
