@@ -224,10 +224,10 @@ void IC_8088::full_wait_clk(const char* /*stateYield*/) {
 
 
 // ---- Memory read: 4 T-states (T1, T2, T3, T4) + optional Tw ----
-uint8_t IC_8088::bus_read_byte(uint32_t address) {
-    // T1 -- drive S0-S2 (MEMR), drive address on AD0-AD7 / A8-A19
+uint8_t IC_8088::bus_read_byte(uint32_t address, uint8_t bus_type) {
+    // T1 -- drive S0-S2 (status), drive address on AD0-AD7 / A8-A19
     t_state_ = TState::T1;
-    drive_status((BUS_MEMR >> 2) & 1, (BUS_MEMR >> 1) & 1, BUS_MEMR & 1);
+    drive_status((bus_type >> 2) & 1, (bus_type >> 1) & 1, bus_type & 1);
     drive_address(address & 0xFFFFF);
     full_wait_clk("T1 bus_read");                                // T1
 
@@ -448,7 +448,7 @@ uint8_t IC_8088::fetch_byte(int offset) {
     if (offset < prefetch_len_)
         return prefetch_[offset];
     while (prefetch_len_ <= offset) {
-        prefetch_[prefetch_len_] = bus_read_byte(prefetch_base_ + prefetch_len_);
+        prefetch_[prefetch_len_] = bus_read_byte(prefetch_base_ + prefetch_len_, BUS_FETCH);
         ++prefetch_len_;
     }
     return prefetch_[offset];
@@ -533,11 +533,15 @@ void IC_8088::set_opcode(uint8_t opcode) {
 void IC_8088::pc_interrupt(uint8_t interrupt_num) {
     set_opcode(0xCD);
     make_flags();
+    uint16_t from_cs = regs16()[REG_CS];
+    uint16_t from_ip = reg_ip_;
     push16((uint16_t)scratch_uint_);
     push16(regs16()[REG_CS]);
     push16(reg_ip_);
     regs16()[REG_CS] = bus_read_word(4 * interrupt_num + 2);
     reg_ip_ = bus_read_word(4 * interrupt_num);
+    spdlog::info("[8088] INT {:02X} from {:04X}:{:04X} -> {:04X}:{:04X}",
+                 interrupt_num, from_cs, from_ip, regs16()[REG_CS], reg_ip_);
     regs8()[FLAG_TF] = 0;
     regs8()[FLAG_IF] = 0;
 }
@@ -648,6 +652,10 @@ void IC_8088::execute() {
             reg_ip_ = rmem16(op_from_addr_);
             op_result_ = reg_ip_; // suppress flags
             set_opcode(0x9A);
+            spdlog::info("[8088] {} {} -> {:04X}:{:04X}",
+                         (i_reg_ & 2) ? "CALL" : "JMP",
+                         (i_reg_ & 1) ? "far" : "near",
+                         regs16()[REG_CS], reg_ip_);
         } else {
             // PUSH r/m
             i_w_ = 1;
@@ -982,8 +990,12 @@ void IC_8088::execute() {
                     i_data2_ = fetch_word(3);
                     reg_ip_ = 0;
                     regs16()[REG_CS] = (uint16_t)i_data2_;
+                    spdlog::info("[8088] JMP far -> {:04X}:{:04X}",
+                                 regs16()[REG_CS], reg_ip_ + (int16_t)i_data0_);
                 } else { // CALL near
                     push16(reg_ip_);
+                    spdlog::info("[8088] CALL near -> {:04X}:{:04X}",
+                                 regs16()[REG_CS], reg_ip_ + (int16_t)i_data0_);
                 }
             }
             reg_ip_ += (int16_t)i_data0_;
@@ -1062,6 +1074,9 @@ void IC_8088::execute() {
         if (extra_) regs16()[REG_CS] = pop16(); // RETF or IRET
         if (extra_ & 2) set_flags(pop16()); // IRET
         else if (!i_d_) regs16()[REG_SP] += fetch_word(1); // RET/RETF imm16
+        spdlog::info("[8088] {} -> {:04X}:{:04X}",
+                     (extra_ & 2) ? "IRET" : (extra_ ? "RETF" : "RET"),
+                     regs16()[REG_CS], reg_ip_);
         break;
     }
     case 20: { // MOV r/m, imm
@@ -1148,6 +1163,7 @@ void IC_8088::execute() {
         push16(reg_ip_ + 5);
         regs16()[REG_CS] = (uint16_t)i_data2_;
         reg_ip_ = (uint16_t)i_data0_;
+        spdlog::info("[8088] CALL far -> {:04X}:{:04X}", regs16()[REG_CS], reg_ip_);
         break;
     case 33: // PUSHF
         make_flags();

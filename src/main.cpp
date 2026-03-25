@@ -117,11 +117,33 @@ int main() {
         return board.rom.bank_data(off / 8192)[off % 8192];
     });
 
+    // --- Bus probe (pool indices for bus analyzer) ---
+    auto pidx = [](Signal& s) { return (int)s.pin().idx; };
+    BusProbe bus_probe;
+    bus_probe.ad = board.ad_block_;  bus_probe.d = board.d_block_;
+    bus_probe.xd = board.xd_block_; bus_probe.la = board.la_block_;
+    bus_probe.md = board.md_block_;
+    bus_probe.ale = pidx(board.ale);   bus_probe.den = pidx(board.den);
+    bus_probe.dtr = pidx(board.dtr);
+    bus_probe.memr = pidx(board.memr); bus_probe.memw = pidx(board.memw);
+    bus_probe.ior = pidx(board.ior_sig); bus_probe.iow = pidx(board.iow_sig);
+    bus_probe.ready = pidx(board.ready); bus_probe.clk = pidx(board.clk);
+    bus_probe.reset = pidx(board.reset);
+    bus_probe.hrq = pidx(board.hrq);   bus_probe.holda = pidx(board.holda);
+    bus_probe.aen_brd = pidx(board.aen_brd); bus_probe.aen_bar = pidx(board.aen_bar);
+    bus_probe.s0 = pidx(board.s0); bus_probe.s1 = pidx(board.s1); bus_probe.s2 = pidx(board.s2);
+    bus_probe.dack0 = pidx(board.dack0_brd); bus_probe.dack1 = pidx(board.dack1);
+    bus_probe.dack2 = pidx(board.dack2);     bus_probe.dack3 = pidx(board.dack3);
+    bus_probe.drq0 = pidx(board.drq0); bus_probe.drq1 = pidx(board.drq1);
+    bus_probe.drq2 = pidx(board.drq2); bus_probe.drq3 = pidx(board.drq3);
+    bus_probe.intr = pidx(board.intr); bus_probe.nmi = pidx(board.nmi);
+
     // --- MDA display (render thread, reads framebuffer directly) ---
     MdaDisplay mda_display;
     scheduler.set_cpu(board.cpu);
     mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
-                       &scheduler, board.cpu, &memview, board.dma_ic, &mda);
+                       &scheduler, board.cpu, &memview, board.dma_ic, &mda,
+                       &bus_probe);
 
     // Start paused. Pre-set the debugger view to the reset vector.
     scheduler.pause();

@@ -108,6 +108,10 @@ struct DxState {
     // MDA card (for CRTC cursor registers)
     const ISA_MDA* mda_card = nullptr;
 
+    // Bus probe (signal pool indices for bus analyzer)
+    const BusProbe* bus_probe = nullptr;
+    bool bus_view_open = false;
+
     // Blink timing: derived from QPC wall clock, independent of render frame rate.
     // Real MDA field rate: 18.432 MHz dot clock / (882 chars * 370 lines) = ~56.5 Hz.
     // The 6845's 5-bit cursor_counter increments once per field.
@@ -156,6 +160,7 @@ struct DxState {
     void render_overlay();
     void render_debugger();
     void render_memory_viewer();
+    void render_bus_analyzer();
     void present();
 };
 
@@ -511,6 +516,10 @@ void DxState::render_overlay() {
     if (mem_view_open && mem)
         render_memory_viewer();
 
+    // --- Bus analyzer (separate window) ---
+    if (bus_view_open && bus_probe)
+        render_bus_analyzer();
+
     ImGui::Render();
 
     ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
@@ -598,9 +607,12 @@ void DxState::render_debugger() {
         scheduler->step_cycle();
     ImGui::EndDisabled();
 
-    // --- Second toolbar row: Mem, breakpoint, T-state, DMA ---
+    // --- Second toolbar row: Mem, Bus, breakpoint, T-state, DMA ---
     if (ImGui::Button("Mem"))
         mem_view_open = !mem_view_open;
+    ImGui::SameLine();
+    if (ImGui::Button("Bus"))
+        bus_view_open = !bus_view_open;
     ImGui::SameLine();
     ImGui::Text("Break:");
     ImGui::SameLine();
@@ -872,6 +884,144 @@ void DxState::render_memory_viewer() {
     ImGui::End();
 }
 
+void DxState::render_bus_analyzer() {
+    const auto& bp = *bus_probe;
+    const auto* L = SignalPool::levels;
+
+    // Helper: read N contiguous levels as hex value (High=1 bit set)
+    auto bus_hex = [&](int base, int n) -> uint32_t {
+        uint32_t v = 0;
+        for (int i = 0; i < n; ++i)
+            if (L[base + i] == Level::High) v |= (1u << i);
+        return v;
+    };
+    // Helper: signal level as char
+    auto lch = [&](int idx) -> char {
+        Level v = L[idx];
+        return v == Level::High ? 'H' : v == Level::Low ? 'L' : 'Z';
+    };
+    // Helper: active-low signal as colored text
+    auto active_low = [&](const char* name, int idx) {
+        Level v = L[idx];
+        bool active = (v == Level::Low);
+        ImVec4 col = active ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f) : ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+        ImGui::TextColored(col, "%s=%c", name, lch(idx));
+    };
+
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    ImGui::SetNextWindowSize(ImVec2(420, 340), ImGuiCond_Once);
+
+    if (!ImGui::Begin("Bus Analyzer", &bus_view_open, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+
+    ImVec4 grn = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+    ImVec4 dim = ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+    ImVec4 yel = ImVec4(1.0f, 1.0f, 0.3f, 1.0f);
+    ImVec4 red = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+    ImVec4 cyn = ImVec4(0.4f, 1.0f, 1.0f, 1.0f);
+
+    // Address/data buses
+    uint32_t la_val = bus_hex(bp.la, 20);
+    uint32_t ad_val = bus_hex(bp.ad, 8);
+    uint32_t d_val  = bus_hex(bp.d, 8);
+    uint32_t xd_val = bus_hex(bp.xd, 8);
+    uint32_t md_val = bus_hex(bp.md, 8);
+
+    // --- Summary line: decode bus cycle type ---
+    {
+        // S2 S1 S0 decode (active-low pins: L on pin = 0 in value)
+        //  0  0  0 = INTA       0  0  1 = IOR
+        //  0  1  0 = IOW        0  1  1 = HALT
+        //  1  0  0 = FETCH      1  0  1 = MEMR
+        //  1  1  0 = MEMW       1  1  1 = passive
+        int s2 = (L[bp.s2] == Level::Low) ? 0 : 1;
+        int s1 = (L[bp.s1] == Level::Low) ? 0 : 1;
+        int s0 = (L[bp.s0] == Level::Low) ? 0 : 1;
+        int code = (s2 << 2) | (s1 << 1) | s0;
+        static const char* cycle_names[] = {
+            "INTA", "IOR", "IOW", "HALT", "FETCH", "MEMR", "MEMW", "---"
+        };
+        const char* cycle = cycle_names[code];
+        bool is_read = (code == 1 || code == 4 || code == 5);  // IOR, FETCH, MEMR
+        bool is_write = (code == 2 || code == 6);               // IOW, MEMW
+        bool is_active = (code < 7);
+
+        if (is_active) {
+            uint8_t data = is_read ? (uint8_t)d_val : (uint8_t)d_val;
+            ImGui::TextColored(cyn, "%s  %05X  D=%02X", cycle, la_val, data);
+            if (is_read) {
+                ImGui::SameLine();
+                ImGui::TextColored(cyn, " (reading)");
+            } else if (is_write) {
+                ImGui::SameLine();
+                ImGui::TextColored(red, " (writing)");
+            }
+        } else {
+            bool dma_owns = L[bp.aen_brd] == Level::High;
+            ImGui::TextColored(dim, "%s  %s", dma_owns ? "DMA owns bus" : "idle", cycle);
+        }
+        ImGui::Separator();
+    }
+
+    ImGui::TextColored(grn, "LA[19:0]=%05X   AD[7:0]=%02X", la_val, ad_val);
+    ImGui::TextColored(grn, " D[7:0] =%02X     XD[7:0]=%02X    MD[7:0]=%02X", d_val, xd_val, md_val);
+
+    ImGui::Separator();
+
+    // 8288 bus control
+    ImGui::Text("8288:");
+    ImGui::SameLine(); active_low("~MEMR", bp.memr);
+    ImGui::SameLine(); active_low("~MEMW", bp.memw);
+    ImGui::SameLine(); active_low("~IOR", bp.ior);
+    ImGui::SameLine(); active_low("~IOW", bp.iow);
+
+    ImGui::Text("     ");
+    ImGui::SameLine(); active_low("ALE", bp.ale);   // active high actually
+    ImGui::SameLine(); active_low("~DEN", bp.den);
+    ImGui::SameLine();
+    ImGui::TextColored(dim, "DT/~R=%c", lch(bp.dtr));
+
+    ImGui::Separator();
+
+    // CPU status
+    ImGui::Text("CPU: ");
+    ImGui::SameLine();
+    ImGui::TextColored(grn, "~S2=%c ~S1=%c ~S0=%c", lch(bp.s2), lch(bp.s1), lch(bp.s0));
+    ImGui::SameLine();
+    ImGui::TextColored(dim, " READY=%c", lch(bp.ready));
+
+    ImGui::Separator();
+
+    // DMA
+    bool hrq_active = L[bp.hrq] == Level::High;
+    bool holda_active = L[bp.holda] == Level::High;
+    bool aen_active = L[bp.aen_brd] == Level::High;
+    ImGui::TextColored(hrq_active ? yel : dim, "HRQ=%c", lch(bp.hrq));
+    ImGui::SameLine();
+    ImGui::TextColored(holda_active ? yel : dim, "HOLDA=%c", lch(bp.holda));
+    ImGui::SameLine();
+    ImGui::TextColored(aen_active ? yel : dim, "AEN_BRD=%c", lch(bp.aen_brd));
+    ImGui::SameLine();
+    active_low("~AEN", bp.aen_bar);
+
+    ImGui::Text("DRQ: %c%c%c%c  ~DACK: %c%c%c%c",
+        lch(bp.drq0), lch(bp.drq1), lch(bp.drq2), lch(bp.drq3),
+        lch(bp.dack0), lch(bp.dack1), lch(bp.dack2), lch(bp.dack3));
+
+    ImGui::Separator();
+
+    // Interrupts
+    ImGui::TextColored(L[bp.intr] == Level::High ? yel : dim, "INTR=%c", lch(bp.intr));
+    ImGui::SameLine();
+    ImGui::TextColored(L[bp.nmi] == Level::High ? yel : dim, "NMI=%c", lch(bp.nmi));
+    ImGui::SameLine();
+    ImGui::TextColored(dim, "CLK=%c  RESET=%c", lch(bp.clk), lch(bp.reset));
+
+    ImGui::End();
+}
+
 void DxState::present() {
     swapChain->Present(1, 0);
 }
@@ -923,6 +1073,7 @@ void MdaDisplay::render_loop(std::stop_token stop) {
     dx.mem = mem_;
     dx.dma = dma_;
     dx.mda_card = mda_card_;
+    dx.bus_probe = bus_probe_;
     dx.dbg_visible = &dbg_visible_;
     if (!dx.init(hwnd, winW, winH)) {
         spdlog::error("[MDA Display] Failed to init DX11");
@@ -956,7 +1107,8 @@ void MdaDisplay::render_loop(std::stop_token stop) {
 void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
                        Scheduler* scheduler, IC_8088* cpu,
                        const MemoryView* mem, IC_8237A* dma,
-                       const ISA_MDA* mda_card) {
+                       const ISA_MDA* mda_card,
+                       const BusProbe* bus) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -964,6 +1116,7 @@ void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
     mem_ = mem;
     dma_ = dma;
     mda_card_ = mda_card;
+    bus_probe_ = bus;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });

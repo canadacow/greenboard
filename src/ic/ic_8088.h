@@ -62,7 +62,7 @@ protected:
 private:
     void check_nmi();
     // --- Bus operations ---
-    uint8_t bus_read_byte(uint32_t address);
+    uint8_t bus_read_byte(uint32_t address, uint8_t bus_type = 5 /*BUS_MEMR*/);
     void bus_write_byte(uint32_t address, uint8_t value);
     uint16_t bus_read_word(uint32_t address);
     void bus_write_word(uint32_t address, uint16_t value);
