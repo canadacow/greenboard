@@ -68,7 +68,7 @@ void TestKeyboard::on_power_on() {
     reset_delay_ = 0;
     ready_prev_ = Level::HiZ;
     ack_prev_ = Level::HiZ;
-    pb6_prev_ = Level::HiZ;
+    pb6_prev_ = Level::Low;  // PPI resets Port B to 0; match that so init OUT doesn't false-trigger
     pb7_prev_ = Level::HiZ;
     pa_driven_ = 0;
     pin_irq1_.drive(Level::Low);
@@ -101,24 +101,28 @@ void TestKeyboard::on_cycle(Fiber /*caller*/) {
     // Detect keyboard reset protocol via PB6 (KBD CLK inhibit):
     // PB6 Low = CLK pulled low (reset start).
     // PB6 High after Low = CLK released (reset complete) -> send 0xAA.
-    if (pb6_cur == Level::Low && pb6_prev_ != Level::Low) {
+    if (pb6_cur != pb6_prev_)
+        spdlog::info("[KBD] PB6 {} -> {} (reset_pending={})",
+                     (int)pb6_prev_, (int)pb6_cur, reset_pending_);
+    if (pb6_cur == Level::Low && pb6_prev_ == Level::High) {
         reset_pending_ = true;
+        spdlog::info("[KBD] PB6 fell -> reset_pending");
     }
     if (reset_pending_ && pb6_cur == Level::High && pb6_prev_ != Level::High) {
         reset_pending_ = false;
-        // Insert 0xAA self-test response at current queue position.
         queue_.insert(queue_.begin() + static_cast<ptrdiff_t>(queue_pos_), 0xAA);
         armed_ = true;
-        // Delay delivery so the CPU has time to unmask IRQ1 and STI.
-        // Real keyboard takes ~20ms; we just need enough cycles for
-        // the BIOS to execute the unmask + STI instructions.
-        reset_delay_ = 200;
+        reset_delay_ = 100;
+        spdlog::info("[KBD] PB6 rose -> queued 0xAA, delay=100");
     }
 
     // Countdown for delayed reset delivery.
     if (reset_delay_ > 0) {
-        if (--reset_delay_ == 0)
+        if (--reset_delay_ == 0) {
             deliver_pending_ = true;
+            armed_ = true;
+            spdlog::info("[KBD] reset delay expired -> deliver_pending, armed={}", armed_);
+        }
     }
 
     // Wait for test program to arm us (non-reset path).
@@ -175,6 +179,7 @@ void TestKeyboard::deliver_next() {
     drive_scancode(sc);
     pin_irq1_.drive(Level::High);
     waiting_ack_ = true;
+    spdlog::info("[KBD] deliver_next: sc=0x{:02X}, IRQ1=High, pa=0x{:02X}", sc, pa_driven_);
 }
 
 void TestKeyboard::drive_scancode(uint8_t sc) {

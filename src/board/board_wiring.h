@@ -1144,12 +1144,14 @@ struct Board {
         ff67_ic = ff67_socket.emplace<IC_74S74>(true);  // async CLK: FF2 CLK=PIT OUT1 (async timer)
 
         // U82: 74S74 Dual D Flip-Flop (keyboard IRQ1 + DMA wait state)
-        // FF1: keyboard/SW1 mux control (not implemented -- tie outputs stable)
+        // FF1: keyboard IRQ1 synchronizer (not fully implemented).
+        // On real HW, U24 shift register -> U82 FF1 -> IRQ1. We bypass
+        // FF1 and let TestKeyboard drive IRQ1 directly.
         ff82_socket.wire(1, vcc);              // ~CLR1 = VCC (no clear)
         ff82_socket.wire(2, gnd);              // D1 = GND (stub)
         ff82_socket.wire(3, gnd);              // CLK1 = GND (stub, never clocks)
         ff82_socket.wire(4, vcc);              // ~PRE1 = VCC (no preset)
-        ff82_socket.wire(5, gnd);              // Q1 = IRQ1 (stub, not connected to PIC yet)
+        // Q1 (pin 5) NOT wired -- TestKeyboard drives IRQ1 directly
         ff82_socket.wire(6, gnd);              // ~Q1 = stub
         ff82_socket.wire(7, gnd);              // GND
         // FF2: DMA wait state generator
