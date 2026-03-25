@@ -1114,6 +1114,12 @@ void MdaDisplay::render_loop(std::stop_token stop) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         } else {
+            // Pick up pending board signal binding from main thread.
+            if (brd_map_ready_.load(std::memory_order_acquire)) {
+                dx.board_view.bind_signals(pending_brd_map_);
+                brd_map_ready_.store(false, std::memory_order_release);
+            }
+
             dx.render_mda(vram_);
             dx.render_overlay();
             dx.present();
@@ -1145,6 +1151,11 @@ void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
         render_loop(stop);
     });
     ready_.wait();
+}
+
+void MdaDisplay::bind_board_signals(const std::unordered_map<std::string, int>& brd_map) {
+    pending_brd_map_ = brd_map;
+    brd_map_ready_.store(true, std::memory_order_release);
 }
 
 void MdaDisplay::stop() {

@@ -1,4 +1,5 @@
 #include "display/board_view.h"
+#include "core/signal.h"
 
 #include <d3dcompiler.h>
 #include <nlohmann/json.hpp>
@@ -29,6 +30,7 @@ struct Segment {
 };
 
 StructuredBuffer<Segment> segs : register(t0);
+Buffer<uint> net_levels : register(t1);  // per-net signal level (0=Low,1=HiZ,2=High,0xFF=unbound)
 
 cbuffer View : register(b0) {
     float2 view_min;
@@ -116,6 +118,13 @@ float4 ps_main(VS_OUT input) : SV_Target {
         return bg;
 
     float4 seg_color = unpack_rgba(segs[closest].rgba);
+
+    // Modulate color by live signal level.
+    uint lvl = net_levels[segs[closest].net];
+    if (lvl == 2u)       seg_color.rgb *= 2.0;                        // High: bright
+    else if (lvl == 0u)  seg_color.rgb *= 0.25;                       // Low: dim
+    else if (lvl == 1u)  seg_color.rgb = float3(0.25, 0.25, 0.25);   // HiZ: gray
+    // else 0xFF (unbound): use base color as-is.
 
     // Highlight: brighten if this net is selected.
     if (highlight_net != 0 && segs[closest].net == highlight_net)
@@ -273,8 +282,12 @@ bool BoardView::load_json(const char* path) {
         segments_.push_back(s);
     }
 
-    spdlog::info("[BoardView] Loaded {} segments, {} nets, {} components",
-                 segments_.size(), net_names_.size(), labels_.size());
+    // Find max net ID for sizing the level buffer.
+    for (auto& [nid, _] : net_names_)
+        if (nid > max_net_id_) max_net_id_ = nid;
+
+    spdlog::info("[BoardView] Loaded {} segments, {} nets (max ID {}), {} components",
+                 segments_.size(), net_names_.size(), max_net_id_, labels_.size());
     return true;
 }
 
@@ -334,6 +347,27 @@ bool BoardView::create_gpu_resources(ID3D11Device* device) {
     svd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
     svd.Buffer.NumElements = static_cast<UINT>(segments_.size());
     device->CreateShaderResourceView(seg_buf_.Get(), &svd, &seg_srv_);
+
+    // Per-net signal level buffer (dynamic, updated each frame).
+    // Indexed by BRD net ID. R32_UINT typed buffer.
+    uint32_t lvl_count = max_net_id_ + 1;
+    net_levels_.resize(lvl_count, 0xFFu);  // 0xFF = unbound
+
+    D3D11_BUFFER_DESC lbd = {};
+    lbd.ByteWidth = lvl_count * sizeof(uint32_t);
+    lbd.Usage = D3D11_USAGE_DYNAMIC;
+    lbd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    lbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    D3D11_SUBRESOURCE_DATA lrd = {};
+    lrd.pSysMem = net_levels_.data();
+    device->CreateBuffer(&lbd, &lrd, &lvl_buf_);
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC lvd = {};
+    lvd.Format = DXGI_FORMAT_R32_UINT;
+    lvd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+    lvd.Buffer.NumElements = lvl_count;
+    device->CreateShaderResourceView(lvl_buf_.Get(), &lvd, &lvl_srv_);
 
     return true;
 }
@@ -418,7 +452,8 @@ void BoardView::render_to_texture(ID3D11DeviceContext* ctx, int w, int h) {
     ctx->VSSetShader(vs_.Get(), nullptr, 0);
     ctx->PSSetShader(ps_.Get(), nullptr, 0);
     ctx->PSSetConstantBuffers(0, 1, cb_.GetAddressOf());
-    ctx->PSSetShaderResources(0, 1, seg_srv_.GetAddressOf());
+    ID3D11ShaderResourceView* srvs[2] = { seg_srv_.Get(), lvl_srv_.Get() };
+    ctx->PSSetShaderResources(0, 2, srvs);
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ctx->IASetInputLayout(nullptr);
 
@@ -426,8 +461,8 @@ void BoardView::render_to_texture(ID3D11DeviceContext* ctx, int w, int h) {
     ctx->Draw(3, 0);
 
     // Unbind SRV (so texture can be used as ImGui image)
-    ID3D11ShaderResourceView* null_srv = nullptr;
-    ctx->PSSetShaderResources(0, 1, &null_srv);
+    ID3D11ShaderResourceView* null_srvs[2] = { nullptr, nullptr };
+    ctx->PSSetShaderResources(0, 2, null_srvs);
 
     // Restore state
     ctx->OMSetRenderTargets(1, old_rtv.GetAddressOf(), old_dsv.Get());
@@ -489,6 +524,51 @@ bool BoardView::init(ID3D11Device* device, const char* json_path) {
 }
 
 // ========================================================================
+// Signal binding
+// ========================================================================
+
+void BoardView::bind_signals(const std::unordered_map<std::string, int>& brd_map) {
+    net_to_pool_.clear();
+    int bound = 0;
+    for (auto& [net_id, net_name] : net_names_) {
+        auto it = brd_map.find(net_name);
+        if (it != brd_map.end()) {
+            net_to_pool_[net_id] = it->second;
+            ++bound;
+        }
+    }
+    signals_bound_ = (bound > 0);
+    spdlog::info("[BoardView] Bound {}/{} nets to live signals",
+                 bound, net_names_.size());
+}
+
+void BoardView::update_signal_levels(ID3D11DeviceContext* ctx) {
+    if (!signals_bound_ || !lvl_buf_) return;
+
+    // Read live signal levels from the pool.
+    // Level enum: Low=-1, HiZ=0, High=1. Shader encoding: 0=Low, 1=HiZ, 2=High, 0xFF=unbound.
+    bool changed = false;
+    for (auto& [net_id, pool_idx] : net_to_pool_) {
+        Level lvl = SignalPool::levels[pool_idx];
+        uint32_t encoded = static_cast<uint32_t>(static_cast<int8_t>(lvl) + 1);  // -1->0, 0->1, 1->2
+        if (net_levels_[net_id] != encoded) {
+            net_levels_[net_id] = encoded;
+            changed = true;
+        }
+    }
+
+    if (!changed) return;
+    dirty_ = true;
+
+    // Upload to GPU.
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(ctx->Map(lvl_buf_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        memcpy(mapped.pData, net_levels_.data(), net_levels_.size() * sizeof(uint32_t));
+        ctx->Unmap(lvl_buf_.Get(), 0);
+    }
+}
+
+// ========================================================================
 // ImGui window
 // ========================================================================
 
@@ -518,8 +598,9 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
     ImGui::Checkbox("Pad", &pad); ImGui::SameLine();
     ImGui::Checkbox("Outline", &out); ImGui::SameLine();
 
-    layer_mask_ = (top ? 1 : 0) | (bot ? 2 : 0) | (via ? 4 : 0) |
-                  (pad ? 8 : 0) | (out ? 16 : 0);
+    uint32_t new_mask = (top ? 1 : 0) | (bot ? 2 : 0) | (via ? 4 : 0) |
+                        (pad ? 8 : 0) | (out ? 16 : 0);
+    if (new_mask != layer_mask_) { layer_mask_ = new_mask; dirty_ = true; }
 
     if (ImGui::Button("Fit")) {
         pan_x_ = (bounds_[0] + bounds_[2]) * 0.5f;
@@ -528,6 +609,7 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
         float zx = avail.x / (bounds_[2] - bounds_[0]);
         float zy = avail.y / (bounds_[3] - bounds_[1]);
         zoom_ = (std::min)(zx, zy) * 0.95f;
+        dirty_ = true;
     }
     if (highlight_net_) {
         ImGui::SameLine();
@@ -537,7 +619,7 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
         else
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "Net: %u", highlight_net_);
         ImGui::SameLine();
-        if (ImGui::SmallButton("X")) highlight_net_ = 0;
+        if (ImGui::SmallButton("X")) { highlight_net_ = 0; dirty_ = true; }
     }
 
     // --- Board image area ---
@@ -545,7 +627,16 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
     int w = (std::max)((int)avail.x, 64);
     int h = (std::max)((int)avail.y, 64);
 
-    render_to_texture(ctx, w, h);
+    // Sample live signal levels (sets dirty_ if anything changed).
+    update_signal_levels(ctx);
+
+    // Resize triggers redraw.
+    if (w != rt_w_ || h != rt_h_) dirty_ = true;
+
+    if (dirty_) {
+        render_to_texture(ctx, w, h);
+        dirty_ = false;
+    }
 
     if (rt_srv_) {
         ImVec2 cursor = ImGui::GetCursorScreenPos();
@@ -581,6 +672,7 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
                 // Adjust pan so board-space point stays under mouse
                 pan_x_ = bx - (mx - w * 0.5f) / zoom_;
                 pan_y_ = by - (my - h * 0.5f) / zoom_;
+                dirty_ = true;
             }
 
             // Pan with middle mouse drag
@@ -588,6 +680,7 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
                 ImVec2 delta = ImGui::GetIO().MouseDelta;
                 pan_x_ -= delta.x / zoom_;
                 pan_y_ -= delta.y / zoom_;
+                dirty_ = true;
             }
 
             // Also allow left-drag for pan
@@ -595,6 +688,7 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
                 ImVec2 delta = ImGui::GetIO().MouseDelta;
                 pan_x_ -= delta.x / zoom_;
                 pan_y_ -= delta.y / zoom_;
+                dirty_ = true;
             }
 
             // Right-click: highlight net under cursor
@@ -604,7 +698,8 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
                 float my = (mouse.y - cursor.y);
                 float bx = pan_x_ + (mx - w * 0.5f) / zoom_;
                 float by = pan_y_ + (my - h * 0.5f) / zoom_;
-                highlight_net_ = hit_test(bx, by);
+                uint32_t net = hit_test(bx, by);
+                if (net != highlight_net_) { highlight_net_ = net; dirty_ = true; }
             }
 
             // Tooltip: show net name under cursor

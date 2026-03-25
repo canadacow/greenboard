@@ -16,6 +16,8 @@
 #include <thread>
 #include <atomic>
 #include <latch>
+#include <unordered_map>
+#include <string>
 
 namespace bench {
 
@@ -56,6 +58,10 @@ public:
                const ISA_MDA* mda_card = nullptr,
                const BusProbe* bus = nullptr);
 
+    // Bind BRD net names to live signals for board view.
+    // Call after start() returns (board_view is initialized by then).
+    void bind_board_signals(const std::unordered_map<std::string, int>& brd_map);
+
     // Stop the display thread and close the window.
     void stop();
 
@@ -74,6 +80,10 @@ private:
     const ISA_MDA* mda_card_ = nullptr;
     const BusProbe* bus_probe_ = nullptr;
     bool dbg_visible_ = true;
+
+    // Pending board signal binding (set from main thread, consumed by render thread).
+    std::unordered_map<std::string, int> pending_brd_map_;
+    std::atomic<bool> brd_map_ready_{false};
 
     void render_loop(std::stop_token stop);
 };

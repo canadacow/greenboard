@@ -36,6 +36,7 @@
 #include "board/isa_slot.h"
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 using namespace bench;
 
@@ -1741,5 +1742,78 @@ struct Board {
         clk_gen->set_scheduler(&scheduler);
         clk_gen->set_bus_controller(bc);
         cpu->set_scheduler(&scheduler);
+    }
+
+    // Build BRD net name -> SignalPool index mapping.
+    // Covers direct name matches, sheet-prefixed names, and series
+    // termination resistor bridges (N-000xxx aliases).
+    std::unordered_map<std::string, int> brd_net_map() const {
+        // Step 1: build reverse map from signal name -> pool index.
+        std::unordered_map<std::string, int> by_name;
+        for (int i = 1; i < SignalPool::count; ++i) {
+            if (SignalPool::names[i])
+                by_name[SignalPool::names[i]] = i;
+        }
+
+        std::unordered_map<std::string, int> m;
+
+        // Helper: map a BRD net name to a known signal name.
+        auto map = [&](const char* brd, const char* sig) {
+            auto it = by_name.find(sig);
+            if (it != by_name.end()) m[brd] = it->second;
+        };
+
+        // Step 2: direct matches (most BRD names == Signal names).
+        for (auto& [name, idx] : by_name)
+            m[name] = idx;
+
+        // Step 3: sheet-prefixed CPU local signals.
+        for (int i = 0; i < 8; ++i)
+            map(("/SHEET1/AD" + std::to_string(i)).c_str(),
+                ("AD" + std::to_string(i)).c_str());
+        for (int i = 8; i < 20; ++i)
+            map(("/SHEET1/A" + std::to_string(i) + "_BUS").c_str(),
+                ("A" + std::to_string(i - 8)).c_str());
+        map("/SHEET1/QS0", "QS0");
+        map("/SHEET1/QS1", "QS1");
+        map("/SHEET1/READY", "READY");
+        map("/SHEET1/~RQ~/~GT", "~RQ/GT0");
+        map("/SHEET3/RAS", "RAS");
+        map("/SHEET3/~CAS", "~CAS");
+        map("/SHEET3/~REFRSH_GATE", "~REFRSH_GATE");
+
+        // Sheet 5: buffered address lines (XA10-XA12 have sheet prefix in BRD)
+        for (int i = 10; i <= 12; ++i)
+            map(("/SHEET5/XA" + std::to_string(i)).c_str(),
+                ("XA" + std::to_string(i)).c_str());
+
+        // BRD "A0"-"A19" = latched address bus = our "LA0"-"LA19"
+        for (int i = 0; i < 20; ++i)
+            map(("A" + std::to_string(i)).c_str(),
+                ("LA" + std::to_string(i)).c_str());
+
+        // Step 4: series termination resistor bridges.
+        // 8284A outputs through 27-ohm resistors:
+        map("N-000217", "CLK");    // R13: CLK88
+        map("N-000213", "PCLK");   // R15
+        map("N-000289", "CLK");    // R20 (buffered CLK for ISA)
+        map("N-000216", "OSC");    // R21
+        // 8288 outputs through 27-ohm resistors:
+        map("N-000192", "~MEMR");  // R18
+        map("N-000193", "~MEMW");  // R14
+        map("N-000197", "~IOR");   // R16
+        map("N-000196", "~IOW");   // R17
+        map("N-000219", "ALE");    // R19
+        // 8288 direct outputs:
+        map("N-000190", "~DEN");   // U6.4
+        map("N-000214", "DT/~R"); // U6.16
+        map("N-000165", "~INTA"); // U6.14
+
+        // DMA / bus arbitration:
+        map("N-000286", "HRQ");
+        map("N-000281", "~EOP");
+        map("N-000304", "~XMEMW"); // series termination
+
+        return m;
     }
 };

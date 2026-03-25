@@ -145,6 +145,9 @@ int main() {
                        &scheduler, board.cpu, &memview, board.dma_ic, &mda,
                        &bus_probe);
 
+    // Bind board traces to live simulation signals.
+    mda_display.bind_board_signals(board.brd_net_map());
+
     // Start paused. Pre-set the debugger view to the reset vector.
     scheduler.pause();
 

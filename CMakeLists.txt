@@ -35,8 +35,6 @@ add_executable(bench
     src/board/isa_slot.cpp
     src/board/passive.cpp
     src/board/brd_parser.cpp
-    src/board/motherboard.cpp
-    src/tools/multimeter.cpp
     src/ic/ic_8284a.cpp
     src/ic/ic_8288.cpp
     src/ic/ic_8253.cpp

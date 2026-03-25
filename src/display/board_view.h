@@ -23,6 +23,14 @@ public:
     // Load geometry from JSON file and create GPU resources.
     bool init(ID3D11Device* device, const char* json_path);
 
+    // Bind BRD net names to live SignalPool indices.
+    // Call after Board::wire() so all signals are allocated.
+    // brd_map: BRD net name -> SignalPool index (from Board::brd_net_map()).
+    void bind_signals(const std::unordered_map<std::string, int>& brd_map);
+
+    // Mark the view dirty (e.g. when signal levels change).
+    void mark_dirty() { dirty_ = true; }
+
     // Render the board view as an ImGui window.
     // Call between ImGui::NewFrame() and ImGui::Render().
     void imgui_window(ID3D11DeviceContext* ctx);
@@ -64,6 +72,10 @@ private:
     float bounds_[4] = {};  // x_min, y_min, x_max, y_max (mils)
     std::unordered_map<uint32_t, std::string> net_names_;
 
+    // BRD net ID -> SignalPool index (-1 = unbound).
+    // Populated by bind_signals(). Used to read live signal levels.
+    std::unordered_map<uint32_t, int> net_to_pool_;
+
     // Component labels (ref designator + center position)
     struct CompLabel {
         std::string ref;
@@ -78,6 +90,14 @@ private:
     bool open_ = false;
     uint32_t highlight_net_ = 0;
     uint32_t layer_mask_ = 0x1F;    // all layers visible
+    bool dirty_ = true;             // redraw only when something changes
+
+    // Signal state: per-net level buffer for the shader.
+    // Indexed by BRD net ID. 0xFF = unbound, else Level enum value + 1.
+    uint32_t max_net_id_ = 0;
+    std::vector<uint32_t> net_levels_;  // CPU-side staging
+    bool signals_bound_ = false;
+    void update_signal_levels(ID3D11DeviceContext* ctx);
 
     // DX11 resources
     ComPtr<ID3D11Device> device_;
@@ -86,6 +106,8 @@ private:
     ComPtr<ID3D11Buffer> cb_;
     ComPtr<ID3D11Buffer> seg_buf_;
     ComPtr<ID3D11ShaderResourceView> seg_srv_;
+    ComPtr<ID3D11Buffer> lvl_buf_;      // per-net signal level buffer
+    ComPtr<ID3D11ShaderResourceView> lvl_srv_;
 
     // Offscreen render target
     ComPtr<ID3D11Texture2D> rt_tex_;
