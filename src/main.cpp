@@ -9,6 +9,7 @@
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
+#include "isa/isa_cga.h"
 #include "display/renderer.h"
 #include "debug/memory_view.h"
 #include "test/test_keyboard.h"
@@ -68,6 +69,10 @@ int main() {
     // J3: MDA card (4KB framebuffer at 0xB0000, I/O 0x3B0-0x3BB)
     ISA_MDA mda;
     isa_bus.insert_card(2, &mda);
+
+    // J4: CGA card (16KB framebuffer at 0xB8000, I/O 0x3D0-0x3DF)
+    ISA_CGA cga;
+    isa_bus.insert_card(3, &cga);
 
     // --- Scheduler ---
     Scheduler scheduler;
@@ -144,7 +149,8 @@ int main() {
     scheduler.set_cpu(board.cpu);
     renderer.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
                    &scheduler, board.cpu, &memview, board.dma_ic, &mda,
-                   &bus_probe, &keyboard, &fdc);
+                   &bus_probe, &keyboard, &fdc,
+                   nullptr);  // pass &cga to use CGA display, nullptr for MDA
 
     // Bind board traces to live simulation signals.
     renderer.bind_board_signals(board.brd_net_map());

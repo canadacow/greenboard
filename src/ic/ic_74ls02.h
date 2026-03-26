@@ -61,7 +61,7 @@ public:
     }
 
 protected:
-    void on_power_on() override { eval_gates(); eval_gates(); }
+    void on_power_on() override { eval_gates(); }
     void on_power_off() override {
         gates_[0].y.release(); gates_[1].y.release();
         gates_[2].y.release(); gates_[3].y.release();
@@ -70,7 +70,6 @@ protected:
     void on_cycle(Fiber /*caller*/) override {
         // Two passes: gate outputs may feed other gates within the same IC
         // (e.g. U27: gate 4 output -> gate 1 input).
-        eval_gates();
         eval_gates();
     }
 

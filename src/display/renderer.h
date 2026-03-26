@@ -25,6 +25,7 @@ class Scheduler;
 class IC_8088;
 class IC_8237A;
 class ISA_MDA;
+class ISA_CGA;
 class ISA_FloppyController;
 class MemoryView;
 class TestKeyboard;
@@ -60,7 +61,8 @@ public:
                const ISA_MDA* mda_card = nullptr,
                const BusProbe* bus = nullptr,
                TestKeyboard* kbd = nullptr,
-               ISA_FloppyController* fdc = nullptr);
+               ISA_FloppyController* fdc = nullptr,
+               const ISA_CGA* cga = nullptr);
 
     // Bind BRD net names to live signals for board view.
     // Call after start() returns (board_view is initialized by then).
@@ -83,6 +85,7 @@ private:
     IC_8237A* dma_ = nullptr;
     const ISA_MDA* mda_card_ = nullptr;
     const BusProbe* bus_probe_ = nullptr;
+    const ISA_CGA* cga_ = nullptr;
     TestKeyboard* kbd_ = nullptr;
     ISA_FloppyController* fdc_ = nullptr;
     bool dbg_visible_ = true;

@@ -1,6 +1,7 @@
 // MdaRasterizer -- 80x25 MDA text rasterization via Direct2D/DirectWrite.
 
 #include "display/mda_display.h"
+#include "isa/isa_card.h"
 #include "isa/isa_mda.h"
 
 #include <cmath>
@@ -52,34 +53,37 @@ static wchar_t cp437_to_unicode(uint8_t c) {
 // MdaRasterizer
 // ========================================================================
 
-bool MdaRasterizer::init(ID2D1DeviceContext* d2dCtx, IDWriteFactory5* dwriteFactory,
-                         float cellW, float cellH) {
-    cellW_ = cellW;
-    cellH_ = cellH;
+const ISA_Card* MdaRasterizer::card() const {
+    return mda_card_;
+}
+
+bool MdaRasterizer::init(const RenderContext& rc) {
+    cellW_ = rc.cellW;
+    cellH_ = rc.cellH;
 
     // DirectWrite font setup
     ComPtr<IDWriteFontFile> fontFile;
-    dwriteFactory->CreateFontFileReference(L"assets/Ac437_IBM_MDA.ttf", nullptr, &fontFile);
+    rc.dwrite->CreateFontFileReference(L"assets/Ac437_IBM_MDA.ttf", nullptr, &fontFile);
     ComPtr<IDWriteFontSetBuilder1> fontSetBuilder;
-    dwriteFactory->CreateFontSetBuilder(&fontSetBuilder);
+    rc.dwrite->CreateFontSetBuilder(&fontSetBuilder);
     fontSetBuilder->AddFontFile(fontFile.Get());
     ComPtr<IDWriteFontSet> fontSet;
     fontSetBuilder->CreateFontSet(&fontSet);
     ComPtr<IDWriteFontCollection1> fc1;
-    dwriteFactory->CreateFontCollectionFromFontSet(fontSet.Get(), &fc1);
+    rc.dwrite->CreateFontCollectionFromFontSet(fontSet.Get(), &fc1);
 
-    dwriteFactory->CreateTextFormat(L"Ac437 IBM MDA", fc1.Get(),
+    rc.dwrite->CreateTextFormat(L"Ac437 IBM MDA", fc1.Get(),
         DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        cellH, L"en-us", &textFormat_);
+        rc.cellH, L"en-us", &textFormat_);
     textFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     textFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
 
     // D2D brushes
-    d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.85f, 0.0f), &greenBrush_);
-    d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 1.0f, 0.0f), &brightGreenBrush_);
-    d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &blackBrush_);
-    d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.65f, 0.0f), &underlineBrush_);
+    rc.d2d_ctx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.85f, 0.0f), &greenBrush_);
+    rc.d2d_ctx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 1.0f, 0.0f), &brightGreenBrush_);
+    rc.d2d_ctx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &blackBrush_);
+    rc.d2d_ctx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.65f, 0.0f), &underlineBrush_);
 
     // QPC for blink timing (frame-rate independent).
     QueryPerformanceFrequency(&qpc_freq_);
@@ -88,7 +92,9 @@ bool MdaRasterizer::init(ID2D1DeviceContext* d2dCtx, IDWriteFactory5* dwriteFact
     return true;
 }
 
-void MdaRasterizer::render(ID2D1DeviceContext* d2dCtx, const uint8_t* vram) {
+void MdaRasterizer::render(const RenderContext& rc) {
+    auto* d2dCtx = rc.d2d_ctx;
+    const uint8_t* vram = vram_;
     d2dCtx->BeginDraw();
     d2dCtx->Clear(D2D1::ColorF(D2D1::ColorF::Black));
 

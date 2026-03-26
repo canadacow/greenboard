@@ -24,8 +24,11 @@
 #include <imgui_impl_dx11.h>
 
 #include "display/renderer.h"
+#include "display/rasterizer.h"
 #include "display/mda_display.h"
+#include "display/cga_display.h"
 #include "display/board_view.h"
+#include "isa/isa_cga.h"
 #include "core/scheduler.h"
 #include "ic/ic_8088.h"
 #include "isa/isa_mda.h"
@@ -34,6 +37,7 @@
 #include "isa/isa_fdc.h"
 #include <nfd.h>
 #include <fstream>
+#include <memory>
 #include "ic/ic_8237a.h"
 #include <Zydis/Zydis.h>
 #include <spdlog/spdlog.h>
@@ -71,8 +75,8 @@ struct DxState {
 
     ComPtr<IDWriteFactory5> dwriteFactory;
 
-    // MDA rasterizer (text rendering)
-    MdaRasterizer mda_rasterizer;
+    // Active display rasterizer (MDA or CGA, owned by renderer)
+    std::unique_ptr<Rasterizer> rasterizer;
 
     // Bus probe (signal pool indices for bus analyzer)
     const BusProbe* bus_probe = nullptr;
@@ -126,7 +130,7 @@ struct DxState {
     static constexpr int MEM_COLS = 16;
 
     bool init(HWND hwnd, int w, int h, const ISA_MDA* mda_card);
-    void render_mda(const uint8_t* vram);
+    void render_display();
     void render_overlay();
     void render_debugger();
     void render_memory_viewer();
@@ -184,8 +188,11 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         (IUnknown**)dwriteFactory.GetAddressOf());
 
     // Initialize MDA rasterizer (font, brushes, QPC timing)
-    mda_rasterizer.init(d2dCtx.Get(), dwriteFactory.Get(), cellW, cellH);
-    mda_rasterizer.set_mda_card(mda_card);
+    // Initialize active rasterizer
+    RenderContext rc_init = { device.Get(), ctx.Get(), d2dCtx.Get(), dwriteFactory.Get(),
+                              winW, winH, cellW, cellH };
+    if (rasterizer)
+        rasterizer->init(rc_init);
 
     // ImGui -- scale font + style for high-DPI.
     // Load the font at the scaled pixel size (not FontGlobalScale, which
@@ -215,8 +222,12 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
     return true;
 }
 
-void DxState::render_mda(const uint8_t* vram) {
-    mda_rasterizer.render(d2dCtx.Get(), vram);
+void DxState::render_display() {
+    if (rasterizer) {
+        RenderContext rc = { device.Get(), ctx.Get(), d2dCtx.Get(), nullptr,
+                             winW, winH, cellW, cellH };
+        rasterizer->render(rc);
+    }
 }
 
 void DxState::render_overlay() {
@@ -1087,6 +1098,11 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.drive_a_path = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
     dx.drive_a_loaded = dx.drive_a_path;
     dx.fdc = fdc_;
+    // Create rasterizer based on installed display card
+    if (cga_)
+        dx.rasterizer = std::make_unique<CgaRasterizer>(cga_);
+    else if (vram_)
+        dx.rasterizer = std::make_unique<MdaRasterizer>(mda_card_, vram_);
     if (!dx.init(hwnd, winW, winH, mda_card_)) {
         spdlog::error("[Renderer] Failed to init DX11");
         return;
@@ -1108,7 +1124,7 @@ void Renderer::render_loop(std::stop_token stop) {
                 brd_map_ready_.store(false, std::memory_order_release);
             }
 
-            dx.render_mda(vram_);
+            dx.render_display();
             dx.render_overlay();
             dx.present();
         }
@@ -1131,7 +1147,8 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      const ISA_MDA* mda_card,
                      const BusProbe* bus,
                      TestKeyboard* kbd,
-                     ISA_FloppyController* fdc) {
+                     ISA_FloppyController* fdc,
+                     const ISA_CGA* cga) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -1140,6 +1157,7 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
     dma_ = dma;
     mda_card_ = mda_card;
     bus_probe_ = bus;
+    cga_ = cga;
     kbd_ = kbd;
     fdc_ = fdc;
     thread_ = std::jthread([this](std::stop_token stop) {
