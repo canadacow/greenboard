@@ -6,19 +6,29 @@ namespace bench {
 
 ISA_FloppyController::ISA_FloppyController(std::vector<uint8_t> disk_image,
                                            int sectors_per_track, int heads)
-    : image_(std::move(disk_image))
-    , spt_(sectors_per_track)
-    , heads_(heads)
-{}
+{
+    drives_[0].image = std::move(disk_image);
+    drives_[0].spt = sectors_per_track;
+    drives_[0].heads = heads;
+}
 
-void ISA_FloppyController::load_image(std::vector<uint8_t> img, int spt, int hds) {
-    image_ = std::move(img);
-    spt_ = spt;
-    heads_ = hds;
+void ISA_FloppyController::load_image(std::vector<uint8_t> img, int spt, int hds, int drive) {
+    if (drive < 0 || drive >= MAX_DRIVES) return;
+    drives_[drive].image = std::move(img);
+    drives_[drive].spt = spt;
+    drives_[drive].heads = hds;
+}
+
+int ISA_FloppyController::num_drives() const {
+    int n = 0;
+    for (int i = 0; i < MAX_DRIVES; ++i)
+        if (drives_[i].has_media()) ++n;
+    return n;
 }
 
 void ISA_FloppyController::on_power_on() {
     dor_ = 0;
+    active_drive_ = 0;
     phase_ = Phase::Idle;
     cmd_len_ = 0;
     cmd_expected_ = 0;
@@ -88,8 +98,8 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
             // PIO execution phase: return next sector byte.
             if (phase_ == Phase::Execution && pio_mode_) {
                 uint8_t val = 0x00;
-                if (sector_offset_ + xfer_ptr_ < image_.size())
-                    val = image_[sector_offset_ + xfer_ptr_];
+                if (sector_offset_ + xfer_ptr_ < active().image.size())
+                    val = active().image[sector_offset_ + xfer_ptr_];
                 xfer_ptr_++;
                 if (xfer_ptr_ >= sector_size_) {
                     spdlog::info("[{}] PIO sector complete: sector {} ({} bytes)", name_, cur_sector_, xfer_ptr_);
@@ -123,6 +133,7 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
         case 0x3F2: {  // DOR
             uint8_t old = dor_;
             dor_ = val;
+            active_drive_ = val & 0x03;
             bool was_reset = !(old & 0x04);
             bool now_active = (val & 0x04) != 0;
             if (was_reset && now_active) {
@@ -144,8 +155,8 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
         case 0x3F5: {  // FIFO
             // PIO write execution: accept data bytes from CPU.
             if (phase_ == Phase::Execution && pio_mode_) {
-                if (sector_offset_ + xfer_ptr_ < image_.size())
-                    image_[sector_offset_ + xfer_ptr_] = val;
+                if (sector_offset_ + xfer_ptr_ < active().image.size())
+                    active().image[sector_offset_ + xfer_ptr_] = val;
                 xfer_ptr_++;
                 if (xfer_ptr_ >= sector_size_) {
                     spdlog::info("[{}] PIO write sector complete: sector {} ({} bytes)", name_, cur_sector_, xfer_ptr_);
@@ -214,6 +225,9 @@ void ISA_FloppyController::on_mmio_write(uint32_t /*addr*/, uint8_t /*val*/) {}
 
 void ISA_FloppyController::start_command() {
     uint8_t cmd_id = cmd_buf_[0] & 0x1F;
+    // Commands with a HD|DS byte use it to select the active drive.
+    if (cmd_expected_ >= 2)
+        active_drive_ = cmd_buf_[1] & 0x03;
     switch (cmd_id) {
         case 0x05:  // WRITE DATA
             execute_write_data();
@@ -312,7 +326,7 @@ void ISA_FloppyController::execute_read_data() {
     spdlog::info("[{}] READ DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X}",
                  name_, cyl, head, sector, n, eot_, sector_size_, sector_offset_);
 
-    if (sector_offset_ + sector_size_ > image_.size()) {
+    if (sector_offset_ + sector_size_ > active().image.size()) {
         spdlog::error("[{}] READ DATA: sector beyond image end", name_);
         // Set error in result and skip to result phase.
         std::memset(result_buf_, 0, sizeof(result_buf_));
@@ -354,7 +368,7 @@ void ISA_FloppyController::execute_write_data() {
     spdlog::info("[{}] WRITE DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X}",
                  name_, cyl, head, sector, n, eot_, sector_size_, sector_offset_);
 
-    if (sector_offset_ + sector_size_ > image_.size()) {
+    if (sector_offset_ + sector_size_ > active().image.size()) {
         spdlog::error("[{}] WRITE DATA: sector beyond image end", name_);
         std::memset(result_buf_, 0, sizeof(result_buf_));
         result_buf_[0] = 0x40;
@@ -413,8 +427,8 @@ void ISA_FloppyController::execute_format_track() {
 
 uint8_t ISA_FloppyController::on_dma_read() {
     uint8_t byte = 0x00;
-    if (sector_offset_ + xfer_ptr_ < image_.size())
-        byte = image_[sector_offset_ + xfer_ptr_];
+    if (sector_offset_ + xfer_ptr_ < active().image.size())
+        byte = active().image[sector_offset_ + xfer_ptr_];
     xfer_ptr_++;
 
     // Crossed a sector boundary? Advance to next sector so the DMA
@@ -437,13 +451,13 @@ void ISA_FloppyController::on_dma_write(uint8_t val) {
             int sec_idx = format_fields_received_ / 4;  // 1-based
             uint32_t offset = chs_to_offset(cmd_buf_[2], (cmd_buf_[1] >> 2) & 1, sec_idx);
             uint32_t sz = (format_n_ == 0) ? 128 : (128u << format_n_);
-            if (offset + sz <= image_.size())
-                std::memset(&image_[offset], format_fill_, sz);
+            if (offset + sz <= active().image.size())
+                std::memset(&active().image[offset], format_fill_, sz);
         }
     } else {
         // WRITE DATA: store byte into image.
-        if (sector_offset_ + xfer_ptr_ < image_.size())
-            image_[sector_offset_ + xfer_ptr_] = val;
+        if (sector_offset_ + xfer_ptr_ < active().image.size())
+            active().image[sector_offset_ + xfer_ptr_] = val;
         xfer_ptr_++;
 
         // Multi-sector: advance when sector boundary crossed.
@@ -469,7 +483,7 @@ bool ISA_FloppyController::advance_sector() {
     int head = cmd_buf_[3];
     sector_offset_ = chs_to_offset(cyl, head, cur_sector_);
 
-    if (sector_offset_ + sector_size_ > image_.size())
+    if (sector_offset_ + sector_size_ > active().image.size())
         return false;  // next sector beyond image
 
     return true;
@@ -502,8 +516,9 @@ void ISA_FloppyController::build_result_ok() {
 // =========================================================================
 
 uint32_t ISA_FloppyController::chs_to_offset(int cyl, int head, int sector) const {
-    // Sector numbering is 1-based.
-    uint32_t lba = (cyl * heads_ + head) * spt_ + (sector - 1);
+    // Sector numbering is 1-based. Uses active drive geometry.
+    const auto& d = drives_[active_drive_ & 1];
+    uint32_t lba = (cyl * d.heads + head) * d.spt + (sector - 1);
     return lba * 512;  // always 512 bytes per physical sector
 }
 

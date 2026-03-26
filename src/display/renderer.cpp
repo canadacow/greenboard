@@ -112,7 +112,8 @@ struct DxState {
     bool system_open = false;
     std::string drive_a_path;
     std::string drive_b_path;
-    std::string drive_a_loaded;  // path currently loaded in FDC
+    std::string drive_a_loaded;  // path currently loaded in FDC drive 0
+    std::string drive_b_loaded;  // path currently loaded in FDC drive 1
     int drop_target_drive = 0;   // 0=A, 1=B (set by ImGui hover, read by WM_DROPFILES)
     ISA_FloppyController* fdc = nullptr;
 
@@ -877,31 +878,33 @@ void DxState::render_system_window() {
     drive_row("A:", 0, drive_a_path);
     drive_row("B:", 1, drive_b_path);
 
-    // Hot-swap: if drive A path changed, reload the FDC image
-    if (fdc && drive_a_path != drive_a_loaded) {
-        drive_a_loaded = drive_a_path;
-        if (drive_a_path.empty()) {
-            fdc->load_image({}, 9, 2);
-            spdlog::info("[System] Drive A: ejected");
+    // Hot-swap drives
+    auto swap_drive = [&](int drive_idx, std::string& path, std::string& loaded, const char* label) {
+        if (!fdc || path == loaded) return;
+        loaded = path;
+        if (path.empty()) {
+            fdc->load_image({}, 9, 2, drive_idx);
+            spdlog::info("[System] Drive {}: ejected", label);
         } else {
-            std::ifstream f(drive_a_path, std::ios::binary | std::ios::ate);
+            std::ifstream f(path, std::ios::binary | std::ios::ate);
             if (f) {
                 auto sz = f.tellg();
                 std::vector<uint8_t> img(static_cast<size_t>(sz));
                 f.seekg(0);
                 f.read(reinterpret_cast<char*>(img.data()), sz);
-                // Detect geometry: 360K=9spt/2hd, 720K=9spt/2hd, 1.2M=15spt/2hd, 1.44M=18spt/2hd
                 int spt = 9, hds = 2;
                 if (sz > 400000) { spt = 15; hds = 2; }
                 if (sz > 1300000) { spt = 18; hds = 2; }
-                fdc->load_image(std::move(img), spt, hds);
-                spdlog::info("[System] Drive A: loaded {} ({} bytes, {}spt/{}hd)",
-                             drive_a_path, (int)sz, spt, hds);
+                fdc->load_image(std::move(img), spt, hds, drive_idx);
+                spdlog::info("[System] Drive {}: loaded {} ({} bytes, {}spt/{}hd)",
+                             label, path, (int)sz, spt, hds);
             } else {
-                spdlog::warn("[System] Drive A: failed to open {}", drive_a_path);
+                spdlog::warn("[System] Drive {}: failed to open {}", label, path);
             }
         }
-    }
+    };
+    swap_drive(0, drive_a_path, drive_a_loaded, "A:");
+    swap_drive(1, drive_b_path, drive_b_loaded, "B:");
 
     ImGui::Separator();
     ImGui::TextColored(dim, "Drop .img files onto drive labels to mount.");

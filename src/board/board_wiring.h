@@ -1675,9 +1675,13 @@ struct Board {
         for (int i = 0; i < 8; ++i)
             sw1_ic.connect_position(i, sw1_pin[sw1_remap[i]]);
 
-        // SW1 default: floppy=1, no 8087=0, 64K=11, MDA=11, 1 drive=00 = 0x3D
-        // set_value bit=1 means OFF (High). ON=Low=grounded.
-        sw1_ic.set_value(0x3D);
+        // SW1 -> Port A (EQUIP_FLAG): 1:1 mapping through U23 buffer.
+        //   PA0   = 1  floppy present
+        //   PA1   = 0  (unused)
+        //   PA3,2 = 11 64K planar RAM
+        //   PA5,4 = 11 MDA 80x25
+        //   PA7,6 = 01 2 floppy drives (00=1, 01=2, 10=3, 11=4)
+        sw1_ic.set_value(0x7D);
 
         // SW2: connect positions to Port C lower nibble.
         for (int i = 0; i < 4; ++i)

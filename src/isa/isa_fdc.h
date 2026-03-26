@@ -20,15 +20,16 @@ namespace bench {
 // Loads a raw disk image at construction.
 class ISA_FloppyController final : public ISA_Card {
 public:
-    // disk_image: raw sector image (e.g. 360K .img file).
+    // disk_image: raw sector image for drive 0 (A:).
     // sectors_per_track, heads: geometry for CHS -> LBA translation.
     ISA_FloppyController(std::vector<uint8_t> disk_image,
                          int sectors_per_track = 9, int heads = 2);
 
     const std::string& card_name() const override { return name_; }
 
-    // Load a disk image after construction.
-    void load_image(std::vector<uint8_t> img, int spt, int hds);
+    // Load a disk image into a drive (0=A, 1=B). Hot-swappable.
+    void load_image(std::vector<uint8_t> img, int spt, int hds, int drive = 0);
+    int num_drives() const;  // number of drives with media inserted
 
     // ISA_Card overrides
     void on_power_on() override;
@@ -45,10 +46,19 @@ public:
 private:
     std::string name_{"ISA-FDC"};
 
-    // Disk image
-    std::vector<uint8_t> image_;
-    int spt_ = 9;
-    int heads_ = 2;
+    // Per-drive disk images (0=A, 1=B)
+    static constexpr int MAX_DRIVES = 2;
+    struct Drive {
+        std::vector<uint8_t> image;
+        int spt = 9;
+        int heads = 2;
+        bool has_media() const { return !image.empty(); }
+    };
+    Drive drives_[MAX_DRIVES];
+    int active_drive_ = 0;  // currently selected drive (from DOR/command)
+
+    Drive& active() { return drives_[active_drive_ & 1]; }
+    const Drive& active() const { return drives_[active_drive_ & 1]; }
 
     // FDC registers
     uint8_t dor_ = 0;
@@ -98,7 +108,7 @@ private:
     void build_result_ok();
     bool advance_sector();
 
-    // CHS -> byte offset
+    // CHS -> byte offset (uses active drive geometry)
     uint32_t chs_to_offset(int cyl, int head, int sector) const;
 };
 

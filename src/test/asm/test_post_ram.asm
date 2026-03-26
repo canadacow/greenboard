@@ -11,7 +11,7 @@
 ;   [0500] = 0x0001   RAM pattern 0xFF verified
 ;   [0502] = 0x0001   RAM pattern 0x00 verified
 ;   [0504] = 0x0001   8259 PIC initialized (ICW1-4, ISR readable)
-;   [0506] = 0x0001   SW1 DIP switches (Port A = 0x3D)
+;   [0506] = 0x0001   SW1 DIP switches (Port A = 0x7D)
 ;   [0508] = 0x0001   SW2 DIP switches (Port C low nibble = 0x06)
 
 ; @name POST RAM/PIC (TEST.04)
@@ -112,13 +112,13 @@ org 0x0100
 
 ; =====================================================================
 ; Test 4: SW1 DIP switches via Port A (PCBIOS.ASM TEST.04 line 453)
-; Expect 0x3D: floppy=1, no 8087=0, 64K RAM=11, MDA=11, 1 drive=00
+; Expect 0x7D: floppy=1, no 8087=0, 64K RAM=11, MDA=11, 1 drive=00
 ; =====================================================================
 .test4:
     mov al, 0xFC            ; PB7=1: enable SW1 mux (U23), as BIOS TEST.02 does
     out 0x61, al
     in al, 0x60             ; read PPI Port A (switches)
-    cmp al, 0x3D
+    cmp al, 0x7D
     jne .test5
     mov word [0x0506], 0x0001
 
