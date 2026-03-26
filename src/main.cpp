@@ -144,7 +144,7 @@ int main() {
     scheduler.set_cpu(board.cpu);
     mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
                        &scheduler, board.cpu, &memview, board.dma_ic, &mda,
-                       &bus_probe, &keyboard);
+                       &bus_probe, &keyboard, &fdc);
 
     // Bind board traces to live simulation signals.
     mda_display.bind_board_signals(board.brd_net_map());

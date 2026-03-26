@@ -29,7 +29,9 @@
 #include "isa/isa_mda.h"
 #include "debug/memory_view.h"
 #include "test/test_keyboard.h"
+#include "isa/isa_fdc.h"
 #include <nfd.h>
+#include <fstream>
 #include "ic/ic_8237a.h"
 #include <Zydis/Zydis.h>
 #include <spdlog/spdlog.h>
@@ -161,7 +163,9 @@ struct DxState {
     bool system_open = false;
     std::string drive_a_path;
     std::string drive_b_path;
-    int drop_target_drive = 0;  // 0=A, 1=B (set by ImGui hover, read by WM_DROPFILES)
+    std::string drive_a_loaded;  // path currently loaded in FDC
+    int drop_target_drive = 0;   // 0=A, 1=B (set by ImGui hover, read by WM_DROPFILES)
+    ISA_FloppyController* fdc = nullptr;
 
     // Breakpoint
     char brk_addr_buf[16] = "";
@@ -1137,8 +1141,31 @@ void DxState::render_system_window() {
     drive_row("A:", 0, drive_a_path);
     drive_row("B:", 1, drive_b_path);
 
-    // --- Drop target for the whole window ---
-    // (File drop handling is done in WndProc via WM_DROPFILES)
+    // Hot-swap: if drive A path changed, reload the FDC image
+    if (fdc && drive_a_path != drive_a_loaded) {
+        drive_a_loaded = drive_a_path;
+        if (drive_a_path.empty()) {
+            fdc->load_image({}, 9, 2);
+            spdlog::info("[System] Drive A: ejected");
+        } else {
+            std::ifstream f(drive_a_path, std::ios::binary | std::ios::ate);
+            if (f) {
+                auto sz = f.tellg();
+                std::vector<uint8_t> img(static_cast<size_t>(sz));
+                f.seekg(0);
+                f.read(reinterpret_cast<char*>(img.data()), sz);
+                // Detect geometry: 360K=9spt/2hd, 720K=9spt/2hd, 1.2M=15spt/2hd, 1.44M=18spt/2hd
+                int spt = 9, hds = 2;
+                if (sz > 400000) { spt = 15; hds = 2; }
+                if (sz > 1300000) { spt = 18; hds = 2; }
+                fdc->load_image(std::move(img), spt, hds);
+                spdlog::info("[System] Drive A: loaded {} ({} bytes, {}spt/{}hd)",
+                             drive_a_path, (int)sz, spt, hds);
+            } else {
+                spdlog::warn("[System] Drive A: failed to open {}", drive_a_path);
+            }
+        }
+    }
 
     ImGui::Separator();
     ImGui::TextColored(dim, "Drop .img files onto drive labels to mount.");
@@ -1240,6 +1267,8 @@ void MdaDisplay::render_loop(std::stop_token stop) {
     dx.bus_probe = bus_probe_;
     dx.dbg_visible = &dbg_visible_;
     dx.drive_a_path = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
+    dx.drive_a_loaded = dx.drive_a_path;
+    dx.fdc = fdc_;
     if (!dx.init(hwnd, winW, winH)) {
         spdlog::error("[MDA Display] Failed to init DX11");
         return;
@@ -1281,7 +1310,8 @@ void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
                        const MemoryView* mem, IC_8237A* dma,
                        const ISA_MDA* mda_card,
                        const BusProbe* bus,
-                       TestKeyboard* kbd) {
+                       TestKeyboard* kbd,
+                       ISA_FloppyController* fdc) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -1291,6 +1321,7 @@ void MdaDisplay::start(const uint8_t* vram, const uint64_t* clk_cycles,
     mda_card_ = mda_card;
     bus_probe_ = bus;
     kbd_ = kbd;
+    fdc_ = fdc;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });
