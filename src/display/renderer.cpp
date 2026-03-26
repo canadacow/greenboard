@@ -39,6 +39,7 @@
 #include <fstream>
 #include <memory>
 #include "ic/ic_8237a.h"
+#include <d3dcompiler.h>
 #include <Zydis/Zydis.h>
 #include <spdlog/spdlog.h>
 #include <cinttypes>
@@ -74,6 +75,11 @@ struct DxState {
     ComPtr<ID2D1Bitmap1> d2dTarget;
 
     ComPtr<IDWriteFactory5> dwriteFactory;
+
+    // Fullscreen blit resources (for texture-based rasterizers like CGA)
+    ComPtr<ID3D11VertexShader> blit_vs;
+    ComPtr<ID3D11PixelShader> blit_ps;
+    ComPtr<ID3D11SamplerState> blit_sampler;
 
     // Active display rasterizer (MDA or CGA, owned by renderer)
     std::unique_ptr<Rasterizer> rasterizer;
@@ -187,12 +193,39 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory5),
         (IUnknown**)dwriteFactory.GetAddressOf());
 
-    // Initialize MDA rasterizer (font, brushes, QPC timing)
     // Initialize active rasterizer
     RenderContext rc_init = { device.Get(), ctx.Get(), d2dCtx.Get(), dwriteFactory.Get(),
                               winW, winH, cellW, cellH };
     if (rasterizer)
         rasterizer->init(rc_init);
+
+    // Fullscreen blit shaders (for texture-based rasterizers)
+    {
+        static const char blit_hlsl[] = R"(
+            struct VS_OUT { float4 pos : SV_Position; float2 uv : TEXCOORD; };
+            VS_OUT VS(uint id : SV_VertexID) {
+                VS_OUT o;
+                o.uv = float2((id << 1) & 2, id & 2);
+                o.pos = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+                return o;
+            }
+            Texture2D tex : register(t0);
+            SamplerState samp : register(s0);
+            float4 PS(VS_OUT i) : SV_Target { return tex.Sample(samp, i.uv); }
+        )";
+        ComPtr<ID3DBlob> vs_blob, ps_blob, err;
+        D3DCompile(blit_hlsl, sizeof(blit_hlsl), "blit_vs", nullptr, nullptr,
+                   "VS", "vs_5_0", 0, 0, &vs_blob, &err);
+        D3DCompile(blit_hlsl, sizeof(blit_hlsl), "blit_ps", nullptr, nullptr,
+                   "PS", "ps_5_0", 0, 0, &ps_blob, &err);
+        if (vs_blob) device->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), nullptr, &blit_vs);
+        if (ps_blob) device->CreatePixelShader(ps_blob->GetBufferPointer(), ps_blob->GetBufferSize(), nullptr, &blit_ps);
+
+        D3D11_SAMPLER_DESC sd = {};
+        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        device->CreateSamplerState(&sd, &blit_sampler);
+    }
 
     // ImGui -- scale font + style for high-DPI.
     // Load the font at the scaled pixel size (not FontGlobalScale, which
@@ -223,11 +256,37 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
 }
 
 void DxState::render_display() {
-    if (rasterizer) {
-        RenderContext rc = { device.Get(), ctx.Get(), d2dCtx.Get(), nullptr,
-                             winW, winH, cellW, cellH };
-        rasterizer->render(rc);
+    if (!rasterizer) return;
+
+    RenderContext rc = { device.Get(), ctx.Get(), d2dCtx.Get(), nullptr,
+                         winW, winH, cellW, cellH };
+    rasterizer->render(rc);
+
+    if (!rasterizer->uses_d2d()) {
+        // Texture-based rasterizer (CGA): blit output texture to swap chain
+        auto* srv = rasterizer->output_srv();
+        if (srv && blit_vs && blit_ps) {
+            // Clear the back buffer
+            float clear[] = { 0, 0, 0, 1 };
+            ctx->ClearRenderTargetView(rtv.Get(), clear);
+
+            ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+            D3D11_VIEWPORT vp = { 0, 0, (float)winW, (float)winH, 0, 1 };
+            ctx->RSSetViewports(1, &vp);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ctx->IASetInputLayout(nullptr);
+            ctx->VSSetShader(blit_vs.Get(), nullptr, 0);
+            ctx->PSSetShader(blit_ps.Get(), nullptr, 0);
+            ctx->PSSetShaderResources(0, 1, &srv);
+            ctx->PSSetSamplers(0, 1, blit_sampler.GetAddressOf());
+            ctx->Draw(3, 0);
+
+            // Unbind
+            ID3D11ShaderResourceView* null_srv = nullptr;
+            ctx->PSSetShaderResources(0, 1, &null_srv);
+        }
     }
+    // D2D rasterizers (MDA) already drew to the D2D target directly.
 }
 
 void DxState::render_overlay() {

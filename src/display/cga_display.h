@@ -16,13 +16,11 @@ public:
     bool init(const RenderContext& rc) override;
     void render(const RenderContext& rc) override;
     const ISA_Card* card() const override;
+    ID3D11ShaderResourceView* output_srv() const override { return out_srv_.Get(); }
 
     // Output texture dimensions
     static constexpr int OUT_W = 640;
     static constexpr int OUT_H = 200;
-
-    // Output SRV for blitting (valid after render())
-    ID3D11ShaderResourceView* output_srv() const { return out_srv_.Get(); }
 
 private:
     const ISA_CGA* cga_card_;

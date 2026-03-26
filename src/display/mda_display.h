@@ -17,6 +17,7 @@ public:
     bool init(const RenderContext& rc) override;
     void render(const RenderContext& rc) override;
     const ISA_Card* card() const override;
+    bool uses_d2d() const override { return true; }
 
 private:
     const ISA_MDA* mda_card_;

@@ -23,6 +23,10 @@
 
 using namespace bench;
 
+// Display card selection: uncomment ONE
+#define DISPLAY_MDA   // MDA 80x25 monochrome
+//#define DISPLAY_CGA   // CGA color
+
 int main() {
     spdlog::set_level(spdlog::level::info);
     spdlog::info("bench -- IBM PC 5150 motherboard simulator");
@@ -37,8 +41,16 @@ int main() {
     std::string basic_u31  = "assets/IBM 5150 - Cassette BASIC version C1.10 - U31 - 5000022.bin";
     std::string basic_u32  = "assets/IBM 5150 - Cassette BASIC version C1.10 - U32 - 5000023.bin";
 
+    // SW1 EQUIP_FLAG bits 4-5: 11=MDA, 10=CGA 80x25, 01=CGA 40x25
+    // Base: 0x7D = floppy, no 8087, 64K, MDA, 2 drives
+#ifdef DISPLAY_CGA
+    constexpr uint8_t sw1 = (0x7D & ~0x30) | 0x10;  // CGA 80x25 color
+#else
+    constexpr uint8_t sw1 = 0x7D;                    // MDA 80x25
+#endif
+
     Board board;
-    board.wire(bios_path, basic_u29, basic_u30, basic_u31, basic_u32);
+    board.wire(bios_path, basic_u29, basic_u30, basic_u31, basic_u32, sw1);
 
     // --- ISA bus + cards ---
     ISA_Bus isa_bus;
@@ -66,13 +78,16 @@ int main() {
     ISA_FloppyController fdc(std::move(floppy_img), 9, 2);
     isa_bus.insert_card(1, &fdc, 0x04, 0x40);
 
-    // J3: MDA card (4KB framebuffer at 0xB0000, I/O 0x3B0-0x3BB)
+    // J3: Display card (MDA or CGA based on DISPLAY_xxx define)
+#ifdef DISPLAY_CGA
+    ISA_CGA cga;
+    isa_bus.insert_card(2, &cga);
+    ISA_MDA mda;  // unused but needed for memview/renderer API
+#else
     ISA_MDA mda;
     isa_bus.insert_card(2, &mda);
-
-    // J4: CGA card (16KB framebuffer at 0xB8000, I/O 0x3D0-0x3DF)
-    ISA_CGA cga;
-    isa_bus.insert_card(3, &cga);
+    ISA_CGA cga;  // unused but needed for API
+#endif
 
     // --- Scheduler ---
     Scheduler scheduler;
@@ -112,10 +127,16 @@ int main() {
         return board.dram.data()[xlat];
     });
 
-    // MDA framebuffer: B0000-B0FFF (4KB)
+    // Display framebuffer
+#ifdef DISPLAY_CGA
+    memview.map(ISA_CGA::FB_BASE, ISA_CGA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
+        return cga.vram()[addr - ISA_CGA::FB_BASE];
+    });
+#else
     memview.map(ISA_MDA::FB_BASE, ISA_MDA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
         return mda.framebuffer()[addr - ISA_MDA::FB_BASE];
     });
+#endif
 
     // ROM: F6000-FFFFF (5 banks x 8KB)
     memview.map(0xF6000, 5 * 8192, [&](uint32_t addr) -> uint8_t {
@@ -147,10 +168,15 @@ int main() {
     // --- Renderer (render thread, reads framebuffer directly) ---
     Renderer renderer;
     scheduler.set_cpu(board.cpu);
+#ifdef DISPLAY_CGA
+    renderer.start(nullptr, &board.clk_gen->clk_cycles_ref(),
+                   &scheduler, board.cpu, &memview, board.dma_ic, nullptr,
+                   &bus_probe, &keyboard, &fdc, &cga);
+#else
     renderer.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
                    &scheduler, board.cpu, &memview, board.dma_ic, &mda,
-                   &bus_probe, &keyboard, &fdc,
-                   nullptr);  // pass &cga to use CGA display, nullptr for MDA
+                   &bus_probe, &keyboard, &fdc, nullptr);
+#endif
 
     // Bind board traces to live simulation signals.
     renderer.bind_board_signals(board.brd_net_map());

@@ -414,7 +414,8 @@ struct Board {
               const std::string& basic_u29 = "",
               const std::string& basic_u30 = "",
               const std::string& basic_u31 = "",
-              const std::string& basic_u32 = "") {
+              const std::string& basic_u32 = "",
+              uint8_t sw1_override = 0) {
         // Power rails never create dependency edges.
         vcc.set_power_rail();
         gnd.set_power_rail();
@@ -1681,7 +1682,8 @@ struct Board {
         //   PA3,2 = 11 64K planar RAM
         //   PA5,4 = 11 MDA 80x25
         //   PA7,6 = 01 2 floppy drives (00=1, 01=2, 10=3, 11=4)
-        sw1_ic.set_value(0x7D);
+        // SW1 default or caller override
+        sw1_ic.set_value(sw1_override ? sw1_override : 0x7D);
 
         // SW2: connect positions to Port C lower nibble.
         for (int i = 0; i < 4; ++i)

@@ -43,6 +43,12 @@ public:
 
     // The ISA card this rasterizer is attached to.
     virtual const ISA_Card* card() const = 0;
+
+    // Output texture SRV for D3D11 blit (nullptr if renders directly via D2D).
+    virtual ID3D11ShaderResourceView* output_srv() const { return nullptr; }
+
+    // Whether this rasterizer uses D2D (MDA) or D3D11 texture output (CGA).
+    virtual bool uses_d2d() const { return false; }
 };
 
 } // namespace bench

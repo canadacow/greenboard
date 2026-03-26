@@ -5,6 +5,7 @@
 #include "isa/isa_cga.h"
 #include <d3dcompiler.h>
 #include <spdlog/spdlog.h>
+#include <cstring>
 
 using Microsoft::WRL::ComPtr;
 
@@ -315,6 +316,7 @@ void CgaRasterizer::render(const RenderContext& rc) {
     ID3D11ShaderResourceView* null_srvs[3] = {};
     ctx->CSSetShaderResources(0, 3, null_srvs);
 
+    // output_srv() is now valid -- renderer blits it to the swap chain.
 }
 
 } // namespace bench
