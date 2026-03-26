@@ -191,14 +191,15 @@ public:
     struct Rmem8Awaiter {
         IC_8088& cpu;
         uint32_t addr;
-        bool await_ready() noexcept { return addr >= REGS_BASE; }
+        bool is_reg() const noexcept { return addr >= REGS_BASE && addr < REGS_BASE + sizeof(cpu.regs_); }
+        bool await_ready() noexcept { return is_reg(); }
         std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
             cpu.bus_op_ = {BusOp::MEM_READ, addr & 0xFFFFF, 0, 0};
             cpu.eu_resume_ = h;
             return std::noop_coroutine();
         }
         uint8_t await_resume() noexcept {
-            if (addr >= REGS_BASE) return cpu.regs_[addr - REGS_BASE];
+            if (is_reg()) return cpu.regs_[addr - REGS_BASE];
             return cpu.bus_op_.read_data;
         }
     };
@@ -208,8 +209,9 @@ public:
         IC_8088& cpu;
         uint32_t addr;
         uint8_t val;
+        bool is_reg() const noexcept { return addr >= REGS_BASE && addr < REGS_BASE + sizeof(cpu.regs_); }
         bool await_ready() noexcept {
-            if (addr >= REGS_BASE) { cpu.regs_[addr - REGS_BASE] = val; return true; }
+            if (is_reg()) { cpu.regs_[addr - REGS_BASE] = val; return true; }
             return false;
         }
         std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
