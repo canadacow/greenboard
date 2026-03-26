@@ -1229,6 +1229,8 @@ void IC_8088::execute() {
     case 53: // HLT
         halted_ = true;
         return;
+    case 54: // ESC (D8-DF): coprocessor opcode, no-op without 8087
+        break;
 
     case 3: // PUSH regs16
         push16(regs16()[i_reg4bit_]);
