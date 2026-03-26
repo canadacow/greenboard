@@ -90,7 +90,7 @@ int main() {
     std::unique_ptr<ISA_RAM> ram_exp = nullptr;
     
 #if 1
-    constexpr uint32_t ExpansionRamSize = 64;
+    constexpr uint32_t ExpansionRamSize = 384;
 
     ram_exp = std::make_unique<ISA_RAM>(0x40000, ExpansionRamSize * 1024);
     isa_bus.insert_card(3, ram_exp.get());

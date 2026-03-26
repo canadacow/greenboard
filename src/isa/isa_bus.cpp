@@ -214,6 +214,34 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
     if (dma_active())
         tc_prev_ = tc_cur;
 
+    // --- DMA MMIO: route DMA transfers to/from ISA expansion RAM ---
+    // During DMA, AEN is High so the CPU I/O/MMIO block below is skipped.
+    // But DMA memory writes (~MEMW) to expansion RAM must still reach the card,
+    // and DMA memory reads (~MEMR) from expansion RAM must drive SD.
+    if (dma_active()) {
+        Level memr_cur = memr_.level();
+        Level memw_cur = memw_.level();
+        if (memw_cur == Level::Low && memw_prev_ != Level::Low) {
+            uint32_t addr = SignalPool::bus_address;
+            ISA_Card* card = find_mmio_owner(addr);
+            if (card)
+                card->on_mmio_write(addr, read_sd());
+        }
+        if (memr_cur == Level::Low && memr_prev_ != Level::Low) {
+            uint32_t addr = SignalPool::bus_address;
+            ISA_Card* card = find_mmio_owner(addr);
+            if (card)
+                drive_sd(card->on_mmio_read(addr));
+        } else if (memr_cur != Level::Low && memr_prev_ == Level::Low) {
+            // Only release if we were driving for MMIO (not device DMA)
+            uint32_t addr = SignalPool::bus_address;
+            if (find_mmio_owner(addr) && data_driven_)
+                release_sd();
+        }
+        memr_prev_ = memr_cur;
+        memw_prev_ = memw_cur;
+    }
+
     // --- CPU I/O ---
     bool addr_readable = aen_.level() != Level::High;
     if (addr_readable) {
