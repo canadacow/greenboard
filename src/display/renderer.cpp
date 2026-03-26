@@ -8,6 +8,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <ole2.h>
 #include <d3d11.h>
 #include <d2d1_1.h>
 #include <dwrite_3.h>
@@ -114,7 +115,9 @@ struct DxState {
     std::string drive_b_path;
     std::string drive_a_loaded;  // path currently loaded in FDC drive 0
     std::string drive_b_loaded;  // path currently loaded in FDC drive 1
-    int drop_target_drive = 0;   // 0=A, 1=B (set by ImGui hover, read by WM_DROPFILES)
+    int drop_target_drive = -1;  // -1=none, 0=A, 1=B (set by OLE drag tracking)
+    float drive_a_screen_y = 0;  // screen Y of drive A row (for drop targeting)
+    float drive_b_screen_y = 0;  // screen Y of drive B row
     ISA_FloppyController* fdc = nullptr;
 
     // Breakpoint
@@ -836,7 +839,22 @@ void DxState::render_system_window() {
     ImGui::TextColored(grn, "Floppy Drives");
 
     // --- Drive A: ---
-    auto drive_row = [&](const char* label, int drive_idx, std::string& path) {
+    auto drive_row = [&](const char* label, int drive_idx, std::string& path, float& screen_y) {
+        // Store screen Y for drop targeting
+        screen_y = ImGui::GetCursorScreenPos().y;
+
+        // Highlight row when dragging a file over this drive
+        bool highlight = (drop_target_drive == drive_idx);
+        if (highlight) {
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            float w = ImGui::GetContentRegionAvail().x;
+            float h = ImGui::GetTextLineHeightWithSpacing();
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(pos.x - 4, pos.y),
+                ImVec2(pos.x + w + 4, pos.y + h),
+                IM_COL32(40, 80, 40, 180));
+        }
+
         ImGui::Text("%s", label);
         ImGui::SameLine();
 
@@ -846,13 +864,7 @@ void DxState::render_system_window() {
         if (slash != std::string::npos) display = display.substr(slash + 1);
         if (display.size() > 30) display = "..." + display.substr(display.size() - 27);
 
-        ImGui::TextColored(path.empty() ? dim : grn, "%s", display.c_str());
-
-        // Track drop target: if mouse is on this row, drops go here
-        ImVec2 row_min = ImGui::GetItemRectMin();
-        ImVec2 row_max = ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x, ImGui::GetItemRectMax().y);
-        if (ImGui::IsMouseHoveringRect(row_min, row_max))
-            drop_target_drive = drive_idx;
+        ImGui::TextColored(highlight ? ImVec4(1,1,0,1) : (path.empty() ? dim : grn), "%s", display.c_str());
 
         ImGui::SameLine();
         char btn_id[16];
@@ -875,8 +887,8 @@ void DxState::render_system_window() {
         }
     };
 
-    drive_row("A:", 0, drive_a_path);
-    drive_row("B:", 1, drive_b_path);
+    drive_row("A:", 0, drive_a_path, drive_a_screen_y);
+    drive_row("B:", 1, drive_b_path, drive_b_screen_y);
 
     // Hot-swap drives
     auto swap_drive = [&](int drive_idx, std::string& path, std::string& loaded, const char* label) {
@@ -921,7 +933,84 @@ void DxState::present() {
 // ========================================================================
 
 static TestKeyboard* s_kbd = nullptr;  // set by render_loop before window creation
-static DxState* s_dx = nullptr;       // for WM_DROPFILES handler
+static DxState* s_dx = nullptr;       // for drop handler
+
+// OLE IDropTarget for live drag highlighting + drop onto drive rows.
+class DropTarget : public IDropTarget {
+    LONG ref_ = 1;
+    HWND hwnd_;
+    bool has_files(IDataObject* obj) {
+        FORMATETC fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        return obj->QueryGetData(&fmt) == S_OK;
+    }
+    int drive_from_y(float y) {
+        if (!s_dx || s_dx->drive_b_screen_y <= 0) return 0;
+        float dist_a = std::abs(y - s_dx->drive_a_screen_y);
+        float dist_b = std::abs(y - s_dx->drive_b_screen_y);
+        return (dist_b < dist_a) ? 1 : 0;
+    }
+public:
+    DropTarget(HWND hwnd) : hwnd_(hwnd) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_IDropTarget) { *ppv = this; AddRef(); return S_OK; }
+        *ppv = nullptr; return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&ref_); }
+    ULONG STDMETHODCALLTYPE Release() override { auto r = InterlockedDecrement(&ref_); if (!r) delete this; return r; }
+
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* obj, DWORD, POINTL pt, DWORD* effect) override {
+        if (!has_files(obj)) { *effect = DROPEFFECT_NONE; return S_OK; }
+        *effect = DROPEFFECT_COPY;
+        if (s_dx) {
+            s_dx->system_open = true;
+            POINT cp = { pt.x, pt.y };
+            ScreenToClient(hwnd_, &cp);
+            s_dx->drop_target_drive = drive_from_y((float)cp.y);
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL pt, DWORD* effect) override {
+        *effect = DROPEFFECT_COPY;
+        if (s_dx) {
+            POINT cp = { pt.x, pt.y };
+            ScreenToClient(hwnd_, &cp);
+            s_dx->drop_target_drive = drive_from_y((float)cp.y);
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragLeave() override {
+        if (s_dx) s_dx->drop_target_drive = -1;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* obj, DWORD, POINTL pt, DWORD* effect) override {
+        *effect = DROPEFFECT_NONE;
+        if (!has_files(obj) || !s_dx) return S_OK;
+
+        POINT cp = { pt.x, pt.y };
+        ScreenToClient(hwnd_, &cp);
+        int drive = drive_from_y((float)cp.y);
+
+        FORMATETC fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        STGMEDIUM stg;
+        if (SUCCEEDED(obj->GetData(&fmt, &stg))) {
+            HDROP hDrop = (HDROP)stg.hGlobal;
+            wchar_t path[MAX_PATH];
+            if (DragQueryFileW(hDrop, 0, path, MAX_PATH)) {
+                char utf8[MAX_PATH * 3];
+                WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, sizeof(utf8), nullptr, nullptr);
+                auto& target = (drive == 1) ? s_dx->drive_b_path : s_dx->drive_a_path;
+                const char* label = (drive == 1) ? "B:" : "A:";
+                target = utf8;
+                spdlog::info("[System] Drop -> {} {}", label, target);
+            }
+            ReleaseStgMedium(&stg);
+            *effect = DROPEFFECT_COPY;
+        }
+        s_dx->drop_target_drive = -1;
+        return S_OK;
+    }
+};
 
 static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
@@ -933,7 +1022,8 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
     // Forward keyboard events to the emulated keyboard.
     // Only when ImGui doesn't want keyboard input (not typing in a text field).
-    if (s_kbd && ImGui::GetCurrentContext() && !ImGui::GetIO().WantCaptureKeyboard) {
+    if (s_kbd && ImGui::GetCurrentContext() && !ImGui::GetIO().WantCaptureKeyboard
+        && s_dx && s_dx->scheduler && !s_dx->scheduler->is_paused()) {
         if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
             uint8_t xt = TestKeyboard::vk_to_xt((int)wp);
             if (xt) {
@@ -949,21 +1039,7 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         }
     }
 
-    if (msg == WM_DROPFILES && s_dx) {
-        HDROP hDrop = (HDROP)wp;
-        wchar_t path[MAX_PATH];
-        if (DragQueryFileW(hDrop, 0, path, MAX_PATH)) {
-            char utf8[MAX_PATH * 3];
-            WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, sizeof(utf8), nullptr, nullptr);
-            std::string p(utf8);
-            auto& target = (s_dx->drop_target_drive == 1) ? s_dx->drive_b_path : s_dx->drive_a_path;
-            const char* label = (s_dx->drop_target_drive == 1) ? "B:" : "A:";
-            target = p;
-            spdlog::info("[System] Drop -> {} {}", label, p);
-        }
-        DragFinish(hDrop);
-        return 0;
-    }
+    // WM_DROPFILES handled by OLE IDropTarget (DropTarget class above).
     if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -993,7 +1069,11 @@ void Renderer::render_loop(std::stop_token stop) {
         WS_OVERLAPPEDWINDOW, x, y,
         wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, wc.hInstance, nullptr);
-    DragAcceptFiles(hwnd, TRUE);
+    // OLE drag-drop for live highlighting during drag
+    OleInitialize(nullptr);
+    auto* dropTarget = new DropTarget(hwnd);
+    RegisterDragDrop(hwnd, dropTarget);
+    dropTarget->Release();  // RegisterDragDrop AddRef'd
 
     DxState dx;
     s_dx = &dx;
@@ -1039,6 +1119,8 @@ void Renderer::render_loop(std::stop_token stop) {
     ImGui::DestroyContext();
 
     s_dx = nullptr;
+    RevokeDragDrop(hwnd);
+    OleUninitialize();
     DestroyWindow(hwnd);
     running_.store(false);
 }
