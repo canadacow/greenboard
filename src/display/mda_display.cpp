@@ -7,6 +7,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #include <d3d11.h>
 #include <d2d1_1.h>
 #include <dwrite_3.h>
@@ -28,6 +29,7 @@
 #include "isa/isa_mda.h"
 #include "debug/memory_view.h"
 #include "test/test_keyboard.h"
+#include <nfd.h>
 #include "ic/ic_8237a.h"
 #include <Zydis/Zydis.h>
 #include <spdlog/spdlog.h>
@@ -155,6 +157,12 @@ struct DxState {
     char mem_addr_buf[16] = "0000:0000";
     uint32_t mem_view_addr = 0;
 
+    // System window
+    bool system_open = false;
+    std::string drive_a_path;
+    std::string drive_b_path;
+    int drop_target_drive = 0;  // 0=A, 1=B (set by ImGui hover, read by WM_DROPFILES)
+
     // Breakpoint
     char brk_addr_buf[16] = "";
     static constexpr int MEM_ROWS = 16;
@@ -166,6 +174,7 @@ struct DxState {
     void render_debugger();
     void render_memory_viewer();
     void render_bus_analyzer();
+    void render_system_window();
     void present();
 };
 
@@ -506,13 +515,18 @@ void DxState::render_overlay() {
 
         ImGui::Begin("##stats", nullptr, flags);
 
-        // Menu button
-        if (ImGui::Button("Menu"))
-            ImGui::OpenPopup("MainMenu");
+        // Menu button (centered)
+        {
+            float btn_w = ImGui::CalcTextSize("  Menu  ").x + ImGui::GetStyle().FramePadding.x * 2;
+            float avail = ImGui::GetContentRegionAvail().x;
+            if (avail > btn_w) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - btn_w) * 0.5f);
+            if (ImGui::Button("  Menu  "))
+                ImGui::OpenPopup("MainMenu");
+        }
 
         if (ImGui::BeginPopup("MainMenu")) {
-            if (ImGui::MenuItem("System"))       {}  // TODO
-            if (ImGui::MenuItem("Board"))        board_view.toggle();
+            if (ImGui::MenuItem("System"))        system_open = !system_open;
+            if (ImGui::MenuItem("Board"))         board_view.toggle();
             if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
             if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
             if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
@@ -543,6 +557,10 @@ void DxState::render_overlay() {
     // --- Bus analyzer (separate window) ---
     if (bus_view_open && bus_probe)
         render_bus_analyzer();
+
+    // --- System window ---
+    if (system_open)
+        render_system_window();
 
     // --- PCB board view (F2 toggle) ---
     if (ImGui::IsKeyPressed(ImGuiKey_F2, false))
@@ -1056,6 +1074,78 @@ void DxState::render_bus_analyzer() {
     ImGui::End();
 }
 
+void DxState::render_system_window() {
+    ImGui::SetNextWindowSize(ImVec2(480, 280), ImGuiCond_Once);
+
+    if (!ImGui::Begin("System", &system_open, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+
+    ImVec4 grn = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+    ImVec4 dim = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+
+    // --- Machine info ---
+    ImGui::TextColored(grn, "IBM PC 5150");
+    ImGui::TextColored(dim, "CPU: Intel 8088 @ %.2f MHz", effective_mhz);
+    ImGui::TextColored(dim, "RAM: 256 KB");
+    ImGui::TextColored(dim, "Display: MDA 80x25");
+
+    ImGui::Separator();
+    ImGui::TextColored(grn, "Floppy Drives");
+
+    // --- Drive A: ---
+    auto drive_row = [&](const char* label, int drive_idx, std::string& path) {
+        ImGui::Text("%s", label);
+        ImGui::SameLine();
+
+        // Truncate display path to filename
+        std::string display = path.empty() ? "(empty)" : path;
+        size_t slash = display.find_last_of("/\\");
+        if (slash != std::string::npos) display = display.substr(slash + 1);
+        if (display.size() > 30) display = "..." + display.substr(display.size() - 27);
+
+        ImGui::TextColored(path.empty() ? dim : grn, "%s", display.c_str());
+
+        // Track drop target: if mouse is on this row, drops go here
+        ImVec2 row_min = ImGui::GetItemRectMin();
+        ImVec2 row_max = ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x, ImGui::GetItemRectMax().y);
+        if (ImGui::IsMouseHoveringRect(row_min, row_max))
+            drop_target_drive = drive_idx;
+
+        ImGui::SameLine();
+        char btn_id[16];
+        snprintf(btn_id, sizeof(btn_id), "...##%s", label);
+        if (ImGui::Button(btn_id)) {
+            nfdchar_t* out = nullptr;
+            nfdresult_t result = NFD_OpenDialog("img", nullptr, &out);
+            if (result == NFD_OKAY && out) {
+                path = out;
+                free(out);
+                spdlog::info("[System] {} = {}", label, path);
+            }
+        }
+        ImGui::SameLine();
+        char eject_id[16];
+        snprintf(eject_id, sizeof(eject_id), "Eject##%s", label);
+        if (ImGui::Button(eject_id)) {
+            path.clear();
+            spdlog::info("[System] {} ejected", label);
+        }
+    };
+
+    drive_row("A:", 0, drive_a_path);
+    drive_row("B:", 1, drive_b_path);
+
+    // --- Drop target for the whole window ---
+    // (File drop handling is done in WndProc via WM_DROPFILES)
+
+    ImGui::Separator();
+    ImGui::TextColored(dim, "Drop .img files onto drive labels to mount.");
+
+    ImGui::End();
+}
+
 void DxState::present() {
     swapChain->Present(1, 0);
 }
@@ -1065,6 +1155,7 @@ void DxState::present() {
 // ========================================================================
 
 static TestKeyboard* s_kbd = nullptr;  // set by render_loop before window creation
+static DxState* s_dx = nullptr;       // for WM_DROPFILES handler
 
 static LRESULT CALLBACK MdaWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
@@ -1092,6 +1183,21 @@ static LRESULT CALLBACK MdaWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
     }
 
+    if (msg == WM_DROPFILES && s_dx) {
+        HDROP hDrop = (HDROP)wp;
+        wchar_t path[MAX_PATH];
+        if (DragQueryFileW(hDrop, 0, path, MAX_PATH)) {
+            char utf8[MAX_PATH * 3];
+            WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, sizeof(utf8), nullptr, nullptr);
+            std::string p(utf8);
+            auto& target = (s_dx->drop_target_drive == 1) ? s_dx->drive_b_path : s_dx->drive_a_path;
+            const char* label = (s_dx->drop_target_drive == 1) ? "B:" : "A:";
+            target = p;
+            spdlog::info("[System] Drop -> {} {}", label, p);
+        }
+        DragFinish(hDrop);
+        return 0;
+    }
     if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -1121,8 +1227,10 @@ void MdaDisplay::render_loop(std::stop_token stop) {
         WS_OVERLAPPEDWINDOW, x, y,
         wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, wc.hInstance, nullptr);
+    DragAcceptFiles(hwnd, TRUE);
 
     DxState dx;
+    s_dx = &dx;
     dx.clk_cycles = clk_cycles_;
     dx.scheduler = scheduler_;
     dx.cpu = cpu_;
@@ -1131,6 +1239,7 @@ void MdaDisplay::render_loop(std::stop_token stop) {
     dx.mda_card = mda_card_;
     dx.bus_probe = bus_probe_;
     dx.dbg_visible = &dbg_visible_;
+    dx.drive_a_path = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
     if (!dx.init(hwnd, winW, winH)) {
         spdlog::error("[MDA Display] Failed to init DX11");
         return;
@@ -1162,6 +1271,7 @@ void MdaDisplay::render_loop(std::stop_token stop) {
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 
+    s_dx = nullptr;
     DestroyWindow(hwnd);
     running_.store(false);
 }

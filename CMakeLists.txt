@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(bench VERSION 0.1.0 LANGUAGES CXX)
+project(bench VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,6 +18,13 @@ else()
     add_compile_options(-mavx2 -flto)
     add_link_options(-flto)
 endif()
+
+# Native File Dialog (lightweight OS file picker)
+add_library(nfd STATIC
+    third-party/nativefiledialog/src/nfd_common.c
+    third-party/nativefiledialog/src/nfd_win.cpp)
+target_include_directories(nfd PUBLIC third-party/nativefiledialog/src/include)
+target_link_libraries(nfd PRIVATE ole32 uuid shell32)
 
 # Collect all headers so they appear in Visual Studio Solution Explorer
 file(GLOB_RECURSE BENCH_HEADERS CONFIGURE_DEPENDS src/*.h)
@@ -75,7 +82,7 @@ add_executable(bench
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis nlohmann_json::nlohmann_json d3d11 d2d1 dwrite dxgi d3dcompiler windowscodecs)
+target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis nlohmann_json::nlohmann_json nfd d3d11 d2d1 dwrite dxgi d3dcompiler windowscodecs)
 target_compile_definitions(bench PRIVATE
     PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
 )
