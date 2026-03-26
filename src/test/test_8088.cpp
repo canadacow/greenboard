@@ -20,6 +20,7 @@
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
+#include "isa/isa_ram.h"
 #include "test_keyboard.h"
 #include "core/signal.h"
 #include "core/callback_component.h"
@@ -168,6 +169,7 @@ int main() {
         "keyboard",
         "mov",
         "dma",
+        "dma_isa_ram",
         "dma_m2m",
         //"dma_refresh",
         "mov",
@@ -252,6 +254,10 @@ int main() {
     ISA_MDA mda;
     isa_bus.insert_card(2, &mda);
 
+    // ISA RAM expansion: J4, 384KB at 0x40000-0x9FFFF (256KB planar + 384KB = 640KB).
+    ISA_RAM isa_ram(0x40000, 384 * 1024);
+    isa_bus.insert_card(3, &isa_ram);
+
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
     // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.
     // All fiber components run cooperatively on the 8284A's thread.
@@ -284,9 +290,10 @@ int main() {
     for (auto& tc : tests) {
         spdlog::info("--- {} ---", tc.name);
 
-        // Reset I/O space and DRAM (IC state resets in on_power_on)
+        // Reset I/O space, DRAM, and expansion RAM (IC state resets in on_power_on)
         std::memset(testcard.io_data(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
+        std::memset(const_cast<uint8_t*>(isa_ram.data()), 0x00, isa_ram.size());
 
         // Preload DMA buffer for the DMA test.
         {
