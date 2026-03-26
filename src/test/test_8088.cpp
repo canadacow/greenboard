@@ -199,6 +199,7 @@ int main() {
         "post_dma",
         "post_fdc",
         "fdc_write",
+        "post_dipsw",
     };
 
     std::vector<TestCase> tests;

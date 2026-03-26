@@ -10,6 +10,7 @@
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
 #include "isa/isa_cga.h"
+#include "isa/isa_ram.h"
 #include "display/renderer.h"
 #include "debug/memory_view.h"
 #include "test/test_keyboard.h"
@@ -41,16 +42,8 @@ int main() {
     std::string basic_u31  = "assets/IBM 5150 - Cassette BASIC version C1.10 - U31 - 5000022.bin";
     std::string basic_u32  = "assets/IBM 5150 - Cassette BASIC version C1.10 - U32 - 5000023.bin";
 
-    // SW1 EQUIP_FLAG bits 4-5: 11=MDA, 10=CGA 80x25, 01=CGA 40x25
-    // Base: 0x7D = floppy, no 8087, 64K, MDA, 2 drives
-#ifdef DISPLAY_CGA
-    constexpr uint8_t sw1 = (0x7D & ~0x30) | 0x20;  // CGA 80x25 color
-#else
-    constexpr uint8_t sw1 = 0x7D;                    // MDA 80x25
-#endif
-
     Board board;
-    board.wire(bios_path, basic_u29, basic_u30, basic_u31, basic_u32, sw1);
+    board.wire(bios_path, basic_u29, basic_u30, basic_u31, basic_u32);
 
     // --- ISA bus + cards ---
     ISA_Bus isa_bus;
@@ -77,17 +70,35 @@ int main() {
     }
     ISA_FloppyController fdc(std::move(floppy_img), 9, 2);
     isa_bus.insert_card(1, &fdc, 0x04, 0x40);
+    board.add_floppy_drives(2);
 
-    // J3: Display card (MDA or CGA based on DISPLAY_xxx define)
+    std::unique_ptr<ISA_CGA> cga = nullptr;
+    std::unique_ptr<ISA_MDA> mda = nullptr;
+
+    // J3: Display card
 #ifdef DISPLAY_CGA
-    ISA_CGA cga;
-    isa_bus.insert_card(2, &cga);
-    ISA_MDA mda;  // unused but needed for memview/renderer API
+    cga = std::make_unique<ISA_CGA>();
+    isa_bus.insert_card(2, cga.get());
+    board.set_video(Board::CGA_80);
 #else
-    ISA_MDA mda;
-    isa_bus.insert_card(2, &mda);
-    ISA_CGA cga;  // unused but needed for API
+    mda = std::make_unique<ISA_MDA>();
+    isa_bus.insert_card(2, mda.get());
+    board.set_video(Board::MDA);
 #endif
+
+    // J4: RAM expansion (256KB planar + expansion = total)
+    std::unique_ptr<ISA_RAM> ram_exp = nullptr;
+    
+#if 1
+    constexpr uint32_t ExpansionRamSize = 64;
+
+    ram_exp = std::make_unique<ISA_RAM>(0x40000, ExpansionRamSize * 1024);
+    isa_bus.insert_card(3, ram_exp.get());
+    board.add_expansion_kb(ExpansionRamSize);
+#endif
+
+    // All cards announced -- compute DIP switches from hardware state.
+    board.compute_switches();
 
     // --- Scheduler ---
     Scheduler scheduler;
@@ -127,16 +138,28 @@ int main() {
         return board.dram.data()[xlat];
     });
 
+    if (ram_exp)
+    {
+        // Expansion RAM: 40000-9FFFF (384KB ISA RAM card)
+        memview.map(ram_exp->base(), ram_exp->size(), [&](uint32_t addr) -> uint8_t {
+            return ram_exp->data()[addr - ram_exp->base()];
+            });
+    }
+
     // Display framebuffer
-#ifdef DISPLAY_CGA
-    memview.map(ISA_CGA::FB_BASE, ISA_CGA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
-        return cga.vram()[addr - ISA_CGA::FB_BASE];
-    });
-#else
-    memview.map(ISA_MDA::FB_BASE, ISA_MDA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
-        return mda.framebuffer()[addr - ISA_MDA::FB_BASE];
-    });
-#endif
+    if (cga)
+    {
+        memview.map(ISA_CGA::FB_BASE, ISA_CGA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
+            return cga->vram()[addr - ISA_CGA::FB_BASE];
+            });
+    }
+
+    if (mda)
+    {
+        memview.map(ISA_MDA::FB_BASE, ISA_MDA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
+            return mda->framebuffer()[addr - ISA_MDA::FB_BASE];
+            });
+    }
 
     // ROM: F6000-FFFFF (5 banks x 8KB)
     memview.map(0xF6000, 5 * 8192, [&](uint32_t addr) -> uint8_t {
@@ -168,15 +191,19 @@ int main() {
     // --- Renderer (render thread, reads framebuffer directly) ---
     Renderer renderer;
     scheduler.set_cpu(board.cpu);
-#ifdef DISPLAY_CGA
-    renderer.start(nullptr, &board.clk_gen->clk_cycles_ref(),
-                   &scheduler, board.cpu, &memview, board.dma_ic, nullptr,
-                   &bus_probe, &keyboard, &fdc, &cga);
-#else
-    renderer.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
-                   &scheduler, board.cpu, &memview, board.dma_ic, &mda,
-                   &bus_probe, &keyboard, &fdc, nullptr);
-#endif
+
+    if (cga)
+    {
+        renderer.start(nullptr, &board.clk_gen->clk_cycles_ref(),
+            &scheduler, board.cpu, &memview, board.dma_ic, nullptr,
+            &bus_probe, &keyboard, &fdc, cga.get());
+    }
+    else if (mda)
+    {
+        renderer.start(mda->framebuffer(), &board.clk_gen->clk_cycles_ref(),
+            &scheduler, board.cpu, &memview, board.dma_ic, mda.get(),
+            &bus_probe, &keyboard, &fdc, nullptr);
+    }
 
     // Bind board traces to live simulation signals.
     renderer.bind_board_signals(board.brd_net_map());
@@ -187,7 +214,9 @@ int main() {
     // --- Power on ---
     spdlog::info("=== Power on ===");
     spdlog::info("SW1: 0x{:02X}  SW2: 0x{:02X}",
-                 board.sw1_ic.value(), board.sw2_ic.value());
+                 board.sw1_ic.value(), board.sw2_mux.value());
+    spdlog::info("Hardware: {} floppy drives, video={}, {}KB expansion",
+                 board.floppy_drives_, static_cast<int>(board.video_), board.expansion_kb_);
 
     board.clk_gen->power_on();
     board.clk_gen->psu_power_on();

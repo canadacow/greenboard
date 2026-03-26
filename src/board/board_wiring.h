@@ -33,6 +33,7 @@
 #include "ic/ic_8253.h"
 #include "ic/ic_8255a.h"
 #include "ic/ic_dip_switch.h"
+#include "board/sw2_mux.h"
 #include "board/isa_slot.h"
 #include <string>
 #include <vector>
@@ -306,9 +307,11 @@ struct Board {
         IsaSlot("J1"), IsaSlot("J2"), IsaSlot("J3"), IsaSlot("J4"), IsaSlot("J5"),
     };
 
-    // DIP switch ICs (driven every cycle via DAG)
+    // DIP switch ICs
     IC_DipSwitch sw1_ic{"SW1", 8};
-    IC_DipSwitch sw2_ic{"SW2", 4};
+
+    // SW2 mux: U63 gate 3 + U80 buffer 1.  PB2 selects positions 1-4 vs 5.
+    SW2Mux sw2_mux;
 
     // All traces on the board. On power loss, every trace discharges.
     std::vector<Signal*> all_traces;
@@ -410,12 +413,51 @@ struct Board {
     IC_74S244* buf17_ic = nullptr;      // U17: address buffer
     IC_DRAM_256K dram;
 
+    // --- Hardware config (cards announce themselves before power-on) ---
+    enum VideoCard { NONE = 0, CGA_40 = 1, CGA_80 = 2, MDA = 3 };
+    int  floppy_drives_ = 0;       // 0 = no FDC
+    bool coprocessor_   = false;    // 8087 installed
+    VideoCard video_    = NONE;
+    int  expansion_kb_  = 0;        // ISA RAM beyond 256KB planar
+
+    void add_floppy_drives(int n)    { floppy_drives_ += n; }
+    void set_coprocessor(bool on)    { coprocessor_ = on; }
+    void set_video(VideoCard v)      { video_ = v; }
+    void add_expansion_kb(int kb)    { expansion_kb_ += kb; }
+
+    // Compute SW1 + SW2 from installed hardware. Call after all cards
+    // are announced but before power-on.
+    void compute_switches() {
+        // SW1: EQUIP_FLAG low byte
+        uint8_t sw1 = 0;
+        if (floppy_drives_ > 0)  sw1 |= 0x01;           // bit 0: IPL
+        if (coprocessor_)        sw1 |= 0x02;           // bit 1: 8087
+        sw1 |= 0x0C;                                     // bits 3:2 = 11 (64K planar)
+        sw1 |= (video_ & 3) << 4;                        // bits 5:4: video
+        if (floppy_drives_ > 0) {
+            int fc = (std::min)(floppy_drives_, 4) - 1;
+            sw1 |= (fc & 3) << 6;                        // bits 7:6: drive count
+        }
+        sw1_ic.set_value(sw1);
+
+        // SW2: total memory = 64KB planar base + expansion
+        // 10/27/82 BIOS: reads 5-bit value via PB2 mux, multiplies by 32.
+        // banks = (total - 64) / 32.  SW2Mux drives: bit=0 -> Low (BIOS reads 0),
+        // bit=1 -> High (BIOS reads 1).  BIOS reads the value directly.
+        int total_kb = 256 + expansion_kb_;   // 256KB planar DRAM
+        int banks = (total_kb - 64) / 32;     // BIOS formula uses 64K base
+        uint8_t sw2_val = static_cast<uint8_t>(banks & 0x1F);
+        sw2_mux.set_value(sw2_val);
+
+        spdlog::info("SW1: 0x{:02X}  SW2: 0x{:02X}  ({} KB total)",
+                     sw1, sw2_val, total_kb);
+    }
+
     void wire(const std::string& bios_path,
               const std::string& basic_u29 = "",
               const std::string& basic_u30 = "",
               const std::string& basic_u31 = "",
-              const std::string& basic_u32 = "",
-              uint8_t sw1_override = 0) {
+              const std::string& basic_u32 = "") {
         // Power rails never create dependency edges.
         vcc.set_power_rail();
         gnd.set_power_rail();
@@ -1682,22 +1724,19 @@ struct Board {
         //   PA3,2 = 11 64K planar RAM
         //   PA5,4 = 11 MDA 80x25
         //   PA7,6 = 01 2 floppy drives (00=1, 01=2, 10=3, 11=4)
-        // SW1 default or caller override
-        sw1_ic.set_value(sw1_override ? sw1_override : 0x7D);
+        // SW2 mux: PB2 gates which SW2 positions reach Port C lower nibble.
+        // PB2=High -> positions 1-4 (via U63 sense line N-000382)
+        // PB2=Low  -> position 5 on PC0 (via U80 buffer, N-000358)
+        sw2_mux.connect(ppi_pb[2], ppi_pc[0], ppi_pc[1], ppi_pc[2], ppi_pc[3]);
 
-        // SW2: connect positions to Port C lower nibble.
-        for (int i = 0; i < 4; ++i)
-            sw2_ic.connect_position(i, ppi_pc[i]);
-
-        // SW2: 6 expansion RAM banks = 0x06
-        sw2_ic.set_value(0x06);
+        // SW1 + SW2 values set by compute_switches() after cards are announced.
     }
 
     void register_all(Scheduler& scheduler) {
         scheduler.set_bus_address_base(la_block_);
 
         scheduler.register_callback(&sw1_ic);
-        scheduler.register_callback(&sw2_ic);
+        scheduler.register_callback(&sw2_mux);
         scheduler.register_callback(xcvr);
         scheduler.register_callback(xcvr13_ic);
         scheduler.register_callback(sw_mux_ic);
