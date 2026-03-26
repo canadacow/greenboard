@@ -75,6 +75,7 @@ add_executable(bench
     src/isa/isa_testcard.cpp
     src/isa/isa_fdc.cpp
     src/isa/isa_mda.cpp
+    src/display/renderer.cpp
     src/display/mda_display.cpp
     src/display/board_view.cpp
     src/test/test_keyboard.cpp

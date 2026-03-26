@@ -9,7 +9,7 @@
 #include "isa/isa_testcard.h"
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
-#include "display/mda_display.h"
+#include "display/renderer.h"
 #include "debug/memory_view.h"
 #include "test/test_keyboard.h"
 #include "core/signal.h"
@@ -139,15 +139,15 @@ int main() {
     bus_probe.drq2 = pidx(board.drq2); bus_probe.drq3 = pidx(board.drq3);
     bus_probe.intr = pidx(board.intr); bus_probe.nmi = pidx(board.nmi);
 
-    // --- MDA display (render thread, reads framebuffer directly) ---
-    MdaDisplay mda_display;
+    // --- Renderer (render thread, reads framebuffer directly) ---
+    Renderer renderer;
     scheduler.set_cpu(board.cpu);
-    mda_display.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
-                       &scheduler, board.cpu, &memview, board.dma_ic, &mda,
-                       &bus_probe, &keyboard, &fdc);
+    renderer.start(mda.framebuffer(), &board.clk_gen->clk_cycles_ref(),
+                   &scheduler, board.cpu, &memview, board.dma_ic, &mda,
+                   &bus_probe, &keyboard, &fdc);
 
     // Bind board traces to live simulation signals.
-    mda_display.bind_board_signals(board.brd_net_map());
+    renderer.bind_board_signals(board.brd_net_map());
 
     // Start paused. Pre-set the debugger view to the reset vector.
     scheduler.pause();
@@ -162,7 +162,7 @@ int main() {
 
     // Run until the display window is closed.
     // CPU HLT pauses the scheduler but keeps the window alive for inspection.
-    while (mda_display.running())
+    while (renderer.running())
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // --- Power off ---
@@ -170,7 +170,7 @@ int main() {
     scheduler.resume();  // unblock pause_gate so the clock thread can exit
     board.clk_gen->psu_power_off();
     board.clk_gen->power_off();
-    mda_display.stop();
+    renderer.stop();
 
     spdlog::info("CLK cycles: {}", board.clk_gen->clk_cycles());
     spdlog::info("Done.");
