@@ -2,6 +2,7 @@
 #include "core/signal.h"
 #include "core/callback_component.h"
 #include "core/fiber_component.h"
+#include "core/coro_component.h"
 #include "ic/ic_8088.h"
 #include <array>
 #include <cassert>
@@ -42,6 +43,10 @@ public:
         fibers_.push_back(fc);
     }
 
+    void register_coro(CoroComponent* cc) {
+        coros_.push_back(cc);
+    }
+
     // Register a component for visualization only (e.g. threaded 8284A).
     void register_visual(Component* c) {
         visuals_.push_back(c);
@@ -53,9 +58,11 @@ public:
         dbg_last_tsc_ = 0;  // reset so first cycle doesn't false-trigger debugger pause
         for (auto* cc : callbacks_) cc->power_on();
         for (auto* fc : fibers_)    fc->power_on();
+        for (auto* co : coros_)     co->power_on();
     }
     void power_off_all() {
-        // Fibers first (CPU), then callbacks (reverse of power-on).
+        // Coros/fibers first (CPU), then callbacks (reverse of power-on).
+        for (auto* co : coros_)     co->power_off();
         for (auto* fc : fibers_)    fc->power_off();
         for (auto* cc : callbacks_) cc->power_off();
     }
@@ -74,8 +81,9 @@ public:
         std::filesystem::remove_all(WAVE_OUTPUT_DIR);
         std::filesystem::create_directories(WAVE_OUTPUT_DIR);
 
-        // Collect ALL evaluable components (fibers + callbacks both participate in DAG and exec).
+        // Collect ALL evaluable components (coros + fibers + callbacks all participate in DAG and exec).
         std::vector<Component*> evals;
+        for (auto* co : coros_)     evals.push_back(co);
         for (auto* fc : fibers_)    evals.push_back(fc);
         for (auto* cc : callbacks_) evals.push_back(cc);
         const int n = static_cast<int>(evals.size());
@@ -675,6 +683,7 @@ private:
     }
 
     std::vector<FiberComponent*> fibers_;
+    std::vector<CoroComponent*> coros_;
     std::vector<Component*> visuals_;
 };
 

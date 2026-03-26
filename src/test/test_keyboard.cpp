@@ -192,7 +192,6 @@ void TestKeyboard::on_cycle(Fiber /*caller*/) {
 }
 
 void TestKeyboard::handle_ack(const char* source) {
-    spdlog::info("[KBD] ack from {}, releasing sc=0x{:02X}", source, pa_driven_);
     release_scancode();
     pin_irq1_.drive(Level::Low);
     waiting_ack_ = false;
@@ -201,14 +200,12 @@ void TestKeyboard::handle_ack(const char* source) {
 
 void TestKeyboard::deliver_next() {
     if (queue_pos_ >= queue_.size()) {
-        spdlog::info("[KBD] deliver_next: queue empty (pos={}, size={})", queue_pos_, queue_.size());
         return;
     }
     uint8_t sc = queue_[queue_pos_++];
     drive_scancode(sc);
     pin_irq1_.drive(Level::High);
     waiting_ack_ = true;
-    spdlog::info("[KBD] deliver: sc=0x{:02X}, IRQ1=High, queued={}", sc, queue_.size() - queue_pos_);
 }
 
 void TestKeyboard::drive_scancode(uint8_t sc) {

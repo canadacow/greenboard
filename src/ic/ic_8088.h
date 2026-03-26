@@ -1,101 +1,288 @@
 #pragma once
-#include "core/fiber_component.h"
+// IC_8088: Intel 8088 CPU (maximum mode) with separate BIU/EU C++20 coroutines.
+//
+// 40-pin DIP. U3 on the 5150 motherboard.
+//
+// The BIU (Bus Interface Unit) coroutine owns all external pins and runs
+// the T-state bus protocol, yielding to the harness at each T-state.
+//
+// The EU (Execution Unit) coroutine does decode/ALU/flags and co_awaits
+// bus operations which suspend it back to the BIU.
+//
+// All bus operations are either zero-frame awaiters or macros that expand
+// inline. execute() is inlined into eu_run() -- single coroutine frame.
+
+#include "core/coro_component.h"
 #include "board/socket.h"
+#include <coroutine>
+#include <cstdint>
+#include <cstring>
 
 namespace bench {
 
 class Scheduler;
 
-// Intel 8088 CPU (maximum mode).
-//
-// 40-pin DIP. U3 on the 5150 motherboard.
-//
-// Pin functions (from BRD):
-//   Pin  1: GND
-//   Pin  2-8: A14-A8 (address bus, active during T1)
-//   Pin  9-16: AD7-AD0 (multiplexed address/data bus)
-//   Pin 17: NMI (input, non-maskable interrupt, rising-edge triggered)
-//   Pin 18: INTR (input, maskable interrupt request)
-//   Pin 19: CLK (input, clock from 8284A)
-//   Pin 20: GND
-//   Pin 21: RESET (input, from 8284A)
-//   Pin 22: READY (input, from 8284A)
-//   Pin 23: ~TEST (input, from 8087 BUSY)
-//   Pin 24: QS1 (output, queue status)
-//   Pin 25: QS0 (output, queue status)
-//   Pin 26: ~S0 (output, bus cycle status -> 8288)
-//   Pin 27: ~S1 (output, bus cycle status -> 8288)
-//   Pin 28: ~S2 (output, bus cycle status -> 8288)
-//   Pin 29: ~LOCK (output, bus lock prefix)
-//   Pin 30: ~RQ/~GT0 (I/O, bus request/grant for 8087)
-//   Pin 31: VCC (+5V)
-//   Pin 32: (no connect in BRD -- MN/~MX tied to GND externally)
-//   Pin 33: GND (MN/~MX = GND -> maximum mode)
-//   Pin 34: (no connect)
-//   Pin 35-39: A19-A15 (address bus)
-//   Pin 40: VCC (+5V)
-//
-// Bus cycle status encoding (active low, ~S2/~S1/~S0):
-//   0,0,0 = INTA       0,0,1 = IOR
-//   0,1,0 = IOW        0,1,1 = Halt
-//   1,0,0 = Opcode fetch  1,0,1 = Memory read
-//   1,1,0 = Memory write  1,1,1 = Passive (no bus cycle)
-//
-// Threading: Active IC (fiber). Overrides run() with instruction execution loop.
-//            Yields until VCC goes High, then executes instructions.
-//            Each instruction step drives bus signals for memory/IO access.
-class IC_8088 : public FiberComponent {
+// ========================================================================
+// Coroutine types
+// ========================================================================
+
+// EU task with symmetric transfer. Supports value return and void.
+template <typename T>
+struct EUTask {
+    struct promise_type {
+        T result_{};
+        std::coroutine_handle<> continuation_{std::noop_coroutine()};
+
+        EUTask get_return_object() {
+            return EUTask{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        auto final_suspend() noexcept {
+            struct Awaiter {
+                std::coroutine_handle<> cont;
+                bool await_ready() noexcept { return false; }
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept { return cont; }
+                void await_resume() noexcept {}
+            };
+            return Awaiter{continuation_};
+        }
+        void return_value(T v) { result_ = v; }
+        void unhandled_exception() {}
+    };
+    using handle_type = std::coroutine_handle<promise_type>;
+    handle_type handle_{};
+
+    bool await_ready() noexcept { return false; }
+    std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
+        handle_.promise().continuation_ = caller;
+        return handle_;
+    }
+    T await_resume() {
+        T r = handle_.promise().result_;
+        handle_.destroy();
+        return r;
+    }
+};
+
+template <>
+struct EUTask<void> {
+    struct promise_type {
+        std::coroutine_handle<> continuation_{std::noop_coroutine()};
+
+        EUTask get_return_object() {
+            return EUTask{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        auto final_suspend() noexcept {
+            struct Awaiter {
+                std::coroutine_handle<> cont;
+                bool await_ready() noexcept { return false; }
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept { return cont; }
+                void await_resume() noexcept {}
+            };
+            return Awaiter{continuation_};
+        }
+        void return_void() {}
+        void unhandled_exception() {}
+    };
+    using handle_type = std::coroutine_handle<promise_type>;
+    handle_type handle_{};
+
+    bool await_ready() noexcept { return false; }
+    std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
+        handle_.promise().continuation_ = caller;
+        return handle_;
+    }
+    void await_resume() { handle_.destroy(); }
+};
+
+// BIU top-level coroutine. The harness calls handle.resume() at each T-state.
+struct BIUTask {
+    struct promise_type {
+        BIUTask get_return_object() {
+            return BIUTask{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() {}
+        void unhandled_exception() {}
+    };
+    using handle_type = std::coroutine_handle<promise_type>;
+    handle_type handle_{};
+};
+
+// Bus operation descriptor shared between EU and BIU.
+struct BusOp {
+    enum Kind : uint8_t { NONE, MEM_READ, MEM_WRITE, IO_READ, IO_WRITE, INTA, FETCH };
+    Kind kind = NONE;
+    uint32_t addr = 0;
+    uint8_t write_data = 0;
+    uint8_t read_data = 0;
+};
+
+// ========================================================================
+// IC_8088
+// ========================================================================
+
+class IC_8088 : public CoroComponent {
 public:
     // Bus cycle phase (actual T-state visible to debugger)
     enum class TState : uint8_t { Ti, T1, T2, T3, Tw, T4 };
-    // Bidir direction hint (for DAG permutation selection, internal)
+    // Bidir direction hint (for DAG permutation selection)
     enum class BusT : uint8_t { T1, T2_Read, T2_Write };
 
     IC_8088(uint16_t start_cs = 0xF000, uint16_t start_ip = 0x0100);
+    ~IC_8088() override;
 
     void install(Socket& socket);
     void set_scheduler(Scheduler* s) { scheduler_ = s; }
 
+    // Component overrides
+    void power_on() override;
+    void power_off() override;
+    bool is_powered() const override { return biu_task_.handle_ != nullptr; }
+
+    // ====================================================================
+    // Zero-frame awaiters (live on caller's coroutine frame)
+    // ====================================================================
+
+    // Bus read awaiter: sets bus_op_, suspends to BIU, returns read_data.
+    struct BusReadAwaiter {
+        IC_8088& cpu;
+        BusOp::Kind kind;
+        uint32_t addr;
+        bool await_ready() noexcept { return false; }
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
+            cpu.bus_op_ = {kind, addr & 0xFFFFF, 0, 0};
+            cpu.eu_resume_ = h;
+            return std::noop_coroutine();
+        }
+        uint8_t await_resume() noexcept { return cpu.bus_op_.read_data; }
+    };
+
+    // Bus write awaiter: sets bus_op_, suspends to BIU.
+    struct BusWriteAwaiter {
+        IC_8088& cpu;
+        BusOp::Kind kind;
+        uint32_t addr;
+        uint8_t val;
+        bool await_ready() noexcept { return false; }
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
+            cpu.bus_op_ = {kind, addr & 0xFFFFF, val, 0};
+            cpu.eu_resume_ = h;
+            return std::noop_coroutine();
+        }
+        void await_resume() noexcept {}
+    };
+
+    // INTA awaiter: posts INTA bus op, suspends, returns interrupt vector.
+    struct IntaAwaiter {
+        IC_8088& cpu;
+        bool await_ready() noexcept { return false; }
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
+            cpu.bus_op_ = {BusOp::INTA, 0, 0, 0};
+            cpu.eu_resume_ = h;
+            return std::noop_coroutine();
+        }
+        uint8_t await_resume() noexcept { return cpu.bus_op_.read_data; }
+    };
+
+    // rmem8 awaiter: register shortcut (no suspend) or bus read (1 suspend).
+    struct Rmem8Awaiter {
+        IC_8088& cpu;
+        uint32_t addr;
+        bool await_ready() noexcept { return addr >= REGS_BASE; }
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
+            cpu.bus_op_ = {BusOp::MEM_READ, addr & 0xFFFFF, 0, 0};
+            cpu.eu_resume_ = h;
+            return std::noop_coroutine();
+        }
+        uint8_t await_resume() noexcept {
+            if (addr >= REGS_BASE) return cpu.regs_[addr - REGS_BASE];
+            return cpu.bus_op_.read_data;
+        }
+    };
+
+    // wmem8 awaiter: register shortcut (no suspend) or bus write (1 suspend).
+    struct Wmem8Awaiter {
+        IC_8088& cpu;
+        uint32_t addr;
+        uint8_t val;
+        bool await_ready() noexcept {
+            if (addr >= REGS_BASE) { cpu.regs_[addr - REGS_BASE] = val; return true; }
+            return false;
+        }
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
+            cpu.bus_op_ = {BusOp::MEM_WRITE, addr & 0xFFFFF, val, 0};
+            cpu.eu_resume_ = h;
+            return std::noop_coroutine();
+        }
+        void await_resume() noexcept {}
+    };
+
+    // Inline awaiter-returning functions (no coroutine frame allocated)
+    BusReadAwaiter eu_bus_read_byte(uint32_t addr) {
+        return {*this, BusOp::MEM_READ, addr};
+    }
+    BusWriteAwaiter eu_bus_write_byte(uint32_t addr, uint8_t val) {
+        return {*this, BusOp::MEM_WRITE, addr, val};
+    }
+    BusReadAwaiter eu_io_read_byte(uint16_t port) {
+        return {*this, BusOp::IO_READ, port};
+    }
+    BusWriteAwaiter eu_io_write_byte(uint16_t port, uint8_t val) {
+        return {*this, BusOp::IO_WRITE, (uint32_t)port, val};
+    }
+    Rmem8Awaiter rmem8(uint32_t addr) {
+        return {*this, addr};
+    }
+    Wmem8Awaiter wmem8(uint32_t addr, uint8_t val) {
+        return {*this, addr, val};
+    }
+    BusReadAwaiter fetch_byte(int offset) {
+        return {*this, BusOp::FETCH, prefetch_base_ + (uint32_t)offset};
+    }
+
+    // --- Debugger read-only access (safe to call from any thread while paused) ---
+    bool halted() const { return halted_; }
+    void clear_halt() { halted_ = false; }
+    void set_reset_vector(uint16_t cs, uint16_t ip) { start_cs_ = cs; start_ip_ = ip; }
+
+    const uint16_t* regs16_ro() const { return reinterpret_cast<const uint16_t*>(regs_); }
+    const uint8_t*  regs8_ro()  const { return regs_; }
+    uint16_t ip()  const { return reg_ip_; }
+    const uint16_t* ip_ptr() const { return &reg_ip_; }
+    // 16-bit register indices
+    enum Reg16 { AX=0, CX=1, DX=2, BX=3, SP=4, BP=5, SI=6, DI=7,
+                 ES=8, CS=9, SS=10, DS=11 };
+    // Flag byte offsets in regs8
+    enum Flag { CF=40, PF=41, AF=42, ZF=43, SF=44, TF=45, IF=46, DF=47, OF=48 };
+    TState t_state() const { return t_state_; }
+    BusT bus_t() const { return bus_t_; }
+    uint64_t instr_count() const { return instr_count_; }
+
+    // Last bus transaction (for debugger bus analyzer)
+    struct BusTx {
+        uint32_t addr = 0;
+        uint8_t data = 0;
+        uint8_t type = 7;  // BUS_PASSIVE
+    };
+    const BusTx& last_bus_tx() const { return last_bus_tx_; }
+
 protected:
-    void run() override;
+    void on_cycle(Fiber caller) override;
 
 private:
+    // ---- BIU coroutine ----
+    BIUTask biu_run();
+
+    // ---- EU coroutine (single frame -- execute() inlined into eu_run) ----
+    EUTask<void> eu_run();
+
+    // ---- Pure ALU (not coroutines) ----
     void check_nmi();
-    // --- Bus operations ---
-    uint8_t bus_read_byte(uint32_t address, uint8_t bus_type = 5 /*BUS_MEMR*/);
-    void bus_write_byte(uint32_t address, uint8_t value);
-    uint16_t bus_read_word(uint32_t address);
-    void bus_write_word(uint32_t address, uint16_t value);
-    uint8_t io_read_byte(uint16_t port);
-    void io_write_byte(uint16_t port, uint8_t value);
-
-    void drive_address(uint32_t address);
-    void drive_data(uint8_t value);
-    uint8_t read_data();
-    void release_data();
-    void drive_status(uint8_t s2, uint8_t s1, uint8_t s0);
-    void drive_status_passive();
-    void full_wait_clk(const char* stateYield);
-
-    // --- Memory routing (register file or bus) ---
-    static constexpr uint32_t REGS_BASE = 0xF0000;
-
-    uint8_t rmem8(uint32_t addr);
-    uint16_t rmem16(uint32_t addr);
-    void wmem8(uint32_t addr, uint8_t val);
-    void wmem16(uint32_t addr, uint16_t val);
-    uint32_t rmem(uint32_t addr);   // byte or word based on i_w_
-    void wmem(uint32_t addr, uint32_t val);
-
-    // --- Stack ---
-    void push16(uint16_t val);
-    uint16_t pop16();
-
-    // --- CPU core (ported from 8086tiny) ---
     void cpu_reset();
-    void execute();
     void set_opcode(uint8_t opcode);
-    void pc_interrupt(uint8_t interrupt_num);
     void make_flags();
     void set_flags(int new_flags);
     int  AAA_AAS(int which_operation);
@@ -103,22 +290,27 @@ private:
     int  set_CF(int new_CF);
     int  set_AF(int new_AF);
     int  set_OF(int new_OF);
-
-    // --- Decode helpers ---
     void decode_rm_reg();
     uint32_t get_reg_addr(int reg_id);
-    int top_bit();
-    int sign_of(int val);
+    int  top_bit();
+    int  sign_of(int val);
     void index_inc(int reg_id);
 
-    // Instruction fetch
-    uint8_t fetch_byte(int offset);
-    uint16_t fetch_word(int offset);
-    uint8_t prefetch_[6] = {};
-    int prefetch_len_ = 0;
-    uint32_t prefetch_base_ = 0;
+    // ---- BIU pin driving ----
+    void drive_address(uint32_t address);
+    void drive_data(uint8_t value);
+    uint8_t read_data();
+    void release_data();
+    void drive_status(uint8_t s2, uint8_t s1, uint8_t s0);
+    void drive_status_passive();
 
-    // --- Pin handles ---
+    // ---- Shared EU/BIU state ----
+    BusOp bus_op_;
+    std::coroutine_handle<> eu_resume_{std::noop_coroutine()};
+    bool eu_done_ = false;
+    BIUTask biu_task_{};
+
+    // ---- Pins ----
 
     // Multiplexed address/data: AD0=pin16 .. AD7=pin9
     Pin pin_ad_[8];
@@ -148,18 +340,14 @@ private:
     Pin pin_lock_;  // Pin 29: ~LOCK
     Pin pin_rqgt0_; // Pin 30: ~RQ/~GT0
 
-    // --- CPU state (from 8086tiny, adapted) ---
+    // ---- CPU state ----
+    static constexpr uint32_t REGS_BASE = 0xF0000;
 
-    // Registers: 16-bit regs at byte offsets 0-27 (14 regs x 2 bytes),
-    // individual flag bytes at offsets 40-48 (FLAG_CF..FLAG_OF).
     uint8_t regs_[64] = {};
-
     uint16_t* regs16() { return reinterpret_cast<uint16_t*>(regs_); }
     uint8_t*  regs8()  { return regs_; }
-
     uint16_t reg_ip_ = 0;
 
-    // Instruction decode state
     uint8_t i_rm_ = 0, i_w_ = 0, i_reg_ = 0, i_mod_ = 0;
     uint8_t i_mod_size_ = 0, i_d_ = 0, i_reg4bit_ = 0;
     uint8_t raw_opcode_id_ = 0, xlat_opcode_id_ = 0, extra_ = 0;
@@ -168,7 +356,6 @@ private:
     bool div_error_ = false;
     uint16_t seg_override_ = 0;
 
-    // Operand state
     uint32_t op_source_ = 0, op_dest_ = 0, rm_addr_ = 0;
     uint32_t op_to_addr_ = 0, op_from_addr_ = 0;
     uint32_t i_data0_ = 0, i_data1_ = 0, i_data2_ = 0;
@@ -178,14 +365,22 @@ private:
     uint8_t  scratch_uchar_ = 0;
     uint32_t set_flags_type_ = 0;
 
-    // Instruction decode tables (from 8086tiny bios.asm).
-    // 20 tables x 256 bytes. Small tables (R/M, jxx, flags) are padded with zeros.
-    // Index: [0] rm_mode12_reg1, [1] rm_mode012_reg2, [2] rm_mode12_disp,
-    //        [3] rm_mode12_dfseg, [4] rm_mode0_reg1, [5] rm_mode012_reg2,
-    //        [6] rm_mode0_disp, [7] rm_mode0_dfseg, [8] xlat_ids, [9] ex_data,
-    //        [10] std_flags, [11] parity, [12] base_size, [13] i_w_adder,
-    //        [14] i_mod_adder, [15] jxx_dec_a, [16] jxx_dec_b, [17] jxx_dec_c,
-    //        [18] jxx_dec_d, [19] flags_mult
+    BusT bus_t_ = BusT::T1;
+    TState t_state_ = TState::Ti;
+
+    bool nmi_pending_ = false;
+    Level nmi_prev_ = Level::HiZ;
+    bool halted_ = false;
+
+    BusTx last_bus_tx_;
+    uint64_t instr_count_ = 0;
+
+    uint16_t start_cs_, start_ip_;
+    uint32_t prefetch_base_ = 0;
+
+    Scheduler* scheduler_ = nullptr;
+
+    // Decode tables (from 8086tiny bios.asm).
     static constexpr uint8_t TABLE[20][256] = {
         // [0] rm_mode12_reg1
         {3,3,5,5,6,7,5,3},
@@ -277,58 +472,83 @@ private:
         // [19] flags_mult
         {0,2,4,6,7,8,9,10,11},
     };
-
-    // Bus T-state tracking for DAG bidir blocks.
-    // T1: driving AD (address) + S0-S2 (status)  -> AD=Output, S0-S2=Output
-    // T2_READ: AD released (input), S0-S2 passive -> AD=Input,  S0-S2=HiZ
-    // T2_WRITE: AD driving (data), S0-S2 passive  -> AD=Output, S0-S2=HiZ
-    // T3/T4/Tw: same as T2 for their respective read/write direction
-    BusT bus_t_ = BusT::T1;  // CPU starts by fetching -- first action is T1
-    TState t_state_ = TState::Ti;  // actual bus cycle phase (for debugger)
-
-    // Interrupt state
-    bool nmi_pending_ = false;
-
-    // NMI edge tracking
-    Level nmi_prev_ = Level::HiZ;
-
-    // Halted flag -- set when CPU reaches HLT or CS:IP = 0:0
-    bool halted_ = false;
-public:
-    bool halted() const { return halted_; }
-    void clear_halt() { halted_ = false; }
-    void set_reset_vector(uint16_t cs, uint16_t ip) { start_cs_ = cs; start_ip_ = ip; }
-
-    // --- Debugger read-only access (safe to call from any thread while paused) ---
-    const uint16_t* regs16_ro() const { return reinterpret_cast<const uint16_t*>(regs_); }
-    const uint8_t*  regs8_ro()  const { return regs_; }
-    uint16_t ip()  const { return reg_ip_; }
-    const uint16_t* ip_ptr() const { return &reg_ip_; }
-    // 16-bit register indices
-    enum Reg16 { AX=0, CX=1, DX=2, BX=3, SP=4, BP=5, SI=6, DI=7,
-                 ES=8, CS=9, SS=10, DS=11 };
-    // Flag byte offsets in regs8
-    enum Flag { CF=40, PF=41, AF=42, ZF=43, SF=44, TF=45, IF=46, DF=47, OF=48 };
-    TState t_state() const { return t_state_; }
-    BusT bus_t() const { return bus_t_; }
-    uint64_t instr_count() const { return instr_count_; }
-
-    // Last bus transaction (for debugger bus analyzer)
-    struct BusTx {
-        uint32_t addr = 0;
-        uint8_t data = 0;
-        uint8_t type = 7;  // BUS_PASSIVE
-    };
-    const BusTx& last_bus_tx() const { return last_bus_tx_; }
-private:
-    BusTx last_bus_tx_;
-    uint64_t instr_count_ = 0;
-
-    // Start address (set via constructor, applied in cpu_reset)
-    uint16_t start_cs_;
-    uint16_t start_ip_;
-
-    Scheduler* scheduler_ = nullptr;
 };
+
+// ========================================================================
+// Macros: expand inline in eu_run(), zero coroutine frames.
+// These use co_await and reference IC_8088 members -- only valid
+// inside IC_8088 coroutine member functions.
+// ========================================================================
+
+#define RMEM16_(addr_, dest_) do { \
+    uint32_t _a16 = (addr_); \
+    if (_a16 >= REGS_BASE && _a16 < REGS_BASE + 63) { \
+        uint32_t _off = _a16 - REGS_BASE; \
+        (dest_) = (uint32_t)(uint16_t)(regs_[_off] | (regs_[_off + 1] << 8)); \
+    } else { \
+        uint8_t _lo16 = co_await eu_bus_read_byte(_a16); \
+        uint8_t _hi16 = co_await eu_bus_read_byte(_a16 + 1); \
+        (dest_) = (uint32_t)(uint16_t)(_lo16 | (_hi16 << 8)); \
+    } \
+} while(0)
+
+#define WMEM16_(addr_, val_) do { \
+    uint32_t _wa16 = (addr_); uint16_t _wv16 = (uint16_t)(val_); \
+    if (_wa16 >= REGS_BASE && _wa16 < REGS_BASE + 63) { \
+        uint32_t _off = _wa16 - REGS_BASE; \
+        regs_[_off] = _wv16 & 0xFF; regs_[_off + 1] = (_wv16 >> 8) & 0xFF; \
+    } else { \
+        co_await eu_bus_write_byte(_wa16, _wv16 & 0xFF); \
+        co_await eu_bus_write_byte(_wa16 + 1, (_wv16 >> 8) & 0xFF); \
+    } \
+} while(0)
+
+#define RMEM_(addr_, dest_) do { \
+    if (i_w_) { RMEM16_(addr_, dest_); } \
+    else { (dest_) = (uint32_t)co_await rmem8(addr_); } \
+} while(0)
+
+#define WMEM_(addr_, val_) do { \
+    if (i_w_) { WMEM16_(addr_, (uint16_t)(val_)); } \
+    else { co_await wmem8(addr_, (uint8_t)(val_)); } \
+} while(0)
+
+#define PUSH16_(val_) do { \
+    uint16_t _pv = (uint16_t)(val_); \
+    regs16()[REG_SP] -= 2; \
+    uint32_t _pa = 16u * regs16()[REG_SS] + regs16()[REG_SP]; \
+    co_await eu_bus_write_byte(_pa, _pv & 0xFF); \
+    co_await eu_bus_write_byte(_pa + 1, (_pv >> 8) & 0xFF); \
+} while(0)
+
+#define POP16_(dest_) do { \
+    uint32_t _pa = 16u * regs16()[REG_SS] + regs16()[REG_SP]; \
+    uint8_t _plo = co_await eu_bus_read_byte(_pa); \
+    uint8_t _phi = co_await eu_bus_read_byte(_pa + 1); \
+    regs16()[REG_SP] += 2; \
+    (dest_) = (uint16_t)(_plo | (_phi << 8)); \
+} while(0)
+
+#define FETCH_WORD_(offset_, dest_) do { \
+    uint8_t _flo = co_await fetch_byte(offset_); \
+    uint8_t _fhi = co_await fetch_byte((offset_) + 1); \
+    (dest_) = (uint16_t)(_flo | (_fhi << 8)); \
+} while(0)
+
+#define PC_INTERRUPT_(int_num_) do { \
+    uint8_t _intv = (int_num_); \
+    set_opcode(0xCD); make_flags(); \
+    PUSH16_((uint16_t)scratch_uint_); \
+    PUSH16_(regs16()[REG_CS]); \
+    PUSH16_(reg_ip_); \
+    uint8_t _ilo = co_await eu_bus_read_byte(4u * _intv); \
+    uint8_t _ihi = co_await eu_bus_read_byte(4u * _intv + 1); \
+    uint8_t _clo = co_await eu_bus_read_byte(4u * _intv + 2); \
+    uint8_t _chi = co_await eu_bus_read_byte(4u * _intv + 3); \
+    regs16()[REG_CS] = (uint16_t)(_clo | (_chi << 8)); \
+    reg_ip_ = (uint16_t)(_ilo | (_ihi << 8)); \
+    regs8()[FLAG_TF] = 0; \
+    regs8()[FLAG_IF] = 0; \
+} while(0)
 
 } // namespace bench

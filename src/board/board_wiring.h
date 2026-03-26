@@ -1741,7 +1741,7 @@ struct Board {
         scheduler.register_callback(&dram);
         scheduler.register_callback(bc);
         scheduler.register_callback(pic);
-        scheduler.register_fiber(cpu);
+        scheduler.register_coro(cpu);
         scheduler.register_visual(clk_gen);
         clk_gen->set_scheduler(&scheduler);
         clk_gen->set_bus_controller(bc);
