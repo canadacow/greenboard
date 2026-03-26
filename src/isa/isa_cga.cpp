@@ -1,9 +1,24 @@
 #include "isa/isa_cga.h"
 #include <cstring>
+#include <fstream>
+#include <spdlog/spdlog.h>
 
 namespace bench {
 
-ISA_CGA::ISA_CGA() {}
+ISA_CGA::ISA_CGA() {
+    load_font("assets/IBM_CGA-8.raw");
+}
+
+void ISA_CGA::load_font(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (f) {
+        f.read(reinterpret_cast<char*>(font_rom_), FONT_SIZE);
+        font_loaded_ = true;
+        spdlog::info("[CGA] loaded font ROM: {}", path);
+    } else {
+        spdlog::warn("[CGA] font ROM not found: {} -- using blank font", path);
+    }
+}
 
 void ISA_CGA::on_power_on() {
     std::memset(vram_, 0, FB_SIZE);
@@ -12,9 +27,9 @@ void ISA_CGA::on_power_on() {
     mode_ = 0;
     color_ = 0;
     status_counter_ = 0;
-    blink_counter_ = 0;
-    blink_on_ = true;
     composite_ = false;
+    QueryPerformanceFrequency(&qpc_freq_);
+    QueryPerformanceCounter(&qpc_start_);
 }
 
 // =========================================================================
@@ -56,11 +71,6 @@ uint8_t ISA_CGA::on_io_read(uint16_t port) {
         // Status register
         case 0x3DA: {
             ++status_counter_;
-            // Advance blink state
-            if (++blink_counter_ >= 4096) {
-                blink_counter_ = 0;
-                blink_on_ = !blink_on_;
-            }
             uint8_t status = 0;
             // Bit 0: display enable (1 during retrace -- safe to write VRAM)
             if (status_counter_ & 1)
@@ -120,7 +130,8 @@ uint8_t ISA_CGA::on_mmio_read(uint32_t addr) {
 }
 
 void ISA_CGA::on_mmio_write(uint32_t addr, uint8_t val) {
-    vram_[(addr - FB_BASE) & (FB_SIZE - 1)] = val;
+    uint32_t off = (addr - FB_BASE) & (FB_SIZE - 1);
+    vram_[off] = val;
 }
 
 // =========================================================================
@@ -130,9 +141,17 @@ void ISA_CGA::on_mmio_write(uint32_t addr, uint8_t val) {
 void ISA_CGA::fill_gpu_constants(GpuConstants& cb) const {
     cb.mode = mode_;
     cb.color = color_;
-    for (int i = 0; i < 18; ++i)
-        cb.crtc[i] = crtc_reg_[i];
-    cb.blink_on = blink_on_ ? 1 : 0;
+
+    // Compute blink from wall clock at CGA frame rate (~59.92 Hz).
+    // 5-bit frame counter: cursor blinks at bit 3 (1/16), attr at bit 4 (1/32).
+    LARGE_INTEGER qpc_now;
+    QueryPerformanceCounter(&qpc_now);
+    double elapsed = double(qpc_now.QuadPart - qpc_start_.QuadPart) / qpc_freq_.QuadPart;
+    uint32_t frames = static_cast<uint32_t>(elapsed * CGA_FRAME_HZ);
+    uint8_t counter = frames & 0x1F;
+    cb.cursor_blink = (counter & 0x08) ? 1 : 0;  // bit 3: ~3.75 Hz
+    cb.attr_blink = (counter & 0x10) ? 0 : 1;    // bit 4: ~1.875 Hz (inverted: visible when 0)
+
     cb.composite = composite_ ? 1 : 0;
     cb.start_addr = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
     cb.cursor_addr = (crtc_reg_[CRTC_CURSOR_H] << 8) | crtc_reg_[CRTC_CURSOR_L];
@@ -142,12 +161,11 @@ void ISA_CGA::fill_gpu_constants(GpuConstants& cb) const {
     cb._pad[0] = cb._pad[1] = 0;
 }
 
-// =========================================================================
-// CGA 8x8 character ROM (CP437)
-// Only 0x00-0x7F defined here; 0x80-0xFF need the full IBM CGA ROM dump.
-// =========================================================================
+// Font ROM removed -- loaded from file at construction.
+// See ISA_CGA::load_font().
 
-const uint8_t ISA_CGA::FONT_8X8[2048] = {
+#if 0  // Old hardcoded font kept as reference
+const uint8_t old_font[2048] = {
     // 0x00 NULL
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     // 0x01 smiley
@@ -287,8 +305,7 @@ const uint8_t ISA_CGA::FONT_8X8[2048] = {
     0xE0,0x30,0x30,0x1C,0x30,0x30,0xE0,0x00, // }
     0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00, // ~
     0x00,0x10,0x38,0x6C,0xC6,0xC6,0xFE,0x00, // DEL (0x7F)
-    // 0x80-0xFF: Extended CP437 -- zero-filled placeholder.
-    // Production: embed full CGA character ROM dump.
 };
+#endif
 
 } // namespace bench

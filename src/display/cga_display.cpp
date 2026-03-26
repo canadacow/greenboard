@@ -14,12 +14,12 @@ namespace bench {
 // Embedded HLSL source compiled at runtime.
 static const char CGA_CS_HLSL[] = R"HLSL(
 
-// --- Constant buffer: CGA register state ---
+// --- Constant buffer: CGA register state (no arrays -- avoid HLSL 16-byte alignment) ---
 cbuffer CGA_CB : register(b0) {
     uint mode;           // 0x3D8
     uint color;          // 0x3D9
-    uint crtc[18];       // MC6845 registers
-    uint blink_on;       // 1 = blink visible
+    uint cursor_blink;   // 1 = cursor visible (~3.75 Hz)
+    uint attr_blink;     // 1 = blink-attr chars visible (~1.875 Hz)
     uint composite;      // 1 = composite decode (TODO)
     uint start_addr;     // CRTC R12:R13
     uint cursor_addr;    // CRTC R14:R15
@@ -144,7 +144,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
             bool blink_bit = (attr & 0x80) != 0;
 
             // Blink vs intensity
-            if ((mode & MODE_BLINK) && blink_bit && !blink_on)
+            if ((mode & MODE_BLINK) && blink_bit && !attr_blink)
                 fg = bg;  // hide character
             if (!(mode & MODE_BLINK) && blink_bit)
                 bg |= 0x08;  // high-intensity background
@@ -155,7 +155,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
             uint bit = (glyph_row >> (7 - local_px)) & 1;
 
             // Cursor overlay
-            bool is_cursor = (cursor_enabled != 0) && (blink_on != 0) &&
+            bool is_cursor = (cursor_enabled != 0) && (cursor_blink != 0) &&
                 ((start_addr + row * cols + col) == cursor_addr) &&
                 (scanline >= cursor_start) && (scanline <= cursor_end);
 
@@ -201,27 +201,30 @@ bool CgaRasterizer::init(const RenderContext& rc) {
         device->CreateBuffer(&bd, nullptr, &vram_buf_);
 
         D3D11_SHADER_RESOURCE_VIEW_DESC srv = {};
+        srv.Format = DXGI_FORMAT_R32_TYPELESS;
         srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
         srv.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
         srv.BufferEx.NumElements = ISA_CGA::FB_SIZE / 4;
-        device->CreateShaderResourceView(vram_buf_.Get(), &srv, &vram_srv_);
+        HRESULT hr2 = device->CreateShaderResourceView(vram_buf_.Get(), &srv, &vram_srv_);
+        if (FAILED(hr2)) spdlog::error("[CGA] VRAM SRV failed: 0x{:08X}", (unsigned)hr2);
     }
 
-    // Font ROM buffer (2048 bytes, ByteAddressBuffer)
+    // Font ROM buffer (2048 bytes, ByteAddressBuffer) -- uploaded on first render
     {
         D3D11_BUFFER_DESC bd = {};
         bd.ByteWidth = 2048;
-        bd.Usage = D3D11_USAGE_IMMUTABLE;
+        bd.Usage = D3D11_USAGE_DEFAULT;
         bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-        D3D11_SUBRESOURCE_DATA init = { ISA_CGA::FONT_8X8, 0, 0 };
-        device->CreateBuffer(&bd, &init, &font_buf_);
+        device->CreateBuffer(&bd, nullptr, &font_buf_);
 
         D3D11_SHADER_RESOURCE_VIEW_DESC srv = {};
+        srv.Format = DXGI_FORMAT_R32_TYPELESS;
         srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
         srv.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
         srv.BufferEx.NumElements = 2048 / 4;
-        device->CreateShaderResourceView(font_buf_.Get(), &srv, &font_srv_);
+        HRESULT hr2 = device->CreateShaderResourceView(font_buf_.Get(), &srv, &font_srv_);
+        if (FAILED(hr2)) spdlog::error("[CGA] Font SRV failed: 0x{:08X}", (unsigned)hr2);
     }
 
     // Constant buffer
@@ -280,6 +283,13 @@ void CgaRasterizer::render(const RenderContext& rc) {
     if (!cga_card_ || !cs_) return;
     auto* ctx = rc.d3d_ctx;
     const auto* card = cga_card_;
+
+    // Upload font ROM (once, on first render)
+    static bool font_uploaded = false;
+    if (!font_uploaded && font_buf_) {
+        ctx->UpdateSubresource(font_buf_.Get(), 0, nullptr, card->font_rom(), ISA_CGA::FONT_SIZE, 0);
+        font_uploaded = true;
+    }
 
     // Upload VRAM
     {

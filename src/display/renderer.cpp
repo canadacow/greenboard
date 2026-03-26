@@ -10,13 +10,9 @@
 #include <shellapi.h>
 #include <ole2.h>
 #include <d3d11.h>
-#include <d2d1_1.h>
-#include <dwrite_3.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #pragma comment(lib, "d3d11.lib")
-#pragma comment(lib, "d2d1.lib")
-#pragma comment(lib, "dwrite.lib")
 #pragma comment(lib, "dxgi.lib")
 
 #include <imgui.h>
@@ -69,12 +65,6 @@ struct DxState {
     ComPtr<IDXGISwapChain1> swapChain;
     ComPtr<ID3D11RenderTargetView> rtv;
 
-    ComPtr<ID2D1Factory1> d2dFactory;
-    ComPtr<ID2D1Device> d2dDevice;
-    ComPtr<ID2D1DeviceContext> d2dCtx;
-    ComPtr<ID2D1Bitmap1> d2dTarget;
-
-    ComPtr<IDWriteFactory5> dwriteFactory;
 
     // Fullscreen blit resources (for texture-based rasterizers like CGA)
     ComPtr<ID3D11VertexShader> blit_vs;
@@ -176,26 +166,10 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
     swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuf));
     device->CreateRenderTargetView(backBuf.Get(), nullptr, &rtv);
 
-    // D2D
-    D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory.GetAddressOf());
-    d2dFactory->CreateDevice(dxgiDevice.Get(), &d2dDevice);
-    d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &d2dCtx);
-
-    ComPtr<IDXGISurface> backSurface;
-    swapChain->GetBuffer(0, IID_PPV_ARGS(&backSurface));
-    D2D1_BITMAP_PROPERTIES1 bmpProps = D2D1::BitmapProperties1(
-        D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-    d2dCtx->CreateBitmapFromDxgiSurface(backSurface.Get(), &bmpProps, &d2dTarget);
-    d2dCtx->SetTarget(d2dTarget.Get());
-
-    // DirectWrite factory (needed by MdaRasterizer)
-    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory5),
-        (IUnknown**)dwriteFactory.GetAddressOf());
+    // D2D/DWrite now owned by MdaRasterizer (not created here).
 
     // Initialize active rasterizer
-    RenderContext rc_init = { device.Get(), ctx.Get(), d2dCtx.Get(), dwriteFactory.Get(),
-                              winW, winH, cellW, cellH };
+    RenderContext rc_init = { device.Get(), ctx.Get(), winW, winH, cellW, cellH };
     if (rasterizer)
         rasterizer->init(rc_init);
 
@@ -258,8 +232,7 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
 void DxState::render_display() {
     if (!rasterizer) return;
 
-    RenderContext rc = { device.Get(), ctx.Get(), d2dCtx.Get(), nullptr,
-                         winW, winH, cellW, cellH };
+    RenderContext rc = { device.Get(), ctx.Get(), winW, winH, cellW, cellH };
     rasterizer->render(rc);
 
     if (!rasterizer->uses_d2d()) {
@@ -1097,13 +1070,11 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
             uint8_t xt = TestKeyboard::vk_to_xt((int)wp);
             if (xt) {
-                spdlog::info("[KBD] VK 0x{:02X} -> XT make 0x{:02X}", (int)wp, xt);
                 s_kbd->inject_key(xt);
             }
         } else if (msg == WM_KEYUP || msg == WM_SYSKEYUP) {
             uint8_t xt = TestKeyboard::vk_to_xt((int)wp);
             if (xt) {
-                spdlog::info("[KBD] VK 0x{:02X} -> XT break 0x{:02X}", (int)wp, xt | 0x80);
                 s_kbd->inject_key(xt | 0x80);
             }
         }

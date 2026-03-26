@@ -3,6 +3,9 @@
 #include "display/mda_display.h"
 #include "isa/isa_card.h"
 #include "isa/isa_mda.h"
+#include <d2d1_1.h>
+#include <dwrite_3.h>
+#include <dxgi.h>
 
 #include <cmath>
 
@@ -61,18 +64,30 @@ bool MdaRasterizer::init(const RenderContext& rc) {
     cellW_ = rc.cellW;
     cellH_ = rc.cellH;
 
+    // Create our own D2D stack from the shared D3D11 device
+    ComPtr<IDXGIDevice> dxgiDevice;
+    rc.device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
+
+    D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory_.GetAddressOf());
+    d2dFactory_->CreateDevice(dxgiDevice.Get(), &d2dDevice_);
+    d2dDevice_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &d2dCtx_);
+
+    // DWrite factory
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory5),
+        (IUnknown**)dwriteFactory_.GetAddressOf());
+
     // DirectWrite font setup
     ComPtr<IDWriteFontFile> fontFile;
-    rc.dwrite->CreateFontFileReference(L"assets/Ac437_IBM_MDA.ttf", nullptr, &fontFile);
+    dwriteFactory_->CreateFontFileReference(L"assets/Ac437_IBM_MDA.ttf", nullptr, &fontFile);
     ComPtr<IDWriteFontSetBuilder1> fontSetBuilder;
-    rc.dwrite->CreateFontSetBuilder(&fontSetBuilder);
+    dwriteFactory_->CreateFontSetBuilder(&fontSetBuilder);
     fontSetBuilder->AddFontFile(fontFile.Get());
     ComPtr<IDWriteFontSet> fontSet;
     fontSetBuilder->CreateFontSet(&fontSet);
     ComPtr<IDWriteFontCollection1> fc1;
-    rc.dwrite->CreateFontCollectionFromFontSet(fontSet.Get(), &fc1);
+    dwriteFactory_->CreateFontCollectionFromFontSet(fontSet.Get(), &fc1);
 
-    rc.dwrite->CreateTextFormat(L"Ac437 IBM MDA", fc1.Get(),
+    dwriteFactory_->CreateTextFormat(L"Ac437 IBM MDA", fc1.Get(),
         DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         rc.cellH, L"en-us", &textFormat_);
     textFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -80,10 +95,10 @@ bool MdaRasterizer::init(const RenderContext& rc) {
     textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
 
     // D2D brushes
-    rc.d2d_ctx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.85f, 0.0f), &greenBrush_);
-    rc.d2d_ctx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 1.0f, 0.0f), &brightGreenBrush_);
-    rc.d2d_ctx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &blackBrush_);
-    rc.d2d_ctx->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.65f, 0.0f), &underlineBrush_);
+    d2dCtx_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.85f, 0.0f), &greenBrush_);
+    d2dCtx_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 1.0f, 0.0f), &brightGreenBrush_);
+    d2dCtx_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &blackBrush_);
+    d2dCtx_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.65f, 0.0f), &underlineBrush_);
 
     // QPC for blink timing (frame-rate independent).
     QueryPerformanceFrequency(&qpc_freq_);
@@ -93,7 +108,30 @@ bool MdaRasterizer::init(const RenderContext& rc) {
 }
 
 void MdaRasterizer::render(const RenderContext& rc) {
-    auto* d2dCtx = rc.d2d_ctx;
+    // Bind D2D target to the swap chain back buffer (lazy, recreate if needed)
+    if (!d2dTarget_) {
+        ComPtr<IDXGISurface> backSurface;
+        // Get swap chain from the device's immediate context
+        ComPtr<IDXGIDevice> dxgiDev;
+        rc.device->QueryInterface(IID_PPV_ARGS(&dxgiDev));
+        // We need the swap chain surface -- get it from the RTV's resource
+        ComPtr<ID3D11Resource> rtvRes;
+        ComPtr<ID3D11RenderTargetView> rtv;
+        rc.d3d_ctx->OMGetRenderTargets(1, &rtv, nullptr);
+        if (rtv) {
+            rtv->GetResource(&rtvRes);
+            rtvRes.As(&backSurface);
+        }
+        if (backSurface) {
+            D2D1_BITMAP_PROPERTIES1 bmpProps = D2D1::BitmapProperties1(
+                D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+            d2dCtx_->CreateBitmapFromDxgiSurface(backSurface.Get(), &bmpProps, &d2dTarget_);
+            d2dCtx_->SetTarget(d2dTarget_.Get());
+        }
+    }
+
+    auto* d2dCtx = d2dCtx_.Get();
     const uint8_t* vram = vram_;
     d2dCtx->BeginDraw();
     d2dCtx->Clear(D2D1::ColorF(D2D1::ColorF::Black));

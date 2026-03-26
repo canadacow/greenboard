@@ -1,6 +1,13 @@
 #pragma once
 #include "isa/isa_card.h"
 #include <cstdint>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 
 namespace bench {
 
@@ -42,7 +49,6 @@ public:
     uint8_t color_register() const { return color_; }
     const uint8_t* crtc_regs() const { return crtc_reg_; }
     uint8_t crtc_index() const { return crtc_index_; }
-    bool blink_state() const { return blink_on_; }
 
     // Framebuffer base and size
     static constexpr uint32_t FB_BASE = 0xB8000;
@@ -51,18 +57,19 @@ public:
 
     // --- GPU constant buffer layout (uploaded each frame) ---
     // Matches CGA_CB in cga_rasterize.hlsl
+    // Must match HLSL cbuffer layout exactly (no arrays, no padding surprises).
     struct alignas(16) GpuConstants {
         uint32_t mode;           // mode control register (0x3D8)
         uint32_t color;          // color select register (0x3D9)
-        uint32_t crtc[18];      // MC6845 registers (widened to uint32 for HLSL)
-        uint32_t blink_on;      // 1 = blink visible, 0 = blink hidden
+        uint32_t cursor_blink;  // 1 = cursor visible this frame (1/16 frame rate)
+        uint32_t attr_blink;    // 1 = blink-attr chars visible (1/32 frame rate)
         uint32_t composite;     // 1 = composite decode, 0 = RGBI
         uint32_t start_addr;    // CRTC start address (R12:R13)
         uint32_t cursor_addr;   // CRTC cursor address (R14:R15)
         uint32_t cursor_start;  // cursor start scanline
         uint32_t cursor_end;    // cursor end scanline
         uint32_t cursor_enabled;
-        uint32_t _pad[2];       // align to 16-byte boundary
+        uint32_t _pad[2];       // align to 48 bytes (3x16)
     };
 
     // Fill a GpuConstants struct from current register state.
@@ -117,8 +124,14 @@ public:
         {0, 3, 4, 7},     {0, 11, 12, 15},
     };
 
-    // --- 8x8 CGA character ROM (uploaded as SRV) ---
-    static const uint8_t FONT_8X8[2048];
+    // --- 8x8 CGA character ROM (loaded from file, uploaded as SRV) ---
+    static constexpr int FONT_SIZE = 2048;
+    const uint8_t* font_rom() const { return font_rom_; }
+
+private:
+    uint8_t font_rom_[FONT_SIZE] = {};
+    bool font_loaded_ = false;
+    void load_font(const char* path);
 
     // --- Composite mode ---
     bool composite_mode() const { return composite_; }
@@ -150,9 +163,13 @@ private:
     // Status register state
     uint32_t status_counter_ = 0;
 
-    // Blink state (toggled by status register reads)
-    uint32_t blink_counter_ = 0;
-    bool blink_on_ = true;
+    // Blink timing: QPC wall clock, independent of frame rate.
+    // CGA frame rate: 14.318 MHz / (912 * 262) = ~59.92 Hz.
+    // Cursor blinks at 1/16 frame rate (~3.75 Hz).
+    // Attribute blink at 1/32 frame rate (~1.875 Hz).
+    LARGE_INTEGER qpc_freq_ = {};
+    LARGE_INTEGER qpc_start_ = {};
+    static constexpr double CGA_FRAME_HZ = 14318180.0 / (912.0 * 262.0);
 
     // Composite output mode
     bool composite_ = false;
