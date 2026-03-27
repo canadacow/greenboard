@@ -4,8 +4,8 @@
 ; Test 2: After full KBD_RESET sequence.
 
 ; @name SW1 readback
-; @expect 0500 007D Simple read
-; @expect 0502 007D After KBD_RESET
+; @dump 0500 Simple read
+; @dump 0502 After KBD_RESET
 ;
 cpu 8086
 org 0x0100

@@ -11,15 +11,15 @@
 ;   [0500] = 0x0001   RAM pattern 0xFF verified
 ;   [0502] = 0x0001   RAM pattern 0x00 verified
 ;   [0504] = 0x0001   8259 PIC initialized (ICW1-4, ISR readable)
-;   [0506] = 0x0001   SW1 DIP switches (Port A = 0x7D)
-;   [0508] = 0x0001   SW2 DIP switches (Port C low nibble = 0x06)
+;   [0506]            SW1 raw (Port A) -- dump, varies with config
+;   [0508]            SW2 nibble (Port C & 0x0F) -- dump, varies with config
 
 ; @name POST RAM/PIC (TEST.04)
 ; @expect 0500 0001 RAM pattern FF
 ; @expect 0502 0001 RAM pattern 00
 ; @expect 0504 0001 PIC init
-; @expect 0506 0001 SW1 switches
-; @expect 0508 0001 SW2 switches
+; @dump 0506 SW1 raw (Port A)
+; @dump 0508 SW2 nibble (Port C & 0x0F)
 ;
 cpu 8086
 org 0x0100
@@ -111,27 +111,23 @@ org 0x0100
     mov word [0x0504], 0x0001
 
 ; =====================================================================
-; Test 4: SW1 DIP switches via Port A (PCBIOS.ASM TEST.04 line 453)
-; Expect 0x7D: floppy=1, no 8087=0, 64K RAM=11, MDA=11, 1 drive=00
+; Test 4: SW1 DIP switches via Port A (dump raw value)
 ; =====================================================================
 .test4:
     mov al, 0xFC            ; PB7=1: enable SW1 mux (U23), as BIOS TEST.02 does
     out 0x61, al
     in al, 0x60             ; read PPI Port A (switches)
-    cmp al, 0x7D
-    jne .test5
-    mov word [0x0506], 0x0001
+    xor ah, ah
+    mov [0x0506], ax
 
 ; =====================================================================
-; Test 5: SW2 DIP switches via Port C lower nibble (PCBIOS.ASM line 888)
-; Expect 0x06: 6 expansion RAM banks (bits 0-3)
+; Test 5: SW2 DIP switches via Port C lower nibble (dump raw value)
 ; =====================================================================
 .test5:
     in al, 0x62             ; read PPI Port C
     and al, 0x0F            ; isolate lower nibble (SW2)
-    cmp al, 0x06
-    jne .done
-    mov word [0x0508], 0x0001
+    xor ah, ah
+    mov [0x0508], ax
 
 .done:
     hlt
