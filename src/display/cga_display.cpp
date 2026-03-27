@@ -26,7 +26,10 @@ cbuffer CGA_CB : register(b0) {
     uint cursor_start;   // cursor start scanline
     uint cursor_end;     // cursor end scanline
     uint cursor_enabled; // 1 = cursor on
-    uint _pad0, _pad1;
+    uint max_scanline;   // CRTC R9: char height = max_scanline + 1
+    uint h_displayed;    // CRTC R1: columns displayed
+    uint v_displayed;    // CRTC R6: rows displayed
+    uint _pad0, _pad1, _pad2;
 };
 
 // --- Resources ---
@@ -75,94 +78,140 @@ static const uint gfx_pal[6][4] = {
     {0, 3, 4, 7},    {0, 11, 12, 15},
 };
 
+// =========================================================================
+// CGA rendering -- follows DOSBox-X vga_draw.cpp logic.
+//
+// Output is always 640x200 RGBA.  Text modes render 8 pixels per character
+// (40-col is pixel-doubled).  Graphics modes render at native resolution
+// (320x200 pixel-doubled, 640x200 native).
+//
+// CRTC registers drive character height (R9), displayed columns (R1),
+// and displayed rows (R6).  This handles standard modes AND tweaked modes
+// like 160x100x16 (R9=1, R1=80, R6=100).
+// =========================================================================
+
 [numthreads(16, 16, 1)]
 void CSMain(uint3 dtid : SV_DispatchThreadID) {
-    int px = dtid.x;  // 0-639
-    int py = dtid.y;  // 0-199
+    uint px = dtid.x;  // 0-639
+    uint py = dtid.y;  // 0-199
     if (px >= 640 || py >= 200) return;
 
-    // Display disabled: overscan color
+    float4 overscan = pal_color(color & 0xF);
+
+    // Display disabled: overscan
     if (!(mode & MODE_ENABLE)) {
-        output_tex[dtid.xy] = pal_color(color & 0xF);
+        output_tex[dtid.xy] = overscan;
         return;
     }
 
     float4 out_color = float4(0, 0, 0, 1);
 
     if (mode & MODE_GRAPHICS) {
-        // --- Graphics modes ---
+        // =============================================================
+        // Graphics modes (interleaved scanlines: even at +0, odd at +0x2000)
+        // =============================================================
+        uint row_addr = (py / 2) * 80 + (py & 1) * 0x2000;
+
         if (mode & MODE_HIRES_GFX) {
-            // 640x200, 1 bit per pixel
-            uint row_addr = (py / 2) * 80 + (py & 1) * 0x2000;
-            uint byte_x = px / 8;
-            uint bit = 7 - (px & 7);
-            uint byte_val = vram_byte(row_addr + byte_x);
-            uint lit = (byte_val >> bit) & 1;
+            // 640x200, 1bpp.  8 pixels per byte.
+            uint byte_val = vram_byte(row_addr + px / 8);
+            uint lit = (byte_val >> (7 - (px & 7))) & 1;
             uint fg = color & 0xF;
-            if (fg == 0) fg = 15;
+            if (fg == 0) fg = 15;  // default white if overscan black
             out_color = pal_color(lit ? fg : 0);
         } else {
-            // 320x200, 2 bits per pixel (pixel-doubled to 640)
-            int src_x = px / 2;  // 0-319
-            uint row_addr = (py / 2) * 80 + (py & 1) * 0x2000;
-            uint byte_x = src_x / 4;
-            uint shift = 6 - (src_x & 3) * 2;
-            uint byte_val = vram_byte(row_addr + byte_x);
-            uint pixel = (byte_val >> shift) & 0x3;
-
-            // Palette selection
-            uint pal_idx = 0;
-            if (color & 0x20) pal_idx += 2;  // CC_PALETTE
-            if (color & 0x10) pal_idx += 1;  // CC_BRIGHT
+            // 320x200, 2bpp.  4 pixels per byte, doubled to 640.
+            uint src_x = px / 2;
+            uint byte_val = vram_byte(row_addr + src_x / 4);
+            uint pixel = (byte_val >> (6 - (src_x & 3) * 2)) & 3;
 
             uint color_idx;
-            if (pixel == 0)
-                color_idx = color & 0xF;  // background/overscan
-            else
-                color_idx = gfx_pal[pal_idx][pixel];
-
+            if (pixel == 0) {
+                color_idx = color & 0xF;
+            } else {
+                // DOSBox vga_other.cpp write_cga_color_select():
+                // BW bit selects alternate palette; otherwise palette/bright bits.
+                uint base = (color & 0x10) ? 8 : 0;  // intensity
+                if (mode & MODE_BW)
+                    color_idx = gfx_pal[4 + (base ? 1 : 0)][pixel];
+                else if (color & 0x20)
+                    color_idx = gfx_pal[2 + (base ? 1 : 0)][pixel];
+                else
+                    color_idx = gfx_pal[0 + (base ? 1 : 0)][pixel];
+            }
             out_color = pal_color(color_idx);
         }
     } else {
-        // --- Text modes ---
-        uint cols = (mode & MODE_HIRES_TEXT) ? 80 : 40;
-        uint char_w = (mode & MODE_HIRES_TEXT) ? 8 : 16;  // pixel width per char
+        // =============================================================
+        // Text modes (40x25, 80x25, or CRTC-tweaked like 80x100)
+        //
+        // DOSBox: each character is always 8 output pixels wide.
+        //   40-col mode (MODE_HIRES_TEXT=0): pixel-doubled -> 16px/char
+        //   80-col mode (MODE_HIRES_TEXT=1): native -> 8px/char
+        //
+        // Character height from CRTC R9 (max_scanline + 1).
+        // Column count from CRTC R1 (h_displayed), default 80 or 40.
+        // Row count from CRTC R6 (v_displayed), default 200/char_h.
+        // =============================================================
+        uint char_h = (max_scanline & 0x1F) + 1;
+        if (char_h == 0 || char_h > 32) char_h = 8;
+
+        // Columns from CRTC R1. Default from mode bit if R1 not yet programmed.
+        uint cols = (h_displayed > 0 && h_displayed <= 160) ? h_displayed
+                  : ((mode & MODE_HIRES_TEXT) ? 80 : 40);
+        uint char_w = 640 / cols;
+        if (char_w == 0) char_w = 8;
+        uint rows = (v_displayed > 0 && v_displayed <= 128) ? v_displayed : (200 / char_h);
 
         uint col = px / char_w;
-        uint row = py / 8;
-        uint scanline = py & 7;
+        uint row = py / char_h;
+        uint scanline = py % char_h;
 
-        if (col >= cols || row >= 25) {
-            out_color = pal_color(color & 0xF);  // overscan
+        if (col >= cols || row >= rows) {
+            out_color = overscan;
         } else {
-            uint addr = (start_addr + row * cols + col) * 2;
-            uint ch = vram_byte(addr & 0x3FFF);
-            uint attr = vram_byte((addr + 1) & 0x3FFF);
+            // VRAM address: (start_addr + row * cols + col) * 2
+            uint cell = start_addr + row * cols + col;
+            uint addr = (cell * 2) & 0x3FFF;
+            uint ch   = vram_byte(addr);
+            uint attr  = vram_byte(addr + 1);
 
+            // Attribute decode (DOSBox vga_draw.cpp line 2069-2070):
+            //   fg = attr[3:0]      (16 foreground colors)
+            //   bg = attr[6:4]      (8 background colors)
+            //   blink = attr[7]
             uint fg = attr & 0x0F;
-            uint bg = (attr >> 4) & 0x07;
-            bool blink_bit = (attr & 0x80) != 0;
+            uint bg = (attr >> 4) & 0x0F;  // full 4 bits initially
 
-            // Blink vs intensity
-            if ((mode & MODE_BLINK) && blink_bit && !attr_blink)
-                fg = bg;  // hide character
-            if (!(mode & MODE_BLINK) && blink_bit)
-                bg |= 0x08;  // high-intensity background
+            if (mode & MODE_BLINK) {
+                // Blink mode: bg is 3 bits (0-7), bit 7 controls blink.
+                bg &= 0x07;
+                // DOSBox FontMask: when blink bit set and blink phase off,
+                // font mask = 0 -> all pixels show background.
+                if ((attr & 0x80) && !attr_blink)
+                    fg = bg;
+            }
+            // else: intensity mode -- bg keeps all 4 bits (0-15).
 
-            // Font lookup
-            uint glyph_row = font_byte(ch * 8 + scanline);
-            uint local_px = (mode & MODE_HIRES_TEXT) ? (px & 7) : ((px / 2) & 7);
-            uint bit = (glyph_row >> (7 - local_px)) & 1;
+            // Font lookup.  ROM is 8 bytes per character.
+            // Clamp scanline to 0-7 for font ROM access.
+            uint font_sl = scanline < 8 ? scanline : (scanline & 7);
+            uint glyph = font_byte(ch * 8 + font_sl);
 
-            // Cursor overlay
-            bool is_cursor = (cursor_enabled != 0) && (cursor_blink != 0) &&
-                ((start_addr + row * cols + col) == cursor_addr) &&
-                (scanline >= cursor_start) && (scanline <= cursor_end);
+            // Pixel within character cell -> font column (0-7).
+            // Maps char_w output pixels to 8 font columns.
+            uint font_col = (px % char_w) * 8 / char_w;
+            uint bit = (glyph >> (7 - font_col)) & 1;
 
-            if (is_cursor || bit)
+            // Cursor overlay (DOSBox vga_draw.cpp line 2078-2086).
+            if (cursor_enabled && cursor_blink &&
+                cell == cursor_addr &&
+                scanline >= cursor_start && scanline <= cursor_end) {
+                // Cursor: force foreground color across full cell width.
                 out_color = pal_color(fg);
-            else
-                out_color = pal_color(bg);
+            } else {
+                out_color = pal_color(bit ? fg : bg);
+            }
         }
     }
 

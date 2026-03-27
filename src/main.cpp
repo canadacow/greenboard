@@ -78,6 +78,7 @@ int main() {
     // J3: Display card
 #ifdef DISPLAY_CGA
     cga = std::make_unique<ISA_CGA>();
+    cga->set_clk_counter(&board.clk_gen->clk_cycles_ref());
     isa_bus.insert_card(2, cga.get());
     board.set_video(Board::CGA_80);
 #else

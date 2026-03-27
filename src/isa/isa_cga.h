@@ -69,7 +69,10 @@ public:
         uint32_t cursor_start;  // cursor start scanline
         uint32_t cursor_end;    // cursor end scanline
         uint32_t cursor_enabled;
-        uint32_t _pad[2];       // align to 48 bytes (3x16)
+        uint32_t max_scanline;  // CRTC R9: character height = max_scanline + 1
+        uint32_t h_displayed;   // CRTC R1: columns displayed
+        uint32_t v_displayed;   // CRTC R6: rows displayed
+        uint32_t _pad[3];       // align to 64 bytes (4x16)
     };
 
     // Fill a GpuConstants struct from current register state.
@@ -133,9 +136,13 @@ private:
     bool font_loaded_ = false;
     void load_font(const char* path);
 
+public:
     // --- Composite mode ---
     bool composite_mode() const { return composite_; }
     void set_composite(bool on) { composite_ = on; }
+
+    // Bind to the 8284A's CLK cycle counter for status register timing.
+    void set_clk_counter(const uint64_t* clk) { clk_cycles_ = clk; }
 
     // --- ISA_Card overrides ---
     void on_power_on() override;
@@ -160,8 +167,8 @@ private:
     uint8_t mode_ = 0;
     uint8_t color_ = 0;
 
-    // Status register state
-    uint32_t status_counter_ = 0;
+    // CLK cycle counter (from 8284A, for status register timing)
+    const uint64_t* clk_cycles_ = nullptr;
 
     // Blink timing: QPC wall clock, independent of frame rate.
     // CGA frame rate: 14.318 MHz / (912 * 262) = ~59.92 Hz.
