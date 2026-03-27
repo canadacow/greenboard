@@ -33,6 +33,7 @@
 #include "ic/ic_8253.h"
 #include "ic/ic_8255a.h"
 #include "ic/ic_dip_switch.h"
+#include "board/sw1_mux.h"
 #include "board/sw2_mux.h"
 #include "board/isa_slot.h"
 #include <string>
@@ -310,6 +311,10 @@ struct Board {
     // DIP switch ICs
     IC_DipSwitch sw1_ic{"SW1", 8};
 
+    // SW1 mux: drives PPI PA0-PA7 with equipment byte when PB7=High.
+    // Replaces U23/DipSwitch/remap chain. Releases PA when PB7=Low (keyboard).
+    SW1Mux sw1_mux;
+
     // SW2 mux: U63 gate 3 + U80 buffer 1.  PB2 selects positions 1-4 vs 5.
     SW2Mux sw2_mux;
 
@@ -439,6 +444,7 @@ struct Board {
             sw1 |= (fc & 3) << 6;                        // bits 7:6: drive count
         }
         sw1_ic.set_value(sw1);
+        sw1_mux.set_value(sw1);
 
         // SW2: total memory = 64KB planar base + expansion
         // 10/27/82 BIOS: reads 5-bit value via PB2 mux, multiplies by 32.
@@ -1729,6 +1735,13 @@ struct Board {
         // PB2=Low  -> position 5 on PC0 (via U80 buffer, N-000358)
         sw2_mux.connect(ppi_pb[2], ppi_pc[0], ppi_pc[1], ppi_pc[2], ppi_pc[3]);
 
+        // SW1 mux: PB7 selects switches on PA (High=switches, Low=keyboard).
+        {
+            Signal* pa_ptrs[8];
+            for (int i = 0; i < 8; ++i) pa_ptrs[i] = &ppi_pa[i];
+            sw1_mux.connect(ppi_pb[7], pa_ptrs);
+        }
+
         // SW1 + SW2 values set by compute_switches() after cards are announced.
     }
 
@@ -1736,6 +1749,7 @@ struct Board {
         scheduler.set_bus_address_base(la_block_);
 
         scheduler.register_callback(&sw1_ic);
+        scheduler.register_callback(&sw1_mux);
         scheduler.register_callback(&sw2_mux);
         scheduler.register_callback(xcvr);
         scheduler.register_callback(xcvr13_ic);

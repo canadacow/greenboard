@@ -145,9 +145,11 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                 if (val & 0x08)  // DMA/IRQ enabled
                     bus_->raise_irq(6);
             } else if (!now_active) {
-                // Entering reset.
+                // Entering reset -- NEC 765 deasserts interrupt output.
+                // This ensures a clean rising edge when reset is released.
                 phase_ = Phase::Idle;
                 cmd_len_ = 0;
+                bus_->lower_irq(6);
             }
             break;
         }
