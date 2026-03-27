@@ -187,6 +187,19 @@ public:
         uint8_t await_resume() noexcept { return cpu.bus_op_.read_data; }
     };
 
+    // Halt awaiter: suspends EU back to BIU with no bus request.
+    // Used by HLT instruction so the BIU can poll wake conditions.
+    struct HaltAwaiter {
+        IC_8088& cpu;
+        bool await_ready() noexcept { return false; }
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
+            cpu.bus_op_.kind = BusOp::NONE;
+            cpu.eu_resume_ = h;
+            return std::noop_coroutine();
+        }
+        void await_resume() noexcept {}
+    };
+
     // rmem8 awaiter: register shortcut (no suspend) or bus read (1 suspend).
     struct Rmem8Awaiter {
         IC_8088& cpu;

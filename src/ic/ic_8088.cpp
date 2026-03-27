@@ -257,6 +257,13 @@ BIUTask IC_8088::biu_run() {
         eu_resume_.resume();
         if (eu_done_) break;
 
+        // HLT: EU suspended with no bus request. Yield one cycle so
+        // the halted_ check at the top of this loop can poll wake.
+        if (halted_) {
+            co_await std::suspend_always{};
+            continue;
+        }
+
         // Process the bus request from the EU
         auto kind = bus_op_.kind;
         uint8_t bus_type = kind_to_bus[kind];
@@ -1245,7 +1252,13 @@ EUTask<void> IC_8088::eu_run() {
     ++instr_count_;
 
     // --- end inlined execute() ---
-    if (halted_) break;
+    // HLT: suspend the EU back to the BIU with no bus request. The BIU
+    // loop detects halted_ and polls wake conditions (INTR/NMI) each
+    // cycle.  When woken, the EU resumes here and falls through to the
+    // interrupt check above, which services whatever woke the CPU.
+    while (halted_) {
+        co_await HaltAwaiter{*this};
+    }
     } // for (;;)
     eu_done_ = true;
 }

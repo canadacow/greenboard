@@ -519,7 +519,7 @@ uint32_t ISA_FloppyController::chs_to_offset(int cyl, int head, int sector) cons
     // Sector numbering is 1-based. Uses active drive geometry.
     const auto& d = drives_[active_drive_ & 1];
     uint32_t lba = (cyl * d.heads + head) * d.spt + (sector - 1);
-    return lba * 512;  // always 512 bytes per physical sector
+    return lba * sector_size_;
 }
 
 } // namespace bench
