@@ -33,8 +33,8 @@ cbuffer CGA_CB : register(b0) {
 };
 
 // --- Resources ---
-ByteAddressBuffer vram : register(t0);     // 16KB VRAM
-ByteAddressBuffer font : register(t1);     // 2048-byte 8x8 font ROM
+Buffer<uint> vram : register(t0);          // 16KB VRAM (4096 uint32s)
+Buffer<uint> font_buf : register(t1);      // 2048-byte 8x8 font ROM (512 uint32s)
 Buffer<uint> palette : register(t2);       // 16 RGBA colors
 
 RWTexture2D<float4> output_tex : register(u0);  // 640x200 RGBA output
@@ -49,13 +49,13 @@ RWTexture2D<float4> output_tex : register(u0);  // 640x200 RGBA output
 
 // Read a byte from VRAM
 uint vram_byte(uint addr) {
-    uint word = vram.Load((addr & 0x3FFC));  // align to 4 bytes
+    uint word = vram[addr >> 2];
     return (word >> ((addr & 3) * 8)) & 0xFF;
 }
 
 // Read a byte from font ROM
 uint font_byte(uint addr) {
-    uint word = font.Load((addr & 0x7FC));
+    uint word = font_buf[addr >> 2];
     return (word >> ((addr & 3) * 8)) & 0xFF;
 }
 
@@ -239,39 +239,35 @@ bool CgaRasterizer::init(const RenderContext& rc) {
                                      nullptr, &cs_);
     if (FAILED(hr)) { spdlog::error("[CGA] CreateComputeShader failed"); return false; }
 
-    // VRAM buffer (16KB, ByteAddressBuffer)
+    // VRAM buffer (16KB, Buffer<uint>)
     {
         D3D11_BUFFER_DESC bd = {};
         bd.ByteWidth = ISA_CGA::FB_SIZE;
         bd.Usage = D3D11_USAGE_DYNAMIC;
         bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
         device->CreateBuffer(&bd, nullptr, &vram_buf_);
 
         D3D11_SHADER_RESOURCE_VIEW_DESC srv = {};
-        srv.Format = DXGI_FORMAT_R32_TYPELESS;
-        srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-        srv.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-        srv.BufferEx.NumElements = ISA_CGA::FB_SIZE / 4;
+        srv.Format = DXGI_FORMAT_R32_UINT;
+        srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        srv.Buffer.NumElements = ISA_CGA::FB_SIZE / 4;
         HRESULT hr2 = device->CreateShaderResourceView(vram_buf_.Get(), &srv, &vram_srv_);
         if (FAILED(hr2)) spdlog::error("[CGA] VRAM SRV failed: 0x{:08X}", (unsigned)hr2);
     }
 
-    // Font ROM buffer (2048 bytes, ByteAddressBuffer) -- uploaded on first render
+    // Font ROM buffer (2048 bytes, Buffer<uint>) -- uploaded on first render
     {
         D3D11_BUFFER_DESC bd = {};
         bd.ByteWidth = 2048;
         bd.Usage = D3D11_USAGE_DEFAULT;
         bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
         device->CreateBuffer(&bd, nullptr, &font_buf_);
 
         D3D11_SHADER_RESOURCE_VIEW_DESC srv = {};
-        srv.Format = DXGI_FORMAT_R32_TYPELESS;
-        srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-        srv.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-        srv.BufferEx.NumElements = 2048 / 4;
+        srv.Format = DXGI_FORMAT_R32_UINT;
+        srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        srv.Buffer.NumElements = 2048 / 4;
         HRESULT hr2 = device->CreateShaderResourceView(font_buf_.Get(), &srv, &font_srv_);
         if (FAILED(hr2)) spdlog::error("[CGA] Font SRV failed: 0x{:08X}", (unsigned)hr2);
     }

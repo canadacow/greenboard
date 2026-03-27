@@ -119,6 +119,7 @@ struct DxState {
     float drive_a_screen_y = 0;  // screen Y of drive A row (for drop targeting)
     float drive_b_screen_y = 0;  // screen Y of drive B row
     ISA_FloppyController* fdc = nullptr;
+    const ISA_CGA* cga = nullptr;
 
     // Breakpoint
     char brk_addr_buf[16] = "";
@@ -440,6 +441,21 @@ void DxState::render_debugger() {
     if (do_step_cycle)
         scheduler->step_cycle();
     ImGui::EndDisabled();
+
+    // Dump CGA VRAM to disk
+    if (cga) {
+        ImGui::SameLine();
+        if (ImGui::Button("Dump VRAM")) {
+            FILE* f = fopen("cga_vram.bin", "wb");
+            if (f) {
+                fwrite(cga->vram(), 1, ISA_CGA::FB_SIZE, f);
+                fclose(f);
+                spdlog::info("[CGA] VRAM dumped to cga_vram.bin ({} bytes)", ISA_CGA::FB_SIZE);
+            }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Write 16KB CGA VRAM (0xB8000) to cga_vram.bin");
+    }
 
     // --- Second toolbar row: breakpoint, T-state, DMA ---
     ImGui::Text("Break:");
@@ -1128,6 +1144,7 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.drive_a_path = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
     dx.drive_a_loaded = dx.drive_a_path;
     dx.fdc = fdc_;
+    dx.cga = cga_;
     // Create rasterizer based on installed display card
     if (cga_)
         dx.rasterizer = std::make_unique<CgaRasterizer>(cga_);
