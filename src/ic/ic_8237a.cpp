@@ -604,7 +604,8 @@ void IC_8237A::on_clk_falling() {
         release_data();
         // Datasheet p.4: "wait states (SW) can be inserted between
         // S2 or S3 and S4 by the use of the Ready line."
-        if (pin_ready_.level() != Level::High) break;  // Sw
+        // Channel 0 (DRAM refresh): RAS-only, no device asserts READY.
+        if (active_ch_ != 0 && pin_ready_.level() != Level::High) break;  // Sw
         state_ = State::S4;
         break;
 
