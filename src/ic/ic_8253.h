@@ -52,7 +52,7 @@ private:
         uint8_t load_lsb_value = 0;
         bool read_msb_next = false;
 
-        bool out = true;
+        bool out = false;
         bool gate = true;
         bool counting = false;
         bool loaded = false;

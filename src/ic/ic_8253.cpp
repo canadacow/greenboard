@@ -12,6 +12,10 @@ void IC_8253::on_power_on() {
     write_pending_ = false;
     read_pending_ = false;
     pit_timer_ = 0;
+
+    // Drive output pins to match reset state.
+    for (int i = 0; i < 3; ++i)
+        update_out(i);
 }
 
 void IC_8253::install(Socket& socket) {
