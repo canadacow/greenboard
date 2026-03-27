@@ -203,4 +203,4 @@ jne .lds_fail
 mov word [0x0516], 0x0001
 .lds_fail:
 
-hlt
+int3

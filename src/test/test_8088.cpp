@@ -318,6 +318,7 @@ int main() {
         // Power on: 8284A thread starts, PSU powers all components, drives VCC.
         cpu->set_reset_vector(0x0100, 0x0100);
         cpu->clear_halt();
+        cpu->clear_breakpoint();
 #ifdef BENCH_PIN_VALIDATION
         SignalPool::enable_validation();
 #endif
@@ -334,10 +335,10 @@ int main() {
 #endif
             constexpr uint64_t secondTimeout = 60;
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secondTimeout);
-            while (!cpu->halted() && (debugger || std::chrono::steady_clock::now() < deadline))
+            while (!cpu->breakpoint() && !cpu->halted() && (debugger || std::chrono::steady_clock::now() < deadline))
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
-            if (!cpu->halted())
-                spdlog::warn("  timeout -- CPU did not halt within {}s", secondTimeout);
+            if (!cpu->breakpoint() && !cpu->halted())
+                spdlog::warn("  timeout -- CPU did not halt/breakpoint within {}s", secondTimeout);
         }
 
         // Power off: PSU drops VCC, 8284A stops clock and powers off all components.

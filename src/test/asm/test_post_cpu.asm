@@ -193,4 +193,4 @@ org 0x0100
     mov word [0x050C], 0x0000
 
 .done:
-    hlt
+    int3

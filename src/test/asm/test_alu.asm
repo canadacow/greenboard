@@ -102,4 +102,4 @@ mov ax, 0x00FF
 sbb ax, 0x0000          ; AX = 0x00FF - 0 - CF(1) = 0x00FE
 mov [0x0516], ax        ; expect 0x00FE
 
-hlt
+int3

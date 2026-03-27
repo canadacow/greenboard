@@ -237,9 +237,20 @@ BIUTask IC_8088::biu_run() {
     for (;;) {
         if (pin_vcc_.level() != Level::High) break;
         check_nmi();
-        if (halted_) {
+        if (breakpoint_) {
             co_await std::suspend_always{};
             continue;
+        }
+        if (halted_) {
+            // Real 8088: HLT wakes on INTR (if IF=1) or NMI.
+            bool wake = nmi_pending_;
+            if (!wake && regs8()[FLAG_IF] && pin_intr_.level() == Level::High)
+                wake = true;
+            if (!wake) {
+                co_await std::suspend_always{};
+                continue;
+            }
+            halted_ = false;
         }
 
         // Resume EU -- runs until next bus op or completion
@@ -422,6 +433,7 @@ void IC_8088::cpu_reset() {
     nmi_pending_ = false;
     prefetch_base_ = 0;
     halted_ = false;
+    breakpoint_ = false;
     bus_t_ = BusT::T1;
     t_state_ = TState::Ti;
     instr_count_ = 0;
@@ -1121,8 +1133,9 @@ EUTask<void> IC_8088::eu_run() {
         op_result_ = val;
         break;
     }
-    case 38: // INT 3
+    case 38: // INT 3 (breakpoint)
         ++reg_ip_;
+        breakpoint_ = true;
         PC_INTERRUPT_(3);
         break;
     case 39: { // INT imm8

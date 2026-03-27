@@ -137,4 +137,4 @@ jnz .disable_fail
 mov word [0x0504], 0x0001
 .disable_fail:
 
-hlt
+int3

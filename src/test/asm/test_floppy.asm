@@ -466,7 +466,7 @@ mov cx, 9
     mov [0x0516], dx
 
 .pio_done:
-    hlt
+    int3
 
 ; =====================================================================
 ; Command tables (loaded via CS-relative LODSB)

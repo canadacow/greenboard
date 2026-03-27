@@ -46,7 +46,7 @@ push bx
 pop ax
 mov [0x0506], ax        ; expect 0xBEEF
 
-hlt
+int3
 
 ; ---- subroutines ----
 

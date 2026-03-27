@@ -130,4 +130,4 @@ org 0x0100
     mov [0x0508], ax
 
 .done:
-    hlt
+    int3

@@ -113,7 +113,7 @@ org 0x0100
     mov word [0x0506], 0x0000
 
 .done:
-    hlt
+    int3
 
 ; ---------------------------------------------------------------------------
 ; Subroutine: write AL pattern to all 8 DMA channel regs, verify readback.

@@ -40,4 +40,4 @@ org 0x0100
     jmp .loop
 
 nmi_handler:
-    hlt
+    int3

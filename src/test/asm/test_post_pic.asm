@@ -161,7 +161,7 @@ org 0x0100
 
 .done:
     cli
-    hlt
+    int3
 
 ; =====================================================================
 ; Temporary ISR for hot interrupt check + timer 0 tests

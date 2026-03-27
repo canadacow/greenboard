@@ -211,4 +211,4 @@ je .fail4
 mov word [0x0508], 0x0001
 .fail4:
 
-hlt
+int3

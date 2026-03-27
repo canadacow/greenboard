@@ -100,4 +100,4 @@ add ax, cx
 loop .loop2
 mov [0x050E], ax        ; expect 55 = 0x37
 
-hlt
+int3

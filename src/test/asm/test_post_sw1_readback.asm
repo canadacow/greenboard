@@ -78,7 +78,7 @@ org 0x0100
     xor ah, ah
     mov [0x0502], ax
 
-    hlt
+    int3
 
 temp_isr:
     mov ah, 1

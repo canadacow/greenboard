@@ -111,4 +111,4 @@ jne .skip5
 mov word [RESULT_BASE + 8], 0x0001
 .skip5:
 
-hlt
+int3

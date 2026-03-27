@@ -167,7 +167,7 @@ mov word [0x0504], 0x0001
 ; Store byte count
 mov word [0x0506], COPY_COUNT
 
-hlt
+int3
 
 ; =====================================================================
 ; Source data (in code segment, copied to 0x2000 by CPU at startup)

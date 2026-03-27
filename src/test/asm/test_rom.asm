@@ -88,7 +88,7 @@ org 0x0100
     mov ds, ax
     mov [0x0506], dx        ; 16-bit byte sum
 
-    hlt
+    int3
 
 ; ---- Data ----
 expected_string:

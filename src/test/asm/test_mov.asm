@@ -39,4 +39,4 @@ xchg ax, bx
 mov [0x0506], ax        ; expect 0xDEF0 (was in BX)
 mov [0x0508], bx        ; expect 0x9ABC (was in AX)
 
-hlt
+int3

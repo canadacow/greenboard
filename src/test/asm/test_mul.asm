@@ -118,4 +118,4 @@ mov cl, 4
 shl ax, cl
 mov [0x0512], ax           ; expect 0x0030
 
-hlt
+int3

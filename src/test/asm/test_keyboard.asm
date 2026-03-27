@@ -173,7 +173,7 @@ mov cx, 11
     mov word [0x0504], 0x0001   ; match!
 .no_match:
 
-hlt
+int3
 
 ; =====================================================================
 ; Expected string (in code segment)

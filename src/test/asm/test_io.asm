@@ -130,7 +130,7 @@ jne .io_mem_fail
 mov word [0x050E], 0x0001
 .io_mem_fail:
 
-hlt
+int3
 
 ; =====================================================================
 ; IRQ3 handler (INT 11)

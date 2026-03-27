@@ -103,7 +103,7 @@ mov bl, 1
 div bl                   ; overflow -> INT 0
 ; handler_div0 writes 1 to [0x050E]
 
-hlt
+int3
 
 ; =====================================================================
 ; INT 0 handler: divide error

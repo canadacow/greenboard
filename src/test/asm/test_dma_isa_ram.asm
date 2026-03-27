@@ -182,7 +182,7 @@ DMA_SEG     equ 0x4000      ; segment to read back (4000:0000 = 0x40000)
 .count_done:
     mov [0x050A], cx
 
-    hlt
+    int3
 
 ; =====================================================================
 ; IRQ5 handler

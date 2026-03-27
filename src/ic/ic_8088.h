@@ -248,6 +248,8 @@ public:
     // --- Debugger read-only access (safe to call from any thread while paused) ---
     bool halted() const { return halted_; }
     void clear_halt() { halted_ = false; }
+    bool breakpoint() const { return breakpoint_; }
+    void clear_breakpoint() { breakpoint_ = false; }
     void set_reset_vector(uint16_t cs, uint16_t ip) { start_cs_ = cs; start_ip_ = ip; }
 
     const uint16_t* regs16_ro() const { return reinterpret_cast<const uint16_t*>(regs_); }
@@ -373,6 +375,7 @@ private:
     bool nmi_pending_ = false;
     Level nmi_prev_ = Level::HiZ;
     bool halted_ = false;
+    bool breakpoint_ = false;
 
     BusTx last_bus_tx_;
     uint64_t instr_count_ = 0;

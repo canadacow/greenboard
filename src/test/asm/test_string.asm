@@ -168,4 +168,4 @@ jne .std_fail
 mov word [0x050E], 0x0001
 .std_fail:
 
-hlt
+int3

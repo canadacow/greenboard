@@ -122,7 +122,7 @@ mov al, 42                     ; exit code
 int 0x21
 
 ; Should not reach here (handler does HLT)
-hlt
+int3
 
 ; =====================================================================
 ; Data
@@ -179,5 +179,5 @@ int21_handler:
     ; Exit: store exit code (AL) to [050C] and halt
     mov ah, 0
     mov [0x050C], ax
-    hlt
+    int3
     iret                       ; never reached

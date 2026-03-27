@@ -572,7 +572,7 @@ org 0x0100
     mov word [0x0528], 0x0001
 .test13_fail:
 
-    hlt
+    int3
 
 ; =====================================================================
 ; PIT IRQ0 handler (INT 8) -- for Test 8 (single-shot)

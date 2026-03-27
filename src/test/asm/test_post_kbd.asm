@@ -115,7 +115,7 @@ org 0x0100
 .no_irq:
 .done:
     cli
-    hlt
+    int3
 
 ; =====================================================================
 ; KBD_RESET -- exact copy of PCBIOS.ASM lines 1282-1305

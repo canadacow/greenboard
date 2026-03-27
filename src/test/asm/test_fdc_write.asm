@@ -560,7 +560,7 @@ org 0x0100
     mov dx, FDC_DOR
     out dx, al
     cli
-    hlt
+    int3
 
 ; =====================================================================
 ; DMA setup helpers
