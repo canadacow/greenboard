@@ -3,7 +3,11 @@
 #include "isa/isa_bus.h"
 #include "test/test_keyboard.h"
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <memory>
+#include <vector>
 
 namespace bench {
 
@@ -66,6 +70,54 @@ private:
     Signal* kbd_ready_ = nullptr;
     Signal* kbd_ack_ = nullptr;
     TestKeyboard* keyboard_ = nullptr;
+
+    // HostFS -- shared directory mapped as a DOS drive via redirector TSR.
+    // Ports 0xE0-0xEF.  See hostfs.asm for the DOS side.
+    //
+    // Protocol:
+    //   Write 0xE4       = reset param pointer
+    //   Write 0xE1 (seq) = append byte to param buffer
+    //   Write 0xE0       = execute command (opcode in val)
+    //   Read  0xE0       = status (0=busy, 1=ok, 0xFF=error)
+    //   Read  0xE1 (seq) = next result byte
+    //   Read  0xE2/0xE3  = result length low/high
+    std::filesystem::path hostfs_root_;
+    std::vector<uint8_t> hfs_param_;
+    std::vector<uint8_t> hfs_result_;
+    uint16_t hfs_result_ptr_ = 0;
+    uint8_t  hfs_status_ = 1;  // 1=ok
+
+    // Open file handles (DOS handle -> fstream)
+    uint16_t hfs_next_handle_ = 1;
+    struct HfsFile {
+        std::fstream stream;
+        std::filesystem::path path;
+    };
+    std::map<uint16_t, HfsFile> hfs_files_;
+
+    // FindFirst/FindNext state
+    std::vector<std::filesystem::directory_entry> hfs_dir_entries_;
+    size_t hfs_dir_idx_ = 0;
+
+    void hfs_execute(uint8_t cmd);
+    void hfs_cmd_find_first();
+    void hfs_cmd_find_next();
+    void hfs_cmd_open();
+    void hfs_cmd_close();
+    void hfs_cmd_read();
+    void hfs_cmd_write();
+    void hfs_cmd_get_attr();
+    void hfs_cmd_chdir();
+    void hfs_cmd_get_disk_info();
+    void hfs_cmd_seek();
+    void hfs_cmd_create();
+    void hfs_cmd_mkdir();
+    void hfs_cmd_rmdir();
+    void hfs_cmd_delete();
+    void hfs_cmd_rename();
+
+public:
+    void set_hostfs_root(const std::filesystem::path& root) { hostfs_root_ = root; }
 };
 
 } // namespace bench

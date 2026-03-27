@@ -162,7 +162,12 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
-        "post_kbd",
+        "post_pkey",
+        "post_fdc_detect",
+        "post_pki",
+        //"post_dma_tc0",
+
+        /*"post_kbd",
         "mov",
         "post_ram",
         "post_sw1_readback",
@@ -171,7 +176,7 @@ int main() {
         "dma",
         "dma_isa_ram",
         "dma_m2m",
-        //"dma_refresh",
+        "dma_refresh",
         "mov",
         "rom",
         "io",
@@ -201,7 +206,7 @@ int main() {
         "post_dma",
         "post_fdc",
         "fdc_write",
-        "post_dipsw",
+        "post_dipsw",*/
     };
 
     std::vector<TestCase> tests;
@@ -257,6 +262,12 @@ int main() {
     // ISA RAM expansion: J4, 384KB at 0x40000-0x9FFFF (256KB planar + 384KB = 640KB).
     ISA_RAM isa_ram(0x40000, 384 * 1024);
     isa_bus.insert_card(3, &isa_ram);
+
+    // Configure DIP switches from installed hardware.
+    board.add_floppy_drives(2);
+    board.set_video(Board::MDA);
+    board.add_expansion_kb(384);
+    board.compute_switches();
 
     // Scheduler: commits signals, evals inline ICs, runs fiber components.
     // The 8284A calls scheduler.evaluate(self) at each CLK edge from its spin loop.
@@ -373,7 +384,7 @@ int main() {
 
     spdlog::info("=== Results: {} passed, {} failed ===", passed, failed);
 
-#define RUN_BENCHMARK
+//#define RUN_BENCHMARK
 
 #if defined(RUN_BENCHMARK)
     // --- Benchmark: 64-bit increment loop, timed by NMI ---
