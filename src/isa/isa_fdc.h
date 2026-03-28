@@ -96,6 +96,7 @@ private:
     // Interrupt pending
     bool irq_pending_ = false;
     bool reset_sense_ = false;
+    uint8_t reset_sense_drive_ = 0;
 
     // MSR computation
     uint8_t read_msr() const;

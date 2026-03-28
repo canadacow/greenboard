@@ -42,6 +42,7 @@ void ISA_FloppyController::on_power_on() {
     pio_mode_ = false;
     irq_pending_ = false;
     reset_sense_ = false;
+    reset_sense_drive_ = 0;
     format_mode_ = false;
     format_fill_ = 0;
     format_spt_ = 0;
@@ -91,8 +92,14 @@ uint8_t ISA_FloppyController::read_msr() const {
 
 uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
     switch (port) {
-        case 0x3F4:  // MSR
-            return read_msr();
+        case 0x3F4: {  // MSR
+            uint8_t msr = read_msr();
+            spdlog::info("[{}] MSR read: 0x{:02X} phase={}", name_, msr,
+                phase_ == Phase::Idle ? "Idle" :
+                phase_ == Phase::Command ? "Cmd" :
+                phase_ == Phase::Execution ? "Exec" : "Result");
+            return msr;
+        }
 
         case 0x3F5:  // FIFO
             // PIO execution phase: return next sector byte.
@@ -116,8 +123,11 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
                 if (result_pos_ == 0)
                     bus_->lower_irq(6);
                 uint8_t val = result_buf_[result_pos_++];
+                spdlog::info("[{}] result[{}]=0x{:02X} ({}/{})", name_,
+                    result_pos_ - 1, val, result_pos_, result_len_);
                 if (result_pos_ >= result_len_) {
                     phase_ = Phase::Idle;
+                    spdlog::info("[{}] result phase complete -> Idle", name_);
                 }
                 return val;
             }
@@ -136,13 +146,17 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
             active_drive_ = val & 0x03;
             bool was_reset = !(old & 0x04);
             bool now_active = (val & 0x04) != 0;
+            spdlog::info("[{}] DOR write: 0x{:02X} (old=0x{:02X}) drv={} motor={} dma={} reset={}",
+                name_, val, old, val & 0x03, (val >> 4) & 0x0F,
+                (val & 0x08) ? "on" : "off", (val & 0x04) ? "off" : "ON");
             if (was_reset && now_active) {
-                // Coming out of reset -- real NEC 765 fires IRQ6.
+                spdlog::info("[{}] RESET release -> raising IRQ6", name_);
                 phase_ = Phase::Idle;
                 cmd_len_ = 0;
                 irq_pending_ = true;
                 reset_sense_ = true;
-                if (val & 0x08)  // DMA/IRQ enabled
+                reset_sense_drive_ = 0;  // real 765: poll drives 0-3
+                if (val & 0x08)
                     bus_->raise_irq(6);
             } else if (!now_active) {
                 // Entering reset -- NEC 765 deasserts interrupt output.
@@ -244,16 +258,18 @@ void ISA_FloppyController::start_command() {
             break;
 
         case 0x08: {  // SENSE INTERRUPT STATUS
-            uint8_t drive = dor_ & 0x03;
+            uint8_t drive;
             if (reset_sense_) {
-                // After reset: ST0 = 0xC0 (polling, drive ready transition).
+                // uPD765: after reset, four sense interrupts queued (drives 0-3).
+                drive = reset_sense_drive_++;
                 result_buf_[0] = 0xC0 | drive;
-                reset_sense_ = false;
+                if (reset_sense_drive_ >= 4)
+                    reset_sense_ = false;
             } else {
-                // After seek/recal: ST0 = 0x20 (seek end, normal).
+                drive = dor_ & 0x03;
                 result_buf_[0] = 0x20 | drive;
             }
-            result_buf_[1] = pcn_[drive];   // PCN (current cylinder)
+            result_buf_[1] = pcn_[drive];
             result_len_ = 2;
             result_pos_ = 0;
             phase_ = Phase::Result;
@@ -264,18 +280,15 @@ void ISA_FloppyController::start_command() {
         case 0x07:   // RECALIBRATE
         case 0x0F: { // SEEK
             if (cmd_id == 0x07) {
-                // Recalibrate: move to cylinder 0.
                 uint8_t drive = cmd_buf_[1] & 0x03;
                 pcn_[drive] = 0;
             }
             if (cmd_id == 0x0F) {
-                // Seek: move to specified cylinder.
                 uint8_t drive = cmd_buf_[1] & 0x03;
                 pcn_[drive] = cmd_buf_[2];
             }
             if (cmd_id == 0x07 || cmd_id == 0x0F) {
-                // Fire IRQ for seek completion (real FDC does this).
-                if (dor_ & 0x08) {  // DMA/IRQ enabled
+                if (dor_ & 0x08) {
                     irq_pending_ = true;
                     bus_->raise_irq(6);
                 }
@@ -346,7 +359,6 @@ void ISA_FloppyController::execute_read_data() {
 
     if (pio_mode_) {
         spdlog::info("[{}] PIO mode: {} bytes to transfer", name_, sector_size_);
-        // CPU will poll MSR and read bytes from FIFO.
     } else {
         bus_->assert_drq(2);
     }
