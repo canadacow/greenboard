@@ -1197,7 +1197,13 @@ EUTask<void> IC_8088::eu_run() {
     case 48: // 0F xx (emulator-specific, not used on real hardware)
         break;
     case 53: // HLT
-        halted_ = true;
+        if (regs8()[FLAG_IF] && pin_intr_.level() == Level::High) {
+            // Interrupt already pending -- skip halt, let interrupt check handle it
+        } else if (nmi_pending_) {
+            // NMI pending -- skip halt
+        } else {
+            halted_ = true;
+        }
         break;
     case 54: // ESC (D8-DF): coprocessor opcode, no-op without 8087
         break;
@@ -1212,10 +1218,11 @@ EUTask<void> IC_8088::eu_run() {
         break;
     }
 
-    // Advance IP
-    reg_ip_ += (i_mod_ * (i_mod_ != 3) + 2 * (!i_mod_ && i_rm_ == 6)) * i_mod_size_
-             + TABLE[TABLE_BASE_INST_SIZE][raw_opcode_id_]
-             + TABLE[TABLE_I_W_SIZE][raw_opcode_id_] * (i_w_ + 1);
+    // Advance IP (HLT: don't advance while halted -- reentrant instruction)
+    if (!halted_)
+        reg_ip_ += (i_mod_ * (i_mod_ != 3) + 2 * (!i_mod_ && i_rm_ == 6)) * i_mod_size_
+                 + TABLE[TABLE_BASE_INST_SIZE][raw_opcode_id_]
+                 + TABLE[TABLE_I_W_SIZE][raw_opcode_id_] * (i_w_ + 1);
 
     // Divide error
     if (div_error_) {
@@ -1238,8 +1245,8 @@ EUTask<void> IC_8088::eu_run() {
     if (trap_flag_) { PC_INTERRUPT_(1); }
     trap_flag_ = regs8()[FLAG_TF];
 
-    // Interrupt check
-    if (regs8()[FLAG_IF] && !seg_override_en_ && !rep_override_en_ && !regs8()[FLAG_TF]) {
+    // Interrupt check (not taken during HLT -- handled after HaltAwaiter)
+    if (!halted_ && regs8()[FLAG_IF] && !seg_override_en_ && !rep_override_en_ && !regs8()[FLAG_TF]) {
         if (nmi_pending_) {
             nmi_pending_ = false;
             PC_INTERRUPT_(2);
@@ -1252,12 +1259,13 @@ EUTask<void> IC_8088::eu_run() {
     ++instr_count_;
 
     // --- end inlined execute() ---
-    // HLT: suspend the EU back to the BIU with no bus request. The BIU
-    // loop detects halted_ and polls wake conditions (INTR/NMI) each
-    // cycle.  When woken, the EU resumes here and falls through to the
-    // interrupt check above, which services whatever woke the CPU.
-    while (halted_) {
+    // HLT: suspend without bus activity. BIU yields each cycle checking
+    // for INTR/NMI.  On wake, the for-loop re-fetches HLT (IP didn't
+    // advance). This time INTR is pending, so HLT skips halt, IP
+    // advances, and the normal interrupt check handles it.
+    if (halted_) {
         co_await HaltAwaiter{*this};
+        continue;  // re-fetch HLT at same IP
     }
     } // for (;;)
     eu_done_ = true;
