@@ -506,13 +506,6 @@ void IC_8237A::on_clk_falling() {
         uint8_t upper = static_cast<uint8_t>(ch.current_address >> 8);
         drive_data(upper);
 
-        // Log full 20-bit DMA address (first byte of each transfer only)
-        if (active_ch_ == 2 && ch.current_address == ch.base_address) {
-            uint8_t page = u19_ ? u19_->reg(1) : 0;  // page reg[1] = CH2
-            uint32_t full_addr = (uint32_t(page) << 16) | ch.current_address;
-            spdlog::info("[8237A] CH2 DMA start: base=0x{:04X} curr=0x{:04X} count=0x{:04X} page=0x{:02X} -> phys=0x{:05X}",
-                         ch.base_address, ch.current_address, ch.current_count, page, full_addr);
-        }
         prev_upper_addr_ = upper;
 
         // ADSTB high -- will fall at S2 entry, latching upper address

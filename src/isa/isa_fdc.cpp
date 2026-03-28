@@ -94,10 +94,6 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
     switch (port) {
         case 0x3F4: {  // MSR
             uint8_t msr = read_msr();
-            spdlog::info("[{}] MSR read: 0x{:02X} phase={}", name_, msr,
-                phase_ == Phase::Idle ? "Idle" :
-                phase_ == Phase::Command ? "Cmd" :
-                phase_ == Phase::Execution ? "Exec" : "Result");
             return msr;
         }
 
@@ -109,7 +105,6 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
                     val = active().image[sector_offset_ + xfer_ptr_];
                 xfer_ptr_++;
                 if (xfer_ptr_ >= sector_size_) {
-                    spdlog::info("[{}] PIO sector complete: sector {} ({} bytes)", name_, cur_sector_, xfer_ptr_);
                     if (advance_sector()) {
                         xfer_ptr_ = 0;  // next sector, keep reading
                     } else {
@@ -123,11 +118,8 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
                 if (result_pos_ == 0)
                     bus_->lower_irq(6);
                 uint8_t val = result_buf_[result_pos_++];
-                spdlog::info("[{}] result[{}]=0x{:02X} ({}/{})", name_,
-                    result_pos_ - 1, val, result_pos_, result_len_);
                 if (result_pos_ >= result_len_) {
                     phase_ = Phase::Idle;
-                    spdlog::info("[{}] result phase complete -> Idle", name_);
                 }
                 return val;
             }
@@ -146,11 +138,7 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
             active_drive_ = val & 0x03;
             bool was_reset = !(old & 0x04);
             bool now_active = (val & 0x04) != 0;
-            spdlog::info("[{}] DOR write: 0x{:02X} (old=0x{:02X}) drv={} motor={} dma={} reset={}",
-                name_, val, old, val & 0x03, (val >> 4) & 0x0F,
-                (val & 0x08) ? "on" : "off", (val & 0x04) ? "off" : "ON");
             if (was_reset && now_active) {
-                spdlog::info("[{}] RESET release -> raising IRQ6", name_);
                 phase_ = Phase::Idle;
                 cmd_len_ = 0;
                 irq_pending_ = true;
@@ -175,7 +163,6 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                     active().image[sector_offset_ + xfer_ptr_] = val;
                 xfer_ptr_++;
                 if (xfer_ptr_ >= sector_size_) {
-                    spdlog::info("[{}] PIO write sector complete: sector {} ({} bytes)", name_, cur_sector_, xfer_ptr_);
                     if (advance_sector()) {
                         xfer_ptr_ = 0;
                     } else {
@@ -215,7 +202,6 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                             break;
                         default:
                             cmd_expected_ = 1;  // unknown: just eat 1 byte
-                            spdlog::warn("[{}] unknown FDC command 0x{:02X} (raw=0x{:02X})", name_, cmd_id, val);
                             break;
                     }
                 }
@@ -338,9 +324,6 @@ void ISA_FloppyController::execute_read_data() {
     sector_offset_ = chs_to_offset(cyl, head, sector);
     xfer_ptr_ = 0;
 
-    spdlog::info("[{}] READ DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X}",
-                 name_, cyl, head, sector, n, eot_, sector_size_, sector_offset_);
-
     if (sector_offset_ + sector_size_ > active().image.size()) {
         spdlog::error("[{}] READ DATA: sector beyond image end", name_);
         // Set error in result and skip to result phase.
@@ -358,7 +341,7 @@ void ISA_FloppyController::execute_read_data() {
     pio_mode_ = !(dor_ & 0x08);  // DOR bit 3 clear = PIO mode
 
     if (pio_mode_) {
-        spdlog::info("[{}] PIO mode: {} bytes to transfer", name_, sector_size_);
+        spdlog::debug("[{}] PIO mode: {} bytes to transfer", name_, sector_size_);
     } else {
         bus_->assert_drq(2);
     }
