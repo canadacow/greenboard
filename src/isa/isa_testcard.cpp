@@ -178,10 +178,24 @@ static void hfs_push_dir_entry(std::vector<uint8_t>& r, const fs::directory_entr
     r.push_back(0);  // null terminator
 }
 
+static const char* hfs_cmd_name(uint8_t cmd) {
+    static const char* names[] = {
+        "???", "FindFirst", "FindNext", "Open", "Close",
+        "Read", "Write", "GetAttr", "ChDir", "DiskInfo",
+        "Seek", "Create", "Mkdir", "Rmdir", "Delete", "Rename"
+    };
+    if (cmd < sizeof(names)/sizeof(names[0])) return names[cmd];
+    return "???";
+}
+
 void ISA_TestCard::hfs_execute(uint8_t cmd) {
     hfs_result_.clear();
     hfs_result_ptr_ = 0;
     hfs_status_ = 1;  // assume ok
+
+    std::string param_str(hfs_param_.begin(), hfs_param_.end());
+    spdlog::info("[HostFS] cmd=0x{:02X} ({}) param=\"{}\" root={}",
+                 cmd, hfs_cmd_name(cmd), param_str, hostfs_root_.string());
 
     switch (cmd) {
         case 0x01: hfs_cmd_find_first(); break;
@@ -204,6 +218,8 @@ void ISA_TestCard::hfs_execute(uint8_t cmd) {
             hfs_status_ = 0xFF;
             break;
     }
+
+    spdlog::info("[HostFS] -> status={} result_len={}", hfs_status_, hfs_result_.size());
 }
 
 void ISA_TestCard::hfs_cmd_find_first() {
@@ -242,13 +258,33 @@ void ISA_TestCard::hfs_cmd_find_next() {
     hfs_push_dir_entry(hfs_result_, hfs_dir_entries_[hfs_dir_idx_++]);
 }
 
+// Open and Create both return: handle(2), attr(1), time(2), date(2), size(4)
+// to match what fill_sft() on the TSR side expects.
+static void hfs_push_file_meta(std::vector<uint8_t>& r, uint16_t handle,
+                                const fs::path& path) {
+    hfs_put_u16(r, handle);
+
+    std::error_code ec;
+    auto entry = fs::directory_entry(path, ec);
+    uint8_t attr = ec ? 0x20 : to_dos_attr(entry);
+    r.push_back(attr);
+
+    uint16_t date = 0, time = 0;
+    if (!ec) to_dos_datetime(entry.last_write_time(), date, time);
+    hfs_put_u16(r, time);
+    hfs_put_u16(r, date);
+
+    uint32_t size = 0;
+    if (!ec && entry.is_regular_file()) size = static_cast<uint32_t>(entry.file_size());
+    hfs_put_u32(r, size);
+}
+
 void ISA_TestCard::hfs_cmd_open() {
     std::string path_str = hfs_get_string(hfs_param_);
     auto path = ISA_TestCard_resolve(hostfs_root_, path_str);
 
     std::fstream f(path, std::ios::in | std::ios::out | std::ios::binary);
     if (!f.is_open()) {
-        // Try read-only
         f.open(path, std::ios::in | std::ios::binary);
     }
     if (!f.is_open()) {
@@ -259,7 +295,7 @@ void ISA_TestCard::hfs_cmd_open() {
 
     uint16_t h = hfs_next_handle_++;
     hfs_files_[h] = {std::move(f), path};
-    hfs_put_u16(hfs_result_, h);
+    hfs_push_file_meta(hfs_result_, h, path);
     spdlog::info("[HostFS] open {} -> handle {}", path.string(), h);
 }
 
@@ -337,11 +373,13 @@ void ISA_TestCard::hfs_cmd_chdir() {
 }
 
 void ISA_TestCard::hfs_cmd_get_disk_info() {
-    // Report generous fake geometry: 1024 clusters, 512 bytes/sector, 64 sectors/cluster
-    hfs_put_u16(hfs_result_, 1024);  // total clusters
-    hfs_put_u16(hfs_result_, 512);   // free clusters
-    hfs_put_u16(hfs_result_, 512);   // bytes per sector
-    hfs_put_u16(hfs_result_, 64);    // sectors per cluster
+    // Fake geometry matching DOS expectations:
+    // Order: sectors/cluster, total_clusters, bytes/sector, free_clusters
+    // -> TSR maps to AX=spc, BX=total, CX=bps, DX=free
+    hfs_put_u16(hfs_result_, 64);    // sectors per cluster (AX)
+    hfs_put_u16(hfs_result_, 1024);  // total clusters      (BX)
+    hfs_put_u16(hfs_result_, 512);   // bytes per sector    (CX)
+    hfs_put_u16(hfs_result_, 512);   // free clusters       (DX)
 }
 
 void ISA_TestCard::hfs_cmd_seek() {
@@ -380,7 +418,7 @@ void ISA_TestCard::hfs_cmd_create() {
 
     uint16_t h = hfs_next_handle_++;
     hfs_files_[h] = {std::move(f), path};
-    hfs_put_u16(hfs_result_, h);
+    hfs_push_file_meta(hfs_result_, h, path);
     spdlog::info("[HostFS] create {} -> handle {}", path.string(), h);
 }
 

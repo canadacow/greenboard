@@ -54,7 +54,8 @@ int main() {
     isa_bus.insert_card(0, &testcard, 0x0A, 0xBC);
 
     // J2: Floppy disk controller (DMA channel 2, IRQ 6)
-    std::string dos_disk = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
+    //std::string dos_disk = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
+    std::string dos_disk = "assets/IBM_DOS_33_With_Drive.img";
     std::vector<uint8_t> floppy_img;
     {
         std::ifstream f(dos_disk, std::ios::binary | std::ios::ate);
@@ -110,6 +111,7 @@ int main() {
     // --- Keyboard ---
     testcard.set_kbd_ready_signal(&board.kbd_ready);
     testcard.set_kbd_ack_signal(&board.kbd_ack);
+    testcard.set_hostfs_root("D:/dos");
     TestKeyboard keyboard;
     testcard.set_keyboard(&keyboard);
     {
