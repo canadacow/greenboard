@@ -389,6 +389,19 @@ private:
     Level nmi_prev_ = Level::HiZ;
     bool halted_ = false;
     bool breakpoint_ = false;
+    uint32_t last_logged_cs_ip_ = ~0u;
+
+public:
+    // Debug: direct memory peek (set externally, bypasses bus)
+    std::function<uint8_t(uint32_t)> debug_peek_;
+    // Debug: returns bus state string (AEN, ~MEMW, ~MEMR, inhibit, etc.)
+    std::function<std::string()> debug_bus_state_;
+private:
+
+    bool int13_pending_ = false;
+    uint16_t int13_ret_cs_ = 0;
+    uint16_t int13_ret_ip_ = 0;
+    uint16_t int13_ret_sp_ = 0;
 
     BusTx last_bus_tx_;
     uint64_t instr_count_ = 0;

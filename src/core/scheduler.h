@@ -108,6 +108,11 @@ public:
             }
         }
 
+        // Dump bidir block index for offline perm decoding.
+        for (int b = 0; b < num_bidir; ++b) {
+            spdlog::info("[DAG] bidir[{}] = {}", b, bidir_refs_[b].comp->name());
+        }
+
         // Store evals list for on-demand solve_perm().
         evals_.assign(evals.begin(), evals.end());
         wave_plans_.clear();
@@ -308,6 +313,8 @@ public:
             plan.flatten();
             it = wave_plans_.emplace(perm, std::move(plan)).first;
         }
+
+        current_perm_ = perm;
 
         // Flattened eval: single contiguous array, plain index loop.
         // No double indirection through vector<vector<Component*>>.
@@ -512,6 +519,10 @@ private:
         }
     };
     std::unordered_map<uint64_t, WavePlan> wave_plans_;
+    uint64_t current_perm_ = 0;
+public:
+    uint64_t current_perm() const { return current_perm_; }
+private:
 
     // Bidir block references for runtime DAG selection.
     struct BidirRef {

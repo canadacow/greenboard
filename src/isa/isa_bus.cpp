@@ -128,8 +128,10 @@ void ISA_Bus::insert_card(int slot_idx, ISA_Card* card,
 void ISA_Bus::on_power_on() {
     ior_prev_ = Level::HiZ;
     iow_prev_ = Level::HiZ;
-    memr_prev_ = Level::HiZ;
-    memw_prev_ = Level::HiZ;
+    dma_memr_prev_ = Level::HiZ;
+    dma_memw_prev_ = Level::HiZ;
+    cpu_memr_prev_ = Level::HiZ;
+    cpu_memw_prev_ = Level::HiZ;
     for (int ch = 0; ch < 4; ++ch)
         dack_prev_[ch] = Level::HiZ;
     tc_prev_ = Level::HiZ;
@@ -221,25 +223,25 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
     if (dma_active()) {
         Level memr_cur = memr_.level();
         Level memw_cur = memw_.level();
-        if (memw_cur == Level::Low && memw_prev_ != Level::Low) {
+        if (memw_cur == Level::Low && dma_memw_prev_ != Level::Low) {
             uint32_t addr = SignalPool::bus_address;
             ISA_Card* card = find_mmio_owner(addr);
             if (card)
                 card->on_mmio_write(addr, read_sd());
         }
-        if (memr_cur == Level::Low && memr_prev_ != Level::Low) {
+        if (memr_cur == Level::Low && dma_memr_prev_ != Level::Low) {
             uint32_t addr = SignalPool::bus_address;
             ISA_Card* card = find_mmio_owner(addr);
             if (card)
                 drive_sd(card->on_mmio_read(addr));
-        } else if (memr_cur != Level::Low && memr_prev_ == Level::Low) {
+        } else if (memr_cur != Level::Low && dma_memr_prev_ == Level::Low) {
             // Only release if we were driving for MMIO (not device DMA)
             uint32_t addr = SignalPool::bus_address;
             if (find_mmio_owner(addr) && data_driven_)
                 release_sd();
         }
-        memr_prev_ = memr_cur;
-        memw_prev_ = memw_cur;
+        dma_memr_prev_ = memr_cur;
+        dma_memw_prev_ = memw_cur;
     }
 
     // --- CPU I/O ---
@@ -255,7 +257,6 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
         } else if (iow_cur == Level::Low && iow_prev_ != Level::Low) {
             write_pending_ = true;
         }
-        iow_prev_ = iow_cur;
 
         if (read_pending_) {
             bool any_dack = false;
@@ -279,39 +280,47 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
                 release_sd();
             }
         }
-        ior_prev_ = ior_cur;
+    }
+    iow_prev_ = iow_cur;
+    ior_prev_ = ior_cur;
 
-        // --- MMIO ---
+    // --- CPU MMIO ---
+    // Runs unconditionally: the 8288 bus recovery re-asserts ~MEMW/~MEMR
+    // after DMA releases, and AEN may still be High at that point.
+    // The CPU's address and data are still valid on the bus.
+    {
         Level memr_cur = memr_.level();
         Level memw_cur = memw_.level();
 
         if (mem_write_pending_) {
-            uint32_t addr = read_address();
+            uint32_t addr = SignalPool::bus_address;
             ISA_Card* card = find_mmio_owner(addr);
             if (card) {
                 uint8_t val = read_sd();
                 card->on_mmio_write(addr, val);
             }
             mem_write_pending_ = false;
-        } else if (memw_cur == Level::Low && memw_prev_ != Level::Low) {
-            uint32_t addr = read_address();
+        } else if (memw_cur == Level::Low && cpu_memw_prev_ != Level::Low) {
+            uint32_t addr = SignalPool::bus_address;
             if (find_mmio_owner(addr))
                 mem_write_pending_ = true;
         }
-        memw_prev_ = memw_cur;
+        cpu_memw_prev_ = memw_cur;
 
         if (memr_cur == Level::Low) {
-            uint32_t addr = read_address();
+            uint32_t addr = SignalPool::bus_address;
             ISA_Card* card = find_mmio_owner(addr);
-            if (card)
+            if (addr >= 0x40000 && addr < 0xA0000) {
+                uint8_t val = card->on_mmio_read(addr);
+                spdlog::info("[ISA] MMIO read {:05X} val={:02X}", addr, val);
+                drive_sd(val);
+            } else if (card) {
                 drive_sd(card->on_mmio_read(addr));
-        } else if (memr_prev_ == Level::Low) {
+            }
+        } else if (cpu_memr_prev_ == Level::Low) {
             if (data_driven_) release_sd();
         }
-        memr_prev_ = memr_cur;
-    } else {
-        ior_prev_ = ior_cur;
-        iow_prev_ = iow_cur;
+        cpu_memr_prev_ = memr_cur;
     }
 }
 

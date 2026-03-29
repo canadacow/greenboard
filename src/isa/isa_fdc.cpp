@@ -43,6 +43,9 @@ void ISA_FloppyController::on_power_on() {
     irq_pending_ = false;
     reset_sense_ = false;
     reset_sense_drive_ = 0;
+    seek_complete_pending_ = false;
+    seek_complete_st0_ = 0;
+    seek_complete_drive_ = 0;
     format_mode_ = false;
     format_fill_ = 0;
     format_spt_ = 0;
@@ -94,6 +97,7 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
     switch (port) {
         case 0x3F4: {  // MSR
             uint8_t msr = read_msr();
+            spdlog::info("[{}] MSR=0x{:02X} phase={}", name_, msr, (int)phase_);
             return msr;
         }
 
@@ -115,14 +119,22 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
             }
             // Result phase: return status bytes.
             if (phase_ == Phase::Result && result_pos_ < result_len_) {
-                if (result_pos_ == 0)
+                if (result_pos_ == 0) {
+                    spdlog::info("[{}] lowering IRQ6 (first result byte read)", name_);
                     bus_->lower_irq(6);
-                uint8_t val = result_buf_[result_pos_++];
+                }
+                uint8_t val = result_buf_[result_pos_];
+                spdlog::info("[{}] result read [{}]={:02X}", name_, result_pos_, val);
+                result_pos_++;
                 if (result_pos_ >= result_len_) {
+                    spdlog::info("[{}] all result bytes read, phase -> Idle", name_);
                     phase_ = Phase::Idle;
                 }
                 return val;
             }
+            // Not in result phase but BIOS is reading data register
+            spdlog::warn("[{}] port 3F5 read in phase {} (not Result), returning 0xFF",
+                         name_, (int)phase_);
             return 0xFF;
 
         default:
@@ -135,6 +147,8 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
         case 0x3F2: {  // DOR
             uint8_t old = dor_;
             dor_ = val;
+            spdlog::info("[{}] DOR write: 0x{:02X} (was 0x{:02X}) phase={}",
+                         name_, val, old, (int)phase_);
             active_drive_ = val & 0x03;
             bool was_reset = !(old & 0x04);
             bool now_active = (val & 0x04) != 0;
@@ -170,6 +184,17 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
                     }
                 }
                 break;
+            }
+            // Real 765: writing a command byte while in Result phase
+            // aborts the pending result and accepts the new command.
+            // This happens when the BIOS skips unread result bytes
+            // (e.g. only reads 1 of 4 post-reset SENSEs then sends SPECIFY).
+            if (phase_ == Phase::Result) {
+                spdlog::info("[{}] command byte 0x{:02X} during Result phase, resetting to accept",
+                             name_, val);
+                phase_ = Phase::Idle;
+                result_len_ = 0;
+                result_pos_ = 0;
             }
             if (phase_ == Phase::Idle || phase_ == Phase::Command) {
                 if (phase_ == Phase::Idle) {
@@ -227,6 +252,8 @@ void ISA_FloppyController::on_mmio_write(uint32_t /*addr*/, uint8_t /*val*/) {}
 
 void ISA_FloppyController::start_command() {
     uint8_t cmd_id = cmd_buf_[0] & 0x1F;
+    spdlog::info("[{}] start_command: id=0x{:02X} len={} phase={}",
+                 name_, cmd_id, cmd_len_, (int)phase_);
     // Commands with a HD|DS byte use it to select the active drive.
     if (cmd_expected_ >= 2)
         active_drive_ = cmd_buf_[1] & 0x03;
@@ -245,15 +272,24 @@ void ISA_FloppyController::start_command() {
 
         case 0x08: {  // SENSE INTERRUPT STATUS
             uint8_t drive;
-            if (reset_sense_) {
-                // uPD765: after reset, four sense interrupts queued (drives 0-3).
+            if (seek_complete_pending_) {
+                // Seek/recalibrate completion takes priority over reset senses.
+                drive = seek_complete_drive_;
+                result_buf_[0] = seek_complete_st0_;
+                seek_complete_pending_ = false;
+                spdlog::info("[{}] SENSE: seek/recal complete drive {} ST0={:02X}",
+                             name_, drive, result_buf_[0]);
+            } else if (reset_sense_) {
                 drive = reset_sense_drive_++;
                 result_buf_[0] = 0xC0 | drive;
+                spdlog::info("[{}] SENSE: reset drive {} (remaining={})",
+                             name_, drive, 4 - reset_sense_drive_);
                 if (reset_sense_drive_ >= 4)
                     reset_sense_ = false;
             } else {
                 drive = dor_ & 0x03;
                 result_buf_[0] = 0x20 | drive;
+                spdlog::info("[{}] SENSE: normal drive {}", name_, drive);
             }
             result_buf_[1] = pcn_[drive];
             result_len_ = 2;
@@ -274,8 +310,13 @@ void ISA_FloppyController::start_command() {
                 pcn_[drive] = cmd_buf_[2];
             }
             if (cmd_id == 0x07 || cmd_id == 0x0F) {
+                uint8_t drive = cmd_buf_[1] & 0x03;
+                seek_complete_pending_ = true;
+                seek_complete_drive_ = drive;
+                seek_complete_st0_ = 0x20 | drive;  // normal + seek end
                 if (dor_ & 0x08) {
                     irq_pending_ = true;
+                    spdlog::info("[{}] SEEK/RECAL complete, raising IRQ6", name_);
                     bus_->raise_irq(6);
                 }
             }
@@ -288,7 +329,7 @@ void ISA_FloppyController::start_command() {
             uint8_t drive = cmd_buf_[1] & 0x03;
             uint8_t head  = (cmd_buf_[1] >> 2) & 0x01;
             // Return the current position (next sector on the track).
-            result_buf_[0] = 0x00;  // ST0: normal
+            result_buf_[0] = (head << 2) | drive;  // ST0: normal, HD + DS
             result_buf_[1] = 0x00;  // ST1
             result_buf_[2] = 0x00;  // ST2
             result_buf_[3] = pcn_[drive];
@@ -323,6 +364,19 @@ void ISA_FloppyController::execute_read_data() {
     eot_ = cmd_buf_[6];
     sector_offset_ = chs_to_offset(cyl, head, sector);
     xfer_ptr_ = 0;
+    dma_bytes_transferred_ = 0;
+
+    spdlog::info("[{}] READ DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X} imgsize=0x{:05X}",
+                 name_, cyl, head, sector, n, eot_, sector_size_, sector_offset_,
+                 active().image.size());
+    // Dump first 16 bytes at that offset
+    if (sector_offset_ + 16 <= active().image.size()) {
+        const uint8_t* p = active().image.data() + sector_offset_;
+        spdlog::info("[{}]   data: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} "
+                     "{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+                     name_, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+                     p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+    }
 
     if (sector_offset_ + sector_size_ > active().image.size()) {
         spdlog::error("[{}] READ DATA: sector beyond image end", name_);
@@ -423,6 +477,11 @@ void ISA_FloppyController::execute_format_track() {
 // =========================================================================
 
 uint8_t ISA_FloppyController::on_dma_read() {
+    dma_bytes_transferred_++;
+    if (phase_ != Phase::Execution) {
+        spdlog::error("[{}] on_dma_read called but phase={} (not Execution)! byte #{}",
+                      name_, (int)phase_, dma_bytes_transferred_);
+    }
     uint8_t byte = 0x00;
     if (sector_offset_ + xfer_ptr_ < active().image.size())
         byte = active().image[sector_offset_ + xfer_ptr_];
@@ -433,6 +492,8 @@ uint8_t ISA_FloppyController::on_dma_read() {
     if (xfer_ptr_ >= sector_size_ && cur_sector_ < eot_) {
         advance_sector();
         xfer_ptr_ = 0;
+        spdlog::info("[{}] DMA advanced to sector {} (offset=0x{:05X}, {} bytes so far)",
+                     name_, cur_sector_, sector_offset_, dma_bytes_transferred_);
     }
     return byte;
 }
@@ -466,7 +527,7 @@ void ISA_FloppyController::on_dma_write(uint8_t val) {
 }
 
 void ISA_FloppyController::on_dma_complete(int /*channel*/) {
-    spdlog::debug("[{}] DMA complete", name_);
+    spdlog::info("[{}] DMA complete after {} bytes", name_, dma_bytes_transferred_);
     format_mode_ = false;
     build_result_ok();
 }
@@ -492,20 +553,26 @@ void ISA_FloppyController::build_result_ok() {
     int head = cmd_buf_[3];
     int n    = cmd_buf_[5];
 
-    result_buf_[0] = 0x00;  // ST0: normal
+    result_buf_[0] = (head << 2) | (active_drive_ & 0x03);  // ST0: normal, HD + DS
     result_buf_[1] = 0x00;  // ST1: no errors
     result_buf_[2] = 0x00;  // ST2: no errors
     result_buf_[3] = static_cast<uint8_t>(cyl);
     result_buf_[4] = static_cast<uint8_t>(head);
-    result_buf_[5] = static_cast<uint8_t>(cur_sector_ + 1);  // next sector
+    result_buf_[5] = static_cast<uint8_t>(cur_sector_);  // sector after last read
     result_buf_[6] = static_cast<uint8_t>(n);
     result_len_ = 7;
     result_pos_ = 0;
     phase_ = Phase::Result;
 
+    spdlog::info("[{}] result: ST0={:02X} ST1={:02X} ST2={:02X} C={} H={} R={} N={}",
+                 name_, result_buf_[0], result_buf_[1], result_buf_[2],
+                 result_buf_[3], result_buf_[4], result_buf_[5], result_buf_[6]);
+
     // Fire IRQ 6 (if DMA/IRQ enabled in DOR).
-    if (dor_ & 0x08)
+    if (dor_ & 0x08) {
+        spdlog::info("[{}] raising IRQ6 for result (DMA complete)", name_);
         bus_->raise_irq(6);
+    }
 }
 
 // =========================================================================

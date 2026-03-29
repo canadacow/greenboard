@@ -315,6 +315,9 @@ void IC_8237A::on_bus_write() {
             } else {
                 ch_[ch].base_count = (ch_[ch].base_count & 0x00FF) | (data << 8);
                 ch_[ch].current_count = (ch_[ch].current_count & 0x00FF) | (data << 8);
+                if (ch == 2)
+                    spdlog::info("[8237A] CH2 count programmed: {} ({} bytes)",
+                                 ch_[ch].current_count, ch_[ch].current_count + 1);
             }
             flip_flop_ = !flip_flop_;
             break;
@@ -425,9 +428,10 @@ void IC_8237A::evaluate_dreq() {
     // HLDA to go low before activating HRQ to service another channel."
     if (pin_hlda_.level() == Level::High) return;
 
-    // Don't assert HRQ during bus recovery -- CPU needs the bus to complete
-    // its interrupted read/write before DMA can take it again.
-    if (bus_ctrl_->bus_hold())
+    // Don't assert HRQ during bus recovery or while the CPU has an active
+    // bus cycle.  Entering BusRequested changes bidir directions which
+    // alters the DAG permutation -- must not happen mid-cycle.
+    if (bus_ctrl_->bus_hold() || bus_ctrl_->cpu_bus_busy())
         return;
 
     // Fixed priority: CH0 highest

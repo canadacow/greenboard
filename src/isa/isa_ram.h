@@ -1,5 +1,6 @@
 #pragma once
 #include "isa/isa_card.h"
+#include <spdlog/spdlog.h>
 #include <cstdint>
 #include <cstring>
 
@@ -36,6 +37,7 @@ public:
         return ram_[addr - base_];
     }
     void on_mmio_write(uint32_t addr, uint8_t val) override {
+        spdlog::info("[RAM] write {:05X} = {:02X}", addr, val);
         ram_[addr - base_] = val;
     }
 

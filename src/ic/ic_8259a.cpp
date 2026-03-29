@@ -136,6 +136,13 @@ void IC_8259A::on_cycle(Fiber /*caller*/) {
             ir_prev_ |= (1 << i);
             if (edge_triggered_) {
                 irr_ |= (1 << i);
+                if (i == 6) {
+                    spdlog::info("[8259A] IRQ6 edge -> IRR={:02X} IMR={:02X} ISR={:02X} masked={} "
+                                 "blocked_by_isr={}",
+                                 irr_, imr_, isr_,
+                                 (imr_ & (1 << 6)) ? 1 : 0,
+                                 (isr_ & ((1 << 6) - 1)) ? 1 : 0);
+                }
                 evaluate_int();
             }
         } else if (!now_high && !was_low) {
@@ -270,6 +277,8 @@ void IC_8259A::on_inta_falling() {
     if (inta_count_ == 1) {
         inta_level_ = highest_priority_irq(irr_ & ~imr_);
         if (inta_level_ >= 0) {
+            if (inta_level_ == 6)
+                spdlog::info("[8259A] INTA: acknowledging IRQ6, vector={:02X}", vector_base_ | 6);
             isr_ |= (1 << inta_level_);
             irr_ &= ~(1 << inta_level_);
             int_.drive(Level::Low);
@@ -299,8 +308,14 @@ void IC_8259A::evaluate_int() {
     if (req >= 0) {
         int svc = highest_priority_irq(isr_);
         if (svc < 0 || req < svc) {
+            if (req == 6) {
+                spdlog::info("[8259A] INTR=High for IRQ6 (ISR={:02X} svc={})", isr_, svc);
+            }
             int_.drive(Level::High);
             return;
+        }
+        if (req == 6) {
+            spdlog::info("[8259A] IRQ6 blocked by ISR: ISR={:02X} svc={} req={}", isr_, svc, req);
         }
     }
 

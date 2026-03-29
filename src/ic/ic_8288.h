@@ -79,6 +79,9 @@ public:
     //   B4 (hold=0): DRAM reads, CPU reads, DMA unblocked
     // bus_hold() keeps READY Low during B0-B3 (hold > 0).
     bool bus_hold() const { return bus_hold_ > 0; }
+    bool inhibited() const { return inhibited_; }
+    int bus_hold_count() const { return bus_hold_; }
+    bool cpu_bus_busy() const { return commanding_; }
 
 protected:
     void on_power_on() override;

@@ -34,6 +34,10 @@ public:
     void on_cycle(Fiber caller) override;
     void on_power_on() override;
 
+    // Debug: pin levels as the ISA bus sees them
+    Level memr_level() const { return memr_.level(); }
+    Level memw_level() const { return memw_.level(); }
+
 private:
     // Slot cards
     ISA_Card* cards_[MAX_SLOTS] = {};
@@ -75,8 +79,10 @@ private:
     // Edge tracking
     Level ior_prev_ = Level::HiZ;
     Level iow_prev_ = Level::HiZ;
-    Level memr_prev_ = Level::HiZ;
-    Level memw_prev_ = Level::HiZ;
+    Level dma_memr_prev_ = Level::HiZ;
+    Level dma_memw_prev_ = Level::HiZ;
+    Level cpu_memr_prev_ = Level::HiZ;
+    Level cpu_memw_prev_ = Level::HiZ;
     bool mem_write_pending_ = false;
     bool data_driven_ = false;
     uint8_t read_byte_ = 0;

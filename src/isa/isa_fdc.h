@@ -95,8 +95,14 @@ private:
 
     // Interrupt pending
     bool irq_pending_ = false;
+    uint32_t dma_bytes_transferred_ = 0;
     bool reset_sense_ = false;
     uint8_t reset_sense_drive_ = 0;
+
+    // Seek/recalibrate completion (returned by SENSE before reset senses)
+    bool seek_complete_pending_ = false;
+    uint8_t seek_complete_st0_ = 0;
+    uint8_t seek_complete_drive_ = 0;
 
     // MSR computation
     uint8_t read_msr() const;

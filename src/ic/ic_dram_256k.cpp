@@ -169,9 +169,13 @@ void IC_DRAM_256K::on_cycle(Fiber /*caller*/) {
             }
             ram_[addr] = data;
             parity_[addr] = bank.din[8].level() == Level::High ? 1 : 0;
+            if (linear == 0x043E)
+                spdlog::info("[DRAM] write BDA 3Eh = 0x{:02X}", data);
         } else {
             // Read: drive DOUT pins from RAM
             uint8_t data = ram_[addr];
+            if (linear == 0x043E)
+                spdlog::info("[DRAM] read BDA 3Eh = 0x{:02X}", data);
             for (int i = 0; i < 8; ++i) {
                 bank.dout[i].drive((data >> i) & 1 ? Level::High : Level::Low);
             }

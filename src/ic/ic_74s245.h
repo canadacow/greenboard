@@ -65,6 +65,10 @@ private:
 
     enum class Driving driving_ = Driving::None;       // active (read by on_cycle)
     enum class Driving pending_driving_ = Driving::None; // staged (committed by bidir lambda)
+public:
+    Driving driving() const { return driving_; }
+    Driving pending() const { return pending_driving_; }
+private:
 
     Pin g_;    // Pin  1: ~G (enable)
     Pin dir_;  // Pin 19: DIR
