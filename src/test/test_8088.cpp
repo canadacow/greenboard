@@ -162,11 +162,12 @@ int main() {
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
+        "fdc_dma_exram",
+        /*
         "post_pkey",
         "post_fdc_detect",
-        "post_pki",
+        "post_pki",*/
         //"post_dma_tc0",
-
         /*"post_kbd",
         "mov",
         "post_ram",

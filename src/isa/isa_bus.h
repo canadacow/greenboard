@@ -37,6 +37,12 @@ public:
     // Debug: pin levels as the ISA bus sees them
     Level memr_level() const { return memr_.level(); }
     Level memw_level() const { return memw_.level(); }
+    Level cpu_memw_prev() const { return cpu_memw_prev_; }
+    Level cpu_memr_prev() const { return cpu_memr_prev_; }
+    Level dma_memw_prev() const { return dma_memw_prev_; }
+    Level dma_memr_prev() const { return dma_memr_prev_; }
+    bool mem_write_pending() const { return mem_write_pending_; }
+    bool data_driven() const { return data_driven_; }
 
 private:
     // Slot cards
@@ -84,6 +90,7 @@ private:
     Level cpu_memr_prev_ = Level::HiZ;
     Level cpu_memw_prev_ = Level::HiZ;
     bool mem_write_pending_ = false;
+    bool aen_prev_high_ = false;
     bool data_driven_ = false;
     uint8_t read_byte_ = 0;
     bool write_pending_ = false;

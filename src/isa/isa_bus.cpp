@@ -292,20 +292,20 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
         Level memr_cur = memr_.level();
         Level memw_cur = memw_.level();
 
-        if (mem_write_pending_) {
+        // Level-based MMIO write: while ~MEMW is Low and AEN is Low
+        // (CPU owns bus), continuously write to the MMIO target.
+        // This replaces edge-based detection which fails after DMA
+        // because the edge trackers get polluted by DMA's ~MEMW pulses.
+        if (memw_cur == Level::Low && aen_.level() != Level::High) {
             uint32_t addr = SignalPool::bus_address;
             ISA_Card* card = find_mmio_owner(addr);
             if (card) {
                 uint8_t val = read_sd();
+                if (addr >= 0x40000 && addr < 0xA0000)
+                    spdlog::info("[ISA] MMIO level-write {:05X}={:02X}", addr, val);
                 card->on_mmio_write(addr, val);
             }
-            mem_write_pending_ = false;
-        } else if (memw_cur == Level::Low && cpu_memw_prev_ != Level::Low) {
-            uint32_t addr = SignalPool::bus_address;
-            if (find_mmio_owner(addr))
-                mem_write_pending_ = true;
         }
-        cpu_memw_prev_ = memw_cur;
 
         if (memr_cur == Level::Low) {
             uint32_t addr = SignalPool::bus_address;
@@ -320,7 +320,8 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
         } else if (cpu_memr_prev_ == Level::Low) {
             if (data_driven_) release_sd();
         }
-        cpu_memr_prev_ = memr_cur;
+        if (aen_.level() != Level::High)
+            cpu_memr_prev_ = memr_cur;
     }
 }
 
