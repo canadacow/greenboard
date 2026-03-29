@@ -317,11 +317,7 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
             } else if (card) {
                 drive_sd(card->on_mmio_read(addr));
             }
-        } else if (cpu_memr_prev_ == Level::Low) {
-            if (data_driven_) release_sd();
         }
-        if (aen_.level() != Level::High)
-            cpu_memr_prev_ = memr_cur;
     }
 }
 
