@@ -82,6 +82,7 @@ public:
     bool inhibited() const { return inhibited_; }
     int bus_hold_count() const { return bus_hold_; }
     bool cpu_bus_busy() const { return commanding_; }
+    int cycle_type() const { return (int)cycle_; }
 
 protected:
     void on_power_on() override;

@@ -55,7 +55,7 @@ int main() {
 
     // J2: Floppy disk controller (DMA channel 2, IRQ 6)
     //std::string dos_disk = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
-    std::string dos_disk = "assets/IBM_DOS_33_With_Drive.img";
+    std::string dos_disk = "assets/dos50/Disk01.img";
     std::vector<uint8_t> floppy_img;
     {
         std::ifstream f(dos_disk, std::ios::binary | std::ios::ate);
@@ -195,6 +195,21 @@ int main() {
     Renderer renderer;
     scheduler.set_cpu(board.cpu);
     board.cpu->debug_peek_ = [&](uint32_t addr) -> uint8_t { return memview.read(addr); };
+    board.cpu->debug_bus_state_ = [&]() -> std::string {
+        auto d = [](IC_74S245::Driving v) { return v == IC_74S245::Driving::A ? 'A' : v == IC_74S245::Driving::B ? 'B' : '-'; };
+        auto rv = [](auto* arr) { uint8_t v=0; for(int i=0;i<8;i++) if(arr[i]->level()==bench::Level::High) v|=(1<<i); return v; };
+        auto rs = [&](auto& arr) { uint8_t v=0; for(int i=0;i<8;i++) if(arr[i].level()==bench::Level::High) v|=(1<<i); return v; };
+        return fmt::format("~MW={} ~MR={} inh={} bh={} cyc={} bus={:05X} AD={:02X} D={:02X} XD={:02X} MD={:02X} U8={}{} U13={}{} U12={}{} U14={}{} dma={} P={}",
+            (int)board.memw.level(), (int)board.memr.level(),
+            board.bc->inhibited(), board.bc->bus_hold_count(), board.bc->cycle_type(),
+            SignalPool::bus_address,
+            rs(board.ad), rv(board.d_arr), rv(board.xd_arr), rv(board.md_arr),
+            d(board.xcvr->driving()), d(board.xcvr->pending()),
+            d(board.xcvr13_ic->driving()), d(board.xcvr13_ic->pending()),
+            d(board.mem_xcvr->driving()), d(board.mem_xcvr->pending()),
+            d(board.xcvr14_ic->driving()), d(board.xcvr14_ic->pending()),
+            (int)board.dma_ic->state(), scheduler.current_perm());
+    };
 
     renderer.set_disk_a_path(dos_disk);
 

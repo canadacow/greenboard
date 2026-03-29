@@ -431,7 +431,7 @@ void IC_8237A::evaluate_dreq() {
     // Don't assert HRQ during bus recovery or while the CPU has an active
     // bus cycle.  Entering BusRequested changes bidir directions which
     // alters the DAG permutation -- must not happen mid-cycle.
-    if (bus_ctrl_->bus_hold() || bus_ctrl_->cpu_bus_busy())
+    if (bus_ctrl_->bus_hold())
         return;
 
     // Fixed priority: CH0 highest
