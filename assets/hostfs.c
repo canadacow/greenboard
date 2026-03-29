@@ -19,6 +19,10 @@
 #include <conio.h>
 #include <string.h>
 #include <i86.h>
+#include "chint.h"    /* _mvchain_intr -- resident-safe chain */
+
+/* All resident code goes to BEGTEXT segment (before _TEXT/transient) */
+#pragma code_seg(BEGTEXT, CODE)
 
 /* ---- Card port protocol ---- */
 #define PORT_CMD    0xE0
@@ -279,7 +283,7 @@ static void fill_sft(struct sftstruct far *sft, const char far *fn)
     sft->dir_entry_no  = 0xFF;
 
     /* FCB-format name from last path component */
-    _fmemset(sft->file_name, ' ', 11);
+    fmemset_(sft->file_name, ' ', 11);
     last = fn;
     for (p = fn; *p; p++) {
         if (*p == '\\' || *p == '/') last = p + 1;
@@ -295,12 +299,19 @@ static void fill_sft(struct sftstruct far *sft, const char far *fn)
     }
 }
 
-/* far memcpy */
+/* far memcpy -- resident safe, no libc dependency */
 static void copybytes(void far *d, void far *s, unsigned short len)
 {
     unsigned char far *dp = (unsigned char far *)d;
     unsigned char far *sp = (unsigned char far *)s;
     while (len--) *dp++ = *sp++;
+}
+
+/* far memset -- resident safe replacement for _fmemset */
+static void fmemset_(void far *d, unsigned char val, unsigned short len)
+{
+    unsigned char far *dp = (unsigned char far *)d;
+    while (len--) *dp++ = val;
 }
 
 /* Convert ASCIIZ "FILE.EXT" to FCB format "FILE    EXT" (11 bytes) */
@@ -309,7 +320,7 @@ static void name_to_fcb(char far *fcb, const char *name)
     int i;
     const char *dot;
 
-    _fmemset(fcb, ' ', 11);
+    fmemset_(fcb, ' ', 11);
     for (i = 0; i < 8 && name[i] && name[i] != '.'; i++)
         fcb[i] = name[i];
     dot = name;
@@ -353,7 +364,7 @@ static void fill_found(struct sdbstruct far *dta,
 
     /* FCB-format name into SDA found_file */
     name_to_fcb(sda_ff->fname, name_buf);
-    _fmemset(sda_ff->f1, 0, 10);
+    fmemset_(sda_ff->f1, 0, 10);
 
     /* Advance DTA dir entry counter */
     dta->dir_entry++;
@@ -387,13 +398,53 @@ static void _interrupt far int2f_handler(union INTPACK r)
     unsigned short count, got, i;
 
     if (r.h.ah != 0x11) {
-        _chain_intr(old_int2f);
+        _mvchain_intr((void far *)old_int2f);
         return;
     }
 
     subfn = r.h.al;
+
+    /* Debug: write subfn to a known port so we can see what DOS is asking.
+     * Port 0xE5 is unused -- the card will just store it in io_[]. */
+    outp(0xE5, subfn);
+
+    /* Chain unsupported or install-check immediately */
+    if (subfn == 0x00 || subfn > 0x2E) {
+        _mvchain_intr((void far *)old_int2f);
+        return;
+    }
+
     sft = (struct sftstruct far *)MK_FP(r.w.es, r.w.di);
     fn1 = get_fn1();
+
+    /* Debug: scan SDA for 'E:\' to find the real fn1 offset */
+    if (subfn == 0x19 && sda_ptr) {
+        unsigned short off;
+        for (off = 0x80; off < 0x120; off++) {
+            unsigned char b = *(sda_ptr + off);
+            if (b == 'E') {
+                unsigned char b1 = *(sda_ptr + off + 1);
+                unsigned char b2 = *(sda_ptr + off + 2);
+                if (b1 == ':' && b2 == '\\') {
+                    /* Found "E:\" at this offset! */
+                    outp(0xE6, (unsigned char)(off >> 8));
+                    outp(0xE7, (unsigned char)(off & 0xFF));
+                    outp(0xE8, b);
+                    outp(0xE9, b1);
+                    outp(0xEA, b2);
+                    outp(0xEB, *(sda_ptr + off + 3));
+                    outp(0xEC, *(sda_ptr + off + 4));
+                }
+            }
+        }
+        /* Also dump what's at the expected offset 0x92 */
+        outp(0xED, *(sda_ptr + 0x92));
+        outp(0xEE, *(sda_ptr + 0x9E));
+    }
+
+    /* Default: success (AX=0, CF clear). Failures override. */
+    r.w.ax = 0;
+    r.w.flags &= ~1u;
 
     /* Normalize fcb_fn1 from fn1 -- DOS doesn't always fill it properly
      * (e.g. 'CD ..' leaves it as spaces). See EtherDFS lines 1034-1059. */
@@ -408,7 +459,7 @@ static void _interrupt far int2f_handler(union INTPACK r)
             p++;
         }
         /* Fill FCB name */
-        _fmemset(fcb, ' ', 11);
+        fmemset_(fcb, ' ', 11);
         for (j = 0; *last && *last != '.'; last++) {
             if (j < 8) fcb[j++] = *last;
         }
@@ -421,10 +472,6 @@ static void _interrupt far int2f_handler(union INTPACK r)
     }
 
     switch (subfn) {
-
-    case 0x00:  /* Installation check */
-        r.h.al = 0xFF;
-        return;
 
     /* ---- Directory ops ---- */
 
@@ -592,7 +639,7 @@ static void _interrupt far int2f_handler(union INTPACK r)
         sdb->srch_attr = *(sda_ptr + sda_srchattr_off);
         sdb->dir_entry = 0;
         sdb->par_clstr = 0;
-        _fmemset(sdb->f1, 0, 4);
+        fmemset_(sdb->f1, 0, 4);
         /* Fill SDA found_file + copy to DTA+0x15 */
         fill_found(sdb, ff, 0x1B);
         r.w.flags &= ~1u;
@@ -613,7 +660,14 @@ static void _interrupt far int2f_handler(union INTPACK r)
 
     /* ---- Misc ---- */
 
-    case 0x0C:  /* Get disk info */
+    case 0x0C:  /* Get disk info -- drive from CDS at ES:DI */
+        {
+            struct cdsstruct far *dcds =
+                (struct cdsstruct far *)MK_FP(r.w.es, r.w.di);
+            char dl = dcds->current_path[0];
+            if (dl >= 'a' && dl <= 'z') dl -= 32;
+            if ((dl - 'A') != our_drive) break;
+        }
         card_reset();
         status = card_exec(CMD_DISKINFO);
         if (status != 1) goto err;
@@ -646,17 +700,12 @@ static void _interrupt far int2f_handler(union INTPACK r)
         r.w.flags &= ~1u;
         return;
 
-    case 0x23:  /* Qualify filename */
-        if (!is_our_drive(fn1)) break;
-        r.w.flags &= ~1u;
-        return;
-
     default:
         break;
     }
 
     /* Not ours -- chain */
-    _chain_intr(old_int2f);
+    _mvchain_intr((void far *)old_int2f);
     return;
 
 err:
@@ -720,7 +769,7 @@ static int register_drive(unsigned char drive)
     /* Check drive not already in use */
     if (cds->flags != 0) return 0;
 
-    _fmemset(cds->current_path, 0, 67);
+    fmemset_(cds->current_path, 0, 67);
     cds->current_path[0] = 'A' + drive;
     cds->current_path[1] = ':';
     cds->current_path[2] = '\\';
@@ -733,6 +782,12 @@ static int register_drive(unsigned char drive)
     return 1;
 }
 
+/* ============= END OF RESIDENT CODE ============= */
+#pragma code_seg("_TEXT", "CODE")
+
+/* This marks the boundary -- everything after here is transient */
+static void _resident_end(void) {}
+
 /* ================================================================
  * Install (transient -- freed after TSR)
  * ================================================================ */
@@ -741,7 +796,29 @@ void main(void)
     union REGS regs;
     struct SREGS sregs;
 
-    cputs("HostFS redirector v0.2\r\n");
+    cputs("HostFS redirector v0.6\r\n");
+
+    /* ---- Probe card before doing anything ---- */
+    {
+        unsigned char probe;
+        card_reset();
+        probe = card_exec(CMD_DISKINFO);
+        if (probe != 1) {
+            cputs("ERROR: HostFS card not responding on port 0xE0\r\n");
+            cputs("  card_reset -> OUT 0xE4, 0\r\n");
+            cputs("  card_exec  -> OUT 0xE0, 0x09; IN 0xE0 = 0x");
+            {
+                char hex[3];
+                hex[0] = "0123456789ABCDEF"[(probe >> 4) & 0xF];
+                hex[1] = "0123456789ABCDEF"[probe & 0xF];
+                hex[2] = 0;
+                cputs(hex);
+            }
+            cputs("\r\n");
+            return;
+        }
+        cputs("Card probe OK (DiskInfo returned status=1)\r\n");
+    }
 
     /* Get DOS version */
     regs.h.ah = 0x30;
@@ -797,6 +874,12 @@ void main(void)
 
     cputs("Drive E: -> HostFS (port 0xE0)\r\n");
 
-    /* TSR: keep everything before main() resident */
-    _dos_keep(0, ((unsigned short)((char far *)main - (char far *)0x100) + 0x10F) >> 4);
+    /* TSR: keep BEGTEXT segment (all resident code + data).
+     * _resident_end is the first function in _TEXT, so everything
+     * before it is resident. */
+    {
+        unsigned short resident_paras;
+        resident_paras = (FP_OFF(_resident_end) + 0x10F) >> 4;
+        _dos_keep(0, resident_paras);
+    }
 }

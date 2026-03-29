@@ -55,13 +55,31 @@ void ISA_TestCard::on_io_write(uint16_t port, uint8_t val) {
         if (kbd_ack_)
             kbd_ack_->drive(Level::High);
     } else if (port == 0xE0) {
+        spdlog::info("[ISA-TestCard] port 0xE0 write: cmd=0x{:02X}", val);
         hfs_execute(val);
     } else if (port == 0xE1) {
         hfs_param_.push_back(val);
     } else if (port == 0xE4) {
+        spdlog::info("[ISA-TestCard] port 0xE4 write: reset");
         hfs_param_.clear();
         hfs_result_.clear();
         hfs_result_ptr_ = 0;
+    } else if (port == 0xE5) {
+        spdlog::info("[HostFS] INT2F subfn=0x{:02X}", val);
+    } else if (port == 0xE6) {
+        spdlog::info("[HostFS] sda_seg_hi=0x{:02X}", val);
+    } else if (port == 0xE7) {
+        spdlog::info("[HostFS] sda_seg_lo=0x{:02X}", val);
+    } else if (port == 0xE8) {
+        spdlog::info("[HostFS] sda_off_hi=0x{:02X}", val);
+    } else if (port == 0xE9) {
+        spdlog::info("[HostFS] sda_off_lo=0x{:02X}", val);
+    } else if (port == 0xEA) {
+        spdlog::info("[HostFS] fn1[0]='{}' (0x{:02X})", (char)val, val);
+    } else if (port == 0xEB) {
+        spdlog::info("[HostFS] fn1[1]='{}' (0x{:02X})", (char)val, val);
+    } else if (port == 0xEC) {
+        spdlog::info("[HostFS] fn1[2]='{}' (0x{:02X})", (char)val, val);
     } else {
         io_[port] = val;
     }
@@ -159,23 +177,67 @@ static uint8_t to_dos_attr(const fs::directory_entry& e) {
 //   [3-4]   date
 //   [5-8]   size (32-bit)
 //   [9-21]  filename.ext (8.3, space padded, null terminated)
+// Convert a host filename to 8.3 DOS format. Returns false if not representable.
+static bool to_dos_83(const std::string& host_name, char out[13]) {
+    std::string stem, ext;
+    auto dot = host_name.rfind('.');
+    if (dot == std::string::npos || dot == 0) {
+        stem = host_name;
+    } else {
+        stem = host_name.substr(0, dot);
+        ext  = host_name.substr(dot + 1);
+    }
+
+    // Skip entries starting with '.' (except handled above)
+    if (stem.empty()) return false;
+
+    // Uppercase
+    std::transform(stem.begin(), stem.end(), stem.begin(), ::toupper);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::toupper);
+
+    // Truncate to 8.3
+    if (stem.size() > 8) stem.resize(8);
+    if (ext.size() > 3) ext.resize(3);
+
+    // Strip characters illegal in DOS filenames
+    for (auto& c : stem) {
+        if (c == ' ' || c < 0x20) c = '_';
+    }
+    for (auto& c : ext) {
+        if (c == ' ' || c < 0x20) c = '_';
+    }
+
+    // Build "NAME.EXT" or "NAME"
+    int i = 0;
+    for (char c : stem) out[i++] = c;
+    if (!ext.empty()) {
+        out[i++] = '.';
+        for (char c : ext) out[i++] = c;
+    }
+    out[i] = 0;
+    return true;
+}
+
 static void hfs_push_dir_entry(std::vector<uint8_t>& r, const fs::directory_entry& e) {
     uint8_t attr = to_dos_attr(e);
     uint16_t date, time;
     to_dos_datetime(e.last_write_time(), date, time);
     uint32_t size = e.is_regular_file() ? static_cast<uint32_t>(e.file_size()) : 0;
 
+    char dos_name[13];
+    std::string host_name = e.path().filename().string();
+    if (!to_dos_83(host_name, dos_name)) {
+        // Skip non-representable files (e.g. ".hidden")
+        // Caller should handle this by trying next entry
+        return;
+    }
+
     r.push_back(attr);
     hfs_put_u16(r, time);
     hfs_put_u16(r, date);
     hfs_put_u32(r, size);
-
-    // 8.3 filename -- uppercase, truncated
-    std::string name = e.path().filename().string();
-    std::transform(name.begin(), name.end(), name.begin(), ::toupper);
-    if (name.size() > 12) name.resize(12);
-    for (char c : name) r.push_back(static_cast<uint8_t>(c));
-    r.push_back(0);  // null terminator
+    for (int i = 0; dos_name[i]; ++i) r.push_back(static_cast<uint8_t>(dos_name[i]));
+    r.push_back(0);
 }
 
 static const char* hfs_cmd_name(uint8_t cmd) {
@@ -251,11 +313,13 @@ void ISA_TestCard::hfs_cmd_find_first() {
 }
 
 void ISA_TestCard::hfs_cmd_find_next() {
-    if (hfs_dir_idx_ >= hfs_dir_entries_.size()) {
-        hfs_status_ = 0xFF;  // no more files
-        return;
+    // Skip entries that can't be represented as 8.3
+    while (hfs_dir_idx_ < hfs_dir_entries_.size()) {
+        size_t before = hfs_result_.size();
+        hfs_push_dir_entry(hfs_result_, hfs_dir_entries_[hfs_dir_idx_++]);
+        if (hfs_result_.size() > before) return;  // got one
     }
-    hfs_push_dir_entry(hfs_result_, hfs_dir_entries_[hfs_dir_idx_++]);
+    hfs_status_ = 0xFF;  // no more files
 }
 
 // Open and Create both return: handle(2), attr(1), time(2), date(2), size(4)
