@@ -73,6 +73,9 @@ public:
 
     bool running() const { return running_.load(); }
 
+    // Set initial disk image path for drive A (before start()).
+    void set_disk_a_path(const std::string& path);
+
 private:
     std::jthread thread_;
     std::atomic<bool> running_{false};
@@ -88,6 +91,7 @@ private:
     const ISA_CGA* cga_ = nullptr;
     TestKeyboard* kbd_ = nullptr;
     ISA_FloppyController* fdc_ = nullptr;
+    std::string disk_a_path_;
     bool dbg_visible_ = true;
 
     // Pending board signal binding (set from main thread, consumed by render thread).

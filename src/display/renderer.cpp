@@ -1141,8 +1141,8 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.dma = dma_;
     dx.bus_probe = bus_probe_;
     dx.dbg_visible = &dbg_visible_;
-    dx.drive_a_path = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
-    dx.drive_a_loaded = dx.drive_a_path;
+    dx.drive_a_path = disk_a_path_;
+    dx.drive_a_loaded = disk_a_path_;
     dx.fdc = fdc_;
     dx.cga = cga_;
     // Create rasterizer based on installed display card
@@ -1187,6 +1187,8 @@ void Renderer::render_loop(std::stop_token stop) {
     DestroyWindow(hwnd);
     running_.store(false);
 }
+
+void Renderer::set_disk_a_path(const std::string& path) { disk_a_path_ = path; }
 
 void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      Scheduler* scheduler, IC_8088* cpu,

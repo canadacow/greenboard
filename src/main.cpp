@@ -194,6 +194,9 @@ int main() {
     // --- Renderer (render thread, reads framebuffer directly) ---
     Renderer renderer;
     scheduler.set_cpu(board.cpu);
+    board.cpu->debug_peek_ = [&](uint32_t addr) -> uint8_t { return memview.read(addr); };
+
+    renderer.set_disk_a_path(dos_disk);
 
     if (cga)
     {
