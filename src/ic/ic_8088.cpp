@@ -536,8 +536,7 @@ EUTask<void> IC_8088::eu_run() {
             constexpr uint32_t watch_addr = 0x9F840 + 0x00E7;
             uint8_t lo = debug_peek_(watch_addr & 0xFFFFF);
             uint8_t hi = debug_peek_((watch_addr + 1) & 0xFFFFF);
-            spdlog::info("[8088] {:04X}:{:04X}  [{:05X}]={:04X}",
-                         regs16()[REG_CS], reg_ip_, watch_addr, (hi << 8) | lo);
+            spdlog::info("[8088] {:04X}:{:04X}  [{:05X}]={:04X}", regs16()[REG_CS], reg_ip_, watch_addr, (hi << 8) | lo);
         } else {
             spdlog::info("[8088] {:04X}:{:04X}", regs16()[REG_CS], reg_ip_);
         }

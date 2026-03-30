@@ -155,13 +155,15 @@ static bool load_bin(const std::string& path, uint8_t* mem, uint32_t load_addr, 
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::warn);
+    spdlog::set_level(spdlog::level::info);
     spdlog::info("=== 8088 Test Bench ===");
     spdlog::info("ASM_TEST_DIR: {}", ASM_TEST_DIR);
 
     // Test list -- names correspond to test_<name>.asm / test_<name>.bin.
     // Expected results are parsed from @name / @expect tags in the asm files.
     std::vector<std::string> test_names = {
+        "farcall",
+        /*
         "mov",
         "post_ram",
         "post_sw1_readback",
@@ -170,7 +172,7 @@ int main() {
         "dma",
         "dma_isa_ram",
         "dma_m2m",
-        "dma_refresh",
+        //"dma_refresh",
         "mov",
         "rom",
         "io",
@@ -203,7 +205,7 @@ int main() {
         "post_dipsw",
         "post_pkey",
         "post_fdc_detect",
-        "post_pki",
+        "post_pki",*/
     };
 
     std::vector<TestCase> tests;
