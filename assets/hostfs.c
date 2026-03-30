@@ -393,9 +393,9 @@ static void _interrupt far int2f_handler(union INTPACK r)
     struct sdbstruct far *sdb;
     struct foundfilestruct far *ff;
     unsigned char far *dta;
-    unsigned char far *buf;
     unsigned char status;
     unsigned short count, got, i;
+    unsigned char reqdrv;
 
     if (r.h.ah != 0x11) {
         _mvchain_intr((void far *)old_int2f);
@@ -404,61 +404,74 @@ static void _interrupt far int2f_handler(union INTPACK r)
 
     subfn = r.h.al;
 
-    /* Debug: write subfn to a known port so we can see what DOS is asking.
-     * Port 0xE5 is unused -- the card will just store it in io_[]. */
-    outp(0xE5, subfn);
-
     /* Chain unsupported or install-check immediately */
     if (subfn == 0x00 || subfn > 0x2E) {
         _mvchain_intr((void far *)old_int2f);
         return;
     }
 
+    /* ---- Centralized drive determination (per EtherDFS) ----
+     * Determine the drive BEFORE touching any DOS state.
+     * Chain immediately if not our drive. */
     sft = (struct sftstruct far *)MK_FP(r.w.es, r.w.di);
     fn1 = get_fn1();
 
-    /* Debug: scan SDA for 'E:\' to find the real fn1 offset */
-    if (subfn == 0x19 && sda_ptr) {
-        unsigned short off;
-        for (off = 0x80; off < 0x120; off++) {
-            unsigned char b = *(sda_ptr + off);
-            if (b == 'E') {
-                unsigned char b1 = *(sda_ptr + off + 1);
-                unsigned char b2 = *(sda_ptr + off + 2);
-                if (b1 == ':' && b2 == '\\') {
-                    /* Found "E:\" at this offset! */
-                    outp(0xE6, (unsigned char)(off >> 8));
-                    outp(0xE7, (unsigned char)(off & 0xFF));
-                    outp(0xE8, b);
-                    outp(0xE9, b1);
-                    outp(0xEA, b2);
-                    outp(0xEB, *(sda_ptr + off + 3));
-                    outp(0xEC, *(sda_ptr + off + 4));
-                }
+    if ((subfn >= 0x06 && subfn <= 0x0B) || subfn == 0x21) {
+        /* SFT-based ops: close, commit, read, write, lock, unlock, seek */
+        reqdrv = sft->dev_info_word & 0x3F;
+    } else {
+        switch (subfn) {
+        case 0x1C: /* FindNext: drive from DTA at ES:DI */
+            sdb = (struct sdbstruct far *)MK_FP(r.w.es, r.w.di);
+            reqdrv = sdb->drv_lett & 0x1F;
+            break;
+        case 0x01: case 0x03: case 0x05:  /* rmdir, mkdir, chdir */
+        case 0x0E: case 0x0F:             /* set/get attr */
+        case 0x11: case 0x13:             /* rename, delete */
+        case 0x16: case 0x17:             /* open, create */
+        case 0x1B:                        /* findfirst */
+            /* fn1-based: drive letter is first char */
+            {
+                char dl;
+                if (!fn1) goto chain;
+                dl = fn1[0];
+                if (dl >= 'a' && dl <= 'z') dl -= 32;
+                reqdrv = dl - 'A';
             }
+            break;
+        case 0x0C: /* disk info: CDS at ES:DI */
+            {
+                struct cdsstruct far *dcds =
+                    (struct cdsstruct far *)MK_FP(r.w.es, r.w.di);
+                char dl = dcds->current_path[0];
+                if (dl >= 'a' && dl <= 'z') dl -= 32;
+                reqdrv = dl - 'A';
+            }
+            break;
+        case 0x1D: /* Close all files -- always ours (no-op) */
+            reqdrv = our_drive;
+            break;
+        default:
+            goto chain;
         }
-        /* Also dump what's at the expected offset 0x92 */
-        outp(0xED, *(sda_ptr + 0x92));
-        outp(0xEE, *(sda_ptr + 0x9E));
     }
 
-    /* Default: success (AX=0, CF clear). Failures override. */
-    r.w.ax = 0;
-    r.w.flags &= ~1u;
+    /* Not our drive? Chain to previous handler with registers UNTOUCHED */
+    if (reqdrv != our_drive) goto chain;
 
-    /* Normalize fcb_fn1 from fn1 -- DOS doesn't always fill it properly
-     * (e.g. 'CD ..' leaves it as spaces). See EtherDFS lines 1034-1059. */
-    if (subfn != 0x0C && subfn != 0x00) {
+    /* ---- From here on, it IS our drive. Safe to modify DOS state. ---- */
+
+    /* Normalize fcb_fn1 from fn1 (EtherDFS lines 1034-1059).
+     * Only after confirming it's our drive. */
+    if (subfn != 0x0C && fn1) {
         unsigned char far *fcb = sda_ptr + sda_fcbfn1_off;
         const char far *p = fn1;
         const char far *last = fn1;
         int j;
-        /* Find last path component */
         while (*p) {
             if (*p == '\\') last = p + 1;
             p++;
         }
-        /* Fill FCB name */
         fmemset_(fcb, ' ', 11);
         for (j = 0; *last && *last != '.'; last++) {
             if (j < 8) fcb[j++] = *last;
@@ -471,70 +484,59 @@ static void _interrupt far int2f_handler(union INTPACK r)
         }
     }
 
+    /* Default: success (AX=0, CF clear). Failures override. */
+    r.w.ax = 0;
+    r.w.flags &= ~1u;
+
     switch (subfn) {
 
     /* ---- Directory ops ---- */
 
     case 0x01:  /* Rmdir */
-        if (!is_our_drive(fn1)) break;
         card_reset();
         card_send_string(fn1);
         if (card_exec(CMD_RMDIR) != 1) goto err;
-        r.w.flags &= ~1u;
         return;
 
     case 0x03:  /* Mkdir */
-        if (!is_our_drive(fn1)) break;
         card_reset();
         card_send_string(fn1);
         if (card_exec(CMD_MKDIR) != 1) goto err;
-        r.w.flags &= ~1u;
         return;
 
     case 0x05:  /* ChDir */
-        if (!is_our_drive(fn1)) break;
         card_reset();
         card_send_string(fn1);
         if (card_exec(CMD_CHDIR) != 1) goto err;
-        r.w.flags &= ~1u;
         return;
 
     /* ---- File ops ---- */
 
     case 0x16:  /* Open existing file */
-        if (!is_our_drive(fn1)) break;
         card_reset();
         card_send_string(fn1);
         if (card_exec(CMD_OPEN) != 1) goto err;
         fill_sft(sft, fn1);
-        r.w.flags &= ~1u;
         return;
 
     case 0x17:  /* Create/truncate file */
-        if (!is_our_drive(fn1)) break;
         card_reset();
         card_send_string(fn1);
         if (card_exec(CMD_CREATE) != 1) goto err;
         fill_sft(sft, fn1);
-        r.w.flags &= ~1u;
         return;
 
     case 0x06:  /* Close */
-        if (!is_our_sft(sft)) break;
         if (sft->handle_count > 0) sft->handle_count--;
         card_reset();
         card_send_u16(sft->start_sector);
         card_exec(CMD_CLOSE);
-        r.w.flags &= ~1u;
         return;
 
     case 0x07:  /* Commit/flush */
-        if (!is_our_sft(sft)) break;
-        r.w.flags &= ~1u;
         return;
 
     case 0x08:  /* Read */
-        if (!is_our_sft(sft)) break;
         count = r.w.cx;
         card_reset();
         card_send_u16(sft->start_sector);
@@ -542,7 +544,6 @@ static void _interrupt far int2f_handler(union INTPACK r)
         status = card_exec(CMD_READ);
         if (status != 1) {
             r.w.cx = 0;
-            r.w.flags &= ~1u;
             return;
         }
         got = card_result_len();
@@ -552,11 +553,9 @@ static void _interrupt far int2f_handler(union INTPACK r)
             dta[i] = card_read_byte();
         sft->file_pos += got;
         r.w.cx = got;
-        r.w.flags &= ~1u;
         return;
 
     case 0x09:  /* Write */
-        if (!is_our_sft(sft)) break;
         count = r.w.cx;
         card_reset();
         card_send_u16(sft->start_sector);
@@ -570,11 +569,9 @@ static void _interrupt far int2f_handler(union INTPACK r)
         if (sft->file_pos > sft->file_size)
             sft->file_size = sft->file_pos;
         r.w.cx = got;
-        r.w.flags &= ~1u;
         return;
 
     case 0x21:  /* Seek from end */
-        if (!is_our_sft(sft)) break;
         card_reset();
         card_send_u16(sft->start_sector);
         card_send_u16(r.w.dx);   /* offset low */
@@ -583,26 +580,20 @@ static void _interrupt far int2f_handler(union INTPACK r)
         status = card_exec(CMD_SEEK);
         if (status != 1) goto err;
         sft->file_pos = card_read_u32();
-        /* Return new position in DX:AX (not DX:CX!) */
         r.w.ax = (unsigned short)(sft->file_pos & 0xFFFF);
         r.w.dx = (unsigned short)(sft->file_pos >> 16);
-        r.w.flags &= ~1u;
         return;
 
     /* ---- Attributes ---- */
 
     case 0x0E:  /* Set attributes -- accept silently */
-        if (!is_our_drive(fn1)) break;
-        r.w.flags &= ~1u;
         return;
 
     case 0x0F:  /* Get attributes + size */
-        if (!is_our_drive(fn1)) break;
         card_reset();
         card_send_string(fn1);
         status = card_exec(CMD_GETATTR);
         if (status != 1) goto err;
-        /* Card returns: attr(1), size(4), date(2), time(2) */
         {
             unsigned char attr;
             unsigned long sz;
@@ -612,62 +603,46 @@ static void _interrupt far int2f_handler(union INTPACK r)
             date = card_read_u16();
             time = card_read_u16();
             r.w.ax = attr;
-            r.w.bx = (unsigned short)(sz >> 16);    /* fsize hi */
-            r.w.di = (unsigned short)(sz & 0xFFFF);  /* fsize lo */
+            r.w.bx = (unsigned short)(sz >> 16);
+            r.w.di = (unsigned short)(sz & 0xFFFF);
             r.w.cx = time;
             r.w.dx = date;
         }
-        r.w.flags &= ~1u;
         return;
 
     /* ---- Search ---- */
 
     case 0x1B:  /* FindFirst */
-        if (!is_our_drive(fn1)) break;
         ff  = get_found();
         if (!ff) goto err;
-        /* DTA is the user's DTA from the SDA */
         dta = get_dta();
         sdb = (struct sdbstruct far *)dta;
         card_reset();
         card_send_string(fn1);
         status = card_exec(CMD_FINDFIRST);
-        if (status != 1) { r.w.ax = 2; r.w.flags |= 1u; return; } /* file not found */
-        /* Init DTA search state */
+        if (status != 1) { r.w.ax = 2; r.w.flags |= 1u; return; }
         sdb->drv_lett = 0x80 | our_drive;
         copybytes(sdb->srch_tmpl, sda_ptr + sda_fcbfn1_off, 11);
         sdb->srch_attr = *(sda_ptr + sda_srchattr_off);
         sdb->dir_entry = 0;
         sdb->par_clstr = 0;
         fmemset_(sdb->f1, 0, 4);
-        /* Fill SDA found_file + copy to DTA+0x15 */
         fill_found(sdb, ff, 0x1B);
-        r.w.flags &= ~1u;
         return;
 
     case 0x1C:  /* FindNext */
-        /* For FindNext, DTA is at ES:DI (not from SDA) */
-        sdb = (struct sdbstruct far *)MK_FP(r.w.es, r.w.di);
-        if ((sdb->drv_lett & 0x1F) != our_drive) break;
+        /* sdb already set during drive determination above */
         ff = get_found();
         if (!ff) goto err;
         card_reset();
         status = card_exec(CMD_FINDNEXT);
-        if (status != 1) { r.w.ax = 18; r.w.flags |= 1u; return; } /* no more files */
+        if (status != 1) { r.w.ax = 18; r.w.flags |= 1u; return; }
         fill_found(sdb, ff, 0x1C);
-        r.w.flags &= ~1u;
         return;
 
     /* ---- Misc ---- */
 
-    case 0x0C:  /* Get disk info -- drive from CDS at ES:DI */
-        {
-            struct cdsstruct far *dcds =
-                (struct cdsstruct far *)MK_FP(r.w.es, r.w.di);
-            char dl = dcds->current_path[0];
-            if (dl >= 'a' && dl <= 'z') dl -= 32;
-            if ((dl - 'A') != our_drive) break;
-        }
+    case 0x0C:  /* Get disk info */
         card_reset();
         status = card_exec(CMD_DISKINFO);
         if (status != 1) goto err;
@@ -675,36 +650,31 @@ static void _interrupt far int2f_handler(union INTPACK r)
         r.w.bx = card_read_u16();   /* total clusters */
         r.w.cx = card_read_u16();   /* bytes per sector */
         r.w.dx = card_read_u16();   /* free clusters */
-        r.w.flags &= ~1u;
         return;
 
     case 0x11:  /* Rename */
-        if (!is_our_drive(fn1)) break;
         fn2 = get_fn2();
         card_reset();
         card_send_string(fn1);
         card_send_string(fn2);
         if (card_exec(CMD_RENAME) != 1) goto err;
-        r.w.flags &= ~1u;
         return;
 
     case 0x13:  /* Delete */
-        if (!is_our_drive(fn1)) break;
         card_reset();
         card_send_string(fn1);
         if (card_exec(CMD_DELETE) != 1) goto err;
-        r.w.flags &= ~1u;
         return;
 
     case 0x1D:  /* Close all files for process */
-        r.w.flags &= ~1u;
         return;
 
     default:
         break;
     }
 
-    /* Not ours -- chain */
+    /* Should not reach here (drive was ours but unhandled subfn) -- chain */
+chain:
     _mvchain_intr((void far *)old_int2f);
     return;
 

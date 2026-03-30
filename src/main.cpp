@@ -55,7 +55,7 @@ int main() {
 
     // J2: Floppy disk controller (DMA channel 2, IRQ 6)
     //std::string dos_disk = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
-    std::string dos_disk = "assets/dos50/Disk01.img";
+    std::string dos_disk = "assets/50boot.img";
     std::vector<uint8_t> floppy_img;
     {
         std::ifstream f(dos_disk, std::ios::binary | std::ios::ate);
