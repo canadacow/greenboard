@@ -633,6 +633,7 @@ static void _interrupt far int2f_handler(union INTPACK r)
 
     case 0x09:  /* Write */
         count = r.w.cx;
+        if (count == 0) { r.w.cx = 0; return; } /* 0-byte write = no-op */
         /* Sync card position (same reason as Read) */
         card_reset();
         card_send_u16(sft->start_sector);

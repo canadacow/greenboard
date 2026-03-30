@@ -440,8 +440,12 @@ void ISA_TestCard::hfs_cmd_write() {
     uint16_t h = hfs_get_u16(hfs_param_, 0);
     // Data starts at param offset 2
     auto it = hfs_files_.find(h);
-    if (it == hfs_files_.end() || hfs_param_.size() <= 2) {
+    if (it == hfs_files_.end()) {
         hfs_status_ = 0xFF;
+        return;
+    }
+    if (hfs_param_.size() <= 2) {
+        hfs_put_u16(hfs_result_, 0); // 0-byte write is valid
         return;
     }
     size_t len = hfs_param_.size() - 2;
