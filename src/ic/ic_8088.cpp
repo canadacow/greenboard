@@ -1018,16 +1018,8 @@ EUTask<void> IC_8088::eu_run() {
     }
     case 19: { // RET|RETF|IRET
         i_d_ = i_w_;
-        {
-            uint16_t pre_sp = regs16()[REG_SP];
-            POP16_(reg_ip_);
-            if (extra_) { uint16_t _cs; POP16_(_cs); regs16()[REG_CS] = _cs; }
-            if (!extra_) {
-                spdlog::info("[8088] RET SS:SP={:04X}:{:04X} -> {:04X}:{:04X}",
-                             regs16()[REG_SS], pre_sp,
-                             regs16()[REG_CS], reg_ip_);
-            }
-        }
+        POP16_(reg_ip_);
+        if (extra_) { uint16_t _cs; POP16_(_cs); regs16()[REG_CS] = _cs; }
         if (extra_ & 2) {
             uint16_t _fl; POP16_(_fl); set_flags(_fl);
         }

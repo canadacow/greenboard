@@ -301,8 +301,8 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
             ISA_Card* card = find_mmio_owner(addr);
             if (card) {
                 uint8_t val = read_sd();
-                if (addr >= 0x40000 && addr < 0xA0000)
-                    spdlog::info("[ISA] MMIO level-write {:05X}={:02X}", addr, val);
+                //if (addr >= 0x40000 && addr < 0xA0000)
+                //    spdlog::info("[ISA] MMIO level-write {:05X}={:02X}", addr, val);
                 card->on_mmio_write(addr, val);
             }
         }
@@ -312,7 +312,7 @@ void ISA_Bus::on_cycle(Fiber /*caller*/) {
             ISA_Card* card = find_mmio_owner(addr);
             if (addr >= 0x40000 && addr < 0xA0000) {
                 uint8_t val = card->on_mmio_read(addr);
-                spdlog::info("[ISA] MMIO read {:05X} val={:02X}", addr, val);
+                //spdlog::info("[ISA] MMIO read {:05X} val={:02X}", addr, val);
                 drive_sd(val);
             } else if (card) {
                 drive_sd(card->on_mmio_read(addr));

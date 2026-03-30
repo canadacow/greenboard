@@ -199,8 +199,9 @@ int main() {
         auto d = [](IC_74S245::Driving v) { return v == IC_74S245::Driving::A ? 'A' : v == IC_74S245::Driving::B ? 'B' : '-'; };
         auto rv = [](auto* arr) { uint8_t v=0; for(int i=0;i<8;i++) if(arr[i]->level()==bench::Level::High) v|=(1<<i); return v; };
         auto rs = [&](auto& arr) { uint8_t v=0; for(int i=0;i<8;i++) if(arr[i].level()==bench::Level::High) v|=(1<<i); return v; };
-        return fmt::format("~MW={} ~MR={} AEN={} inh={} bh={} cyc={} bus={:05X} AD={:02X} D={:02X} XD={:02X} MD={:02X} U8={}{} U13={}{} U12={}{} U14={}{} dma={} mwp={} cmwp={} dmwp={} cmrp={} dmrp={} P={}",
+        return fmt::format("~MW={} ~MR={} AEN={} CEN={} HLDA={} inh={} bh={} cyc={} bus={:05X} AD={:02X} D={:02X} XD={:02X} MD={:02X} U8={}{} U13={}{} U12={}{} U14={}{} dma={} mwp={} cmwp={} dmwp={} cmrp={} dmrp={} P={}",
             (int)board.memw.level(), (int)board.memr.level(), (int)board.isa_aen.level(),
+            (int)board.aen_brd.level(), (int)board.holda.level(),
             board.bc->inhibited(), board.bc->bus_hold_count(), board.bc->cycle_type(),
             SignalPool::bus_address,
             rs(board.ad), rv(board.d_arr), rv(board.xd_arr), rv(board.md_arr),
