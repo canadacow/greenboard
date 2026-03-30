@@ -140,6 +140,7 @@ static void (_interrupt far *old_int2f)(void);
 static unsigned char our_drive = 4;  /* E: */
 static unsigned char far *sda_ptr = 0;
 static unsigned char dos_major = 0;
+static unsigned char vollabel_pending = 0; /* 1 = FindFirst needs real first entry */
 
 /* ---- Port I/O helpers ---- */
 
@@ -344,7 +345,7 @@ static void fill_found(struct sdbstruct far *dta,
                        unsigned char subfn)
 {
     int i;
-    char name_buf[13];
+    static char name_buf[13]; /* must be static: SS != DS in ISR context */
     char c;
 
     /* Read card result */
@@ -370,6 +371,23 @@ static void fill_found(struct sdbstruct far *dta,
     dta->dir_entry++;
 
     /* Copy found_file (32 bytes) into DTA+0x15 */
+    copybytes((unsigned char far *)dta + 0x15, sda_ff, 32);
+}
+
+/* Synthesize a volume label entry into found_file + DTA */
+static void fill_vollabel(struct sdbstruct far *dta,
+                          struct foundfilestruct far *sda_ff)
+{
+    /* "HOSTFS     " in FCB format (8+3, space-padded) */
+    static char vollabel[11] = {'H','O','S','T','F','S',' ',' ',' ',' ',' '};
+    copybytes(sda_ff->fname, vollabel, 11);
+    sda_ff->fattr = 0x08;       /* volume label attribute */
+    fmemset_(sda_ff->f1, 0, 10);
+    sda_ff->time_lstupd = 0;
+    sda_ff->date_lstupd = 0;
+    sda_ff->start_clstr = 0;
+    sda_ff->fsize = 0;
+    dta->dir_entry++;
     copybytes((unsigned char far *)dta + 0x15, sda_ff, 32);
 }
 
@@ -430,6 +448,7 @@ static void _interrupt far int2f_handler(union INTPACK r)
         case 0x11: case 0x13:             /* rename, delete */
         case 0x16: case 0x17:             /* open, create */
         case 0x1B:                        /* findfirst */
+        case 0x2E:                        /* spopnfil (DOS 4+ open) */
             /* fn1-based: drive letter is first char */
             {
                 char dl;
@@ -513,10 +532,12 @@ static void _interrupt far int2f_handler(union INTPACK r)
     /* ---- File ops ---- */
 
     case 0x16:  /* Open existing file */
+    case 0x2E:  /* SPOPNFIL (DOS 4+ multipurpose open) */
         card_reset();
         card_send_string(fn1);
         if (card_exec(CMD_OPEN) != 1) goto err;
         fill_sft(sft, fn1);
+        if (subfn == 0x2E) r.w.cx = 1; /* action: file opened */
         return;
 
     case 0x17:  /* Create/truncate file */
@@ -627,13 +648,28 @@ static void _interrupt far int2f_handler(union INTPACK r)
         sdb->dir_entry = 0;
         sdb->par_clstr = 0;
         fmemset_(sdb->f1, 0, 4);
-        fill_found(sdb, ff, 0x1B);
+        /* If search includes volume label bit, return synthetic label first.
+         * The real first directory entry is deferred to FindNext. */
+        if (sdb->srch_attr & 0x08) {
+            vollabel_pending = 1;
+            fill_vollabel(sdb, ff);
+        } else {
+            vollabel_pending = 0;
+            fill_found(sdb, ff, 0x1B);
+        }
         return;
 
     case 0x1C:  /* FindNext */
         /* sdb already set during drive determination above */
         ff = get_found();
         if (!ff) goto err;
+        /* If we returned a volume label for FindFirst, the card already
+         * has the first real result buffered -- just read it now. */
+        if (vollabel_pending) {
+            vollabel_pending = 0;
+            fill_found(sdb, ff, 0x1C);
+            return;
+        }
         card_reset();
         status = card_exec(CMD_FINDNEXT);
         if (status != 1) { r.w.ax = 18; r.w.flags |= 1u; return; }
