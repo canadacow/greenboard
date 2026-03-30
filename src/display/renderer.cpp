@@ -657,9 +657,8 @@ void DxState::render_debugger() {
 
 void DxState::render_memory_viewer() {
     ImGui::SetNextWindowBgAlpha(0.92f);
-    ImGui::SetNextWindowSize(ImVec2(580, 380), ImGuiCond_Once);
 
-    if (!ImGui::Begin("Memory", &mem_view_open, ImGuiWindowFlags_NoSavedSettings)) {
+    if (!ImGui::Begin("Memory", &mem_view_open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
@@ -766,9 +765,8 @@ void DxState::render_bus_analyzer() {
     };
 
     ImGui::SetNextWindowBgAlpha(0.92f);
-    ImGui::SetNextWindowSize(ImVec2(420, 340), ImGuiCond_Once);
 
-    if (!ImGui::Begin("Bus Analyzer", &bus_view_open, ImGuiWindowFlags_NoSavedSettings)) {
+    if (!ImGui::Begin("Bus Analyzer", &bus_view_open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
@@ -891,9 +889,7 @@ void DxState::render_bus_analyzer() {
 }
 
 void DxState::render_system_window() {
-    ImGui::SetNextWindowSize(ImVec2(480, 280), ImGuiCond_Once);
-
-    if (!ImGui::Begin("System", &system_open, ImGuiWindowFlags_NoSavedSettings)) {
+    if (!ImGui::Begin("System", &system_open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
