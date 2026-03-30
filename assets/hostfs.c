@@ -422,8 +422,16 @@ static void _interrupt far int2f_handler(union INTPACK r)
 
     subfn = r.h.al;
 
-    /* Chain unsupported or install-check immediately */
-    if (subfn == 0x00 || subfn > 0x2E) {
+    /* Chain unsupported subfunctions immediately (per EtherDFS line 983).
+     * Only let through subfunctions we actually handle in the switch.
+     * Anything else must chain with registers UNTOUCHED. */
+    switch (subfn) {
+    case 0x01: case 0x03: case 0x05: case 0x06: case 0x07:
+    case 0x08: case 0x09: case 0x0C: case 0x0E: case 0x0F:
+    case 0x11: case 0x13: case 0x16: case 0x17: case 0x1B:
+    case 0x1C: case 0x1D: case 0x21: case 0x2E:
+        break; /* supported -- continue to drive check */
+    default:
         _mvchain_intr((void far *)old_int2f);
         return;
     }
@@ -431,12 +439,18 @@ static void _interrupt far int2f_handler(union INTPACK r)
     /* ---- Centralized drive determination (per EtherDFS) ----
      * Determine the drive BEFORE touching any DOS state.
      * Chain immediately if not our drive. */
+    outp(0xE5, subfn); /* diag: entered handler for this subfn */
     sft = (struct sftstruct far *)MK_FP(r.w.es, r.w.di);
     fn1 = get_fn1();
 
     if ((subfn >= 0x06 && subfn <= 0x0B) || subfn == 0x21) {
         /* SFT-based ops: close, commit, read, write, lock, unlock, seek */
         reqdrv = sft->dev_info_word & 0x3F;
+        /* diag: dump dev_info_word, reqdrv, our_drive */
+        outp(0xE6, (unsigned char)(sft->dev_info_word >> 8));
+        outp(0xE7, (unsigned char)(sft->dev_info_word & 0xFF));
+        outp(0xE8, reqdrv);
+        outp(0xE9, our_drive);
     } else {
         switch (subfn) {
         case 0x1C: /* FindNext: drive from DTA at ES:DI */
@@ -482,7 +496,8 @@ static void _interrupt far int2f_handler(union INTPACK r)
 
     /* Normalize fcb_fn1 from fn1 (EtherDFS lines 1034-1059).
      * Only after confirming it's our drive. */
-    if (subfn != 0x0C && fn1) {
+    if (subfn != 0x0C && !(subfn >= 0x06 && subfn <= 0x0B) &&
+        subfn != 0x21 && subfn != 0x1C && subfn != 0x1D && fn1) {
         unsigned char far *fcb = sda_ptr + sda_fcbfn1_off;
         const char far *p = fn1;
         const char far *last = fn1;
@@ -559,6 +574,16 @@ static void _interrupt far int2f_handler(union INTPACK r)
 
     case 0x08:  /* Read */
         count = r.w.cx;
+        /* Sync card file position with DOS's sft->file_pos.
+         * DOS can seek via SEEK_SET/SEEK_CUR by modifying file_pos
+         * directly without calling the redirector. EXE loading does this. */
+        card_reset();
+        card_send_u16(sft->start_sector);
+        card_send_u16((unsigned short)(sft->file_pos & 0xFFFF));
+        card_send_u16((unsigned short)(sft->file_pos >> 16));
+        card_send_byte(0);  /* SEEK_SET */
+        card_exec(CMD_SEEK);
+        /* Now read from the correct position */
         card_reset();
         card_send_u16(sft->start_sector);
         card_send_u16(count);
@@ -570,6 +595,22 @@ static void _interrupt far int2f_handler(union INTPACK r)
         got = card_result_len();
         if (got > count) got = count;
         dta = get_dta();
+        /* diag: DTA seg:off, DS (DGROUP), offset of our_drive */
+        outp(0xE5, 0xDD);
+        outp(0xE6, (unsigned char)(FP_SEG(dta) >> 8));
+        outp(0xE7, (unsigned char)(FP_SEG(dta) & 0xFF));
+        outp(0xE8, (unsigned char)(FP_OFF(dta) >> 8));
+        outp(0xE9, (unsigned char)(FP_OFF(dta) & 0xFF));
+        {
+            unsigned short ds_val, drv_off;
+            _asm { mov ds_val, ds }
+            drv_off = FP_OFF((void far *)&our_drive);
+            outp(0xE5, 0xDE);
+            outp(0xE6, (unsigned char)(ds_val >> 8));
+            outp(0xE7, (unsigned char)(ds_val & 0xFF));
+            outp(0xE8, (unsigned char)(drv_off >> 8));
+            outp(0xE9, (unsigned char)(drv_off & 0xFF));
+        }
         for (i = 0; i < got; i++)
             dta[i] = card_read_byte();
         sft->file_pos += got;
@@ -578,6 +619,13 @@ static void _interrupt far int2f_handler(union INTPACK r)
 
     case 0x09:  /* Write */
         count = r.w.cx;
+        /* Sync card position (same reason as Read) */
+        card_reset();
+        card_send_u16(sft->start_sector);
+        card_send_u16((unsigned short)(sft->file_pos & 0xFFFF));
+        card_send_u16((unsigned short)(sft->file_pos >> 16));
+        card_send_byte(0);  /* SEEK_SET */
+        card_exec(CMD_SEEK);
         card_reset();
         card_send_u16(sft->start_sector);
         dta = get_dta();
@@ -711,10 +759,12 @@ static void _interrupt far int2f_handler(union INTPACK r)
 
     /* Should not reach here (drive was ours but unhandled subfn) -- chain */
 chain:
+    outp(0xE5, 0xFE); /* diag: chaining */
     _mvchain_intr((void far *)old_int2f);
     return;
 
 err:
+    outp(0xE5, 0xFD); /* diag: error return */
     r.w.ax = 0x0005;   /* access denied */
     r.w.flags |= 1u;   /* CF */
 }
@@ -880,12 +930,28 @@ void main(void)
 
     cputs("Drive E: -> HostFS (port 0xE0)\r\n");
 
-    /* TSR: keep BEGTEXT segment (all resident code + data).
-     * _resident_end is the first function in _TEXT, so everything
-     * before it is resident. */
+    /* TSR: keep everything from PSP through end of DGROUP.
+     * DGROUP (statics) is in a separate segment ABOVE the code.
+     * FP_OFF(_resident_end) only covers code -- we must also keep
+     * the data segment or DOS frees it and COMMAND.COM overwrites
+     * our statics. */
     {
         unsigned short resident_paras;
-        resident_paras = (FP_OFF(_resident_end) + 0x10F) >> 4;
+        unsigned short psp_seg, ds_seg, data_end;
+        _asm {
+            mov ax, cs
+            mov psp_seg, ax
+        }
+        psp_seg -= 0x10; /* PSP is 0x10 paragraphs before CS */
+        _asm {
+            mov ax, ds
+            mov ds_seg, ax
+        }
+        /* DGROUP extends from DS:0 to DS:end_of_bss.
+         * _resident_end offset gives code size; we also need
+         * (DS - PSP) paragraphs + data/bss size.
+         * Conservative: keep through DS + 0x100 paragraphs (4KB for data). */
+        resident_paras = (ds_seg - psp_seg) + 0x100;
         _dos_keep(0, resident_paras);
     }
 }

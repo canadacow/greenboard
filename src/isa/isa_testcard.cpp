@@ -462,6 +462,7 @@ void ISA_TestCard::hfs_cmd_seek() {
     if (whence == 1) dir = std::ios::cur;
     if (whence == 2) dir = std::ios::end;
 
+    it->second.stream.clear();  // clear eofbit from prior reads
     it->second.stream.seekg(offset, dir);
     auto pos = static_cast<uint32_t>(it->second.stream.tellg());
     hfs_put_u32(hfs_result_, pos);
