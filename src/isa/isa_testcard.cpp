@@ -255,9 +255,15 @@ void ISA_TestCard::hfs_execute(uint8_t cmd) {
     hfs_result_ptr_ = 0;
     hfs_status_ = 1;  // assume ok
 
-    std::string param_str(hfs_param_.begin(), hfs_param_.end());
-    spdlog::info("[HostFS] cmd=0x{:02X} ({}) param=\"{}\" root={}",
-                 cmd, hfs_cmd_name(cmd), param_str, hostfs_root_.string());
+    // Only log param as string for commands that use string params
+    if (cmd <= 0x03 || cmd == 0x07 || cmd == 0x08 || (cmd >= 0x0B && cmd <= 0x0F)) {
+        std::string param_str(hfs_param_.begin(), hfs_param_.end());
+        spdlog::info("[HostFS] cmd=0x{:02X} ({}) param=\"{}\" root={}",
+                     cmd, hfs_cmd_name(cmd), param_str, hostfs_root_.string());
+    } else {
+        spdlog::info("[HostFS] cmd=0x{:02X} ({}) [{} bytes param]",
+                     cmd, hfs_cmd_name(cmd), hfs_param_.size());
+    }
 
     switch (cmd) {
         case 0x01: hfs_cmd_find_first(); break;
@@ -284,6 +290,42 @@ void ISA_TestCard::hfs_execute(uint8_t cmd) {
     spdlog::info("[HostFS] -> status={} result_len={}", hfs_status_, hfs_result_.size());
 }
 
+// Match a DOS 8.3 filename against a DOS wildcard pattern.
+// Both should be uppercase.  '?' matches any single char.
+// Pattern like "EXPAN.???" or "????????.EXE" or "*.*".
+// DOS expands '*' to '?' fills before sending to the redirector,
+// e.g. "*.EXE" -> "????????.EXE", "*.*" -> "????????.???".
+static bool dos_glob_match(const std::string& name, const std::string& pattern) {
+    // Convert both to FCB-style 11-char format for comparison
+    auto to_fcb = [](const std::string& s, char out[11]) {
+        std::memset(out, ' ', 11);
+        size_t dot = s.find('.');
+        std::string stem = (dot == std::string::npos) ? s : s.substr(0, dot);
+        std::string ext  = (dot == std::string::npos) ? "" : s.substr(dot + 1);
+        // '*' in stem/ext fills remaining positions with '?' (per DOSBox)
+        bool star = false;
+        for (size_t i = 0; i < 8; i++) {
+            if (i < stem.size() && stem[i] == '*') star = true;
+            if (star) out[i] = '?'; else if (i < stem.size()) out[i] = stem[i];
+        }
+        star = false;
+        for (size_t i = 0; i < 3; i++) {
+            if (i < ext.size() && ext[i] == '*') star = true;
+            if (star) out[8+i] = '?'; else if (i < ext.size()) out[8+i] = ext[i];
+        }
+    };
+
+    char nfcb[11], pfcb[11];
+    to_fcb(name, nfcb);
+    to_fcb(pattern, pfcb);
+
+    for (int i = 0; i < 11; i++) {
+        if (pfcb[i] == '?') continue;
+        if (pfcb[i] != nfcb[i]) return false;
+    }
+    return true;
+}
+
 void ISA_TestCard::hfs_cmd_find_first() {
     std::string pattern = hfs_get_string(hfs_param_);
     auto dir = ISA_TestCard_resolve(hostfs_root_, pattern);
@@ -291,17 +333,20 @@ void ISA_TestCard::hfs_cmd_find_first() {
     // Separate directory and glob (e.g. "SUBDIR\*.*" -> dir="SUBDIR", glob="*.*")
     auto parent = dir.parent_path();
     auto glob = dir.filename().string();
+    std::transform(glob.begin(), glob.end(), glob.begin(), ::toupper);
 
     hfs_dir_entries_.clear();
     hfs_dir_idx_ = 0;
 
     std::error_code ec;
     for (auto& e : fs::directory_iterator(parent, ec)) {
-        // Simple glob: "*.*" matches everything, "*.EXT" matches extension
-        std::string name = e.path().filename().string();
-        std::transform(name.begin(), name.end(), name.begin(), ::toupper);
-        // For now, accept all entries (TODO: proper 8.3 glob matching)
-        hfs_dir_entries_.push_back(e);
+        char dos_name[13];
+        std::string host_name = e.path().filename().string();
+        if (!to_dos_83(host_name, dos_name)) continue;
+        std::string upper_name(dos_name);
+        std::transform(upper_name.begin(), upper_name.end(), upper_name.begin(), ::toupper);
+        if (dos_glob_match(upper_name, glob))
+            hfs_dir_entries_.push_back(e);
     }
 
     if (ec || hfs_dir_entries_.empty()) {

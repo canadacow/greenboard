@@ -547,12 +547,26 @@ static void _interrupt far int2f_handler(union INTPACK r)
     /* ---- File ops ---- */
 
     case 0x16:  /* Open existing file */
-    case 0x2E:  /* SPOPNFIL (DOS 4+ multipurpose open) */
         card_reset();
         card_send_string(fn1);
         if (card_exec(CMD_OPEN) != 1) goto err;
         fill_sft(sft, fn1);
-        if (subfn == 0x2E) r.w.cx = 1; /* action: file opened */
+        return;
+
+    case 0x2E:  /* SPOPNFIL (DOS 4+ multipurpose open/create) */
+        card_reset();
+        card_send_string(fn1);
+        if (card_exec(CMD_OPEN) == 1) {
+            fill_sft(sft, fn1);
+            r.w.cx = 1; /* action: file opened */
+            return;
+        }
+        /* Open failed (file doesn't exist) -- try create */
+        card_reset();
+        card_send_string(fn1);
+        if (card_exec(CMD_CREATE) != 1) goto err;
+        fill_sft(sft, fn1);
+        r.w.cx = 2; /* action: file created */
         return;
 
     case 0x17:  /* Create/truncate file */
