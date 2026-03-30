@@ -65,7 +65,7 @@ public:
     void set_addr_latches(IC_74S373* u18, IC_74LS670* u19);
     void set_bus_ctrl(class IC_8288* bc) { bus_ctrl_ = bc; }
 
-    enum class State { SI, BusRequested, S1, S2, S3, S4, M2M_S1, M2M_S2, M2M_S3, M2M_S4 };
+    enum class State { SI, BusRequested, S1, S2, S3, S4, M2M_S1, M2M_S2, M2M_S3, M2M_S4, V_S1, V_S2, V_S3, V_S4 };
     State state() const { return state_; }
     int active_channel() const { return active_ch_; }
 

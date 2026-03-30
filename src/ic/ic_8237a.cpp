@@ -484,6 +484,12 @@ void IC_8237A::on_clk_falling() {
 
     case State::BusRequested:
         if (pin_hlda_.level() == Level::High) {
+            auto& ch = ch_[active_ch_];
+            uint8_t transfer_type = (ch.mode >> 2) & 0x03;
+            if (transfer_type == 0x00) {
+                state_ = State::V_S1;
+                break;
+            }
             state_ = State::S1;
         } else {
             break;
@@ -755,6 +761,68 @@ void IC_8237A::on_clk_falling() {
         release_data();
         state_ = State::S4;  // S4 handles count, TC, and looping back to ch0
         break;
+
+    // =====================================================================
+    // Verify transfer state machine
+    // Pulses DACK to acknowledge the device, cycles the address counter,
+    // and fires TC when done.  Does not assert AEN, memory/IO strobes,
+    // or drive the data bus -- the bus stays with the CPU.
+    // =====================================================================
+
+    case State::V_S1:
+        // Assert DACK for the active channel
+        if (!(command_ & 0x01))
+            pin_dack_[active_ch_].drive(Level::Low);
+        state_ = State::V_S2;
+        break;
+
+    case State::V_S2:
+        // Hold DACK for one cycle (device latches)
+        state_ = State::V_S3;
+        break;
+
+    case State::V_S3:
+        // Deassert DACK
+        pin_dack_[active_ch_].drive(Level::High);
+        state_ = State::V_S4;
+        break;
+
+    case State::V_S4: {
+        // Update address and count, check TC
+        auto& ch = ch_[active_ch_];
+        bool decrement = (ch.mode & 0x20) != 0;
+        if (decrement) ch.current_address--;
+        else           ch.current_address++;
+
+        bool tc = false;
+        if (ch.current_count == 0) {
+            tc = true;
+            ch.tc_reached = true;
+            pin_eop_.drive(Level::Low);
+            eop_pending_ = true;
+            if (ch.mode & 0x10) {
+                ch.current_address = ch.base_address;
+                ch.current_count = ch.base_count;
+            } else {
+                ch.masked = true;
+            }
+        } else {
+            ch.current_count--;
+        }
+
+        // Single transfer: always release after each byte
+        // (mode_type is always checked, but verify is typically single)
+        uint8_t mode_type = (ch.mode >> 6) & 0x03;
+        bool release = (mode_type == 0x01) || tc;
+        if (release) {
+            state_ = State::SI;
+            active_ch_ = -1;
+            pin_hrq_.drive(Level::Low); hrq_driven_ = false;
+        } else {
+            state_ = State::V_S1;
+        }
+        break;
+    }
 
     } // switch
 }
