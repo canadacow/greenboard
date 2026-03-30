@@ -252,8 +252,8 @@ BIUTask IC_8088::biu_run() {
         uint8_t s1 = (bus_type >> 1) & 1;
         uint8_t s0 = bus_type & 1;
 
-        bool trace_mmio = (bus_op_.addr & 0xFFFFF) >= 0x40000 && (bus_op_.addr & 0xFFFFF) < 0xA0000;
-        auto bs = [this]() { return debug_bus_state_ ? debug_bus_state_() : std::string(""); };
+        constexpr bool trace_bus = false; // Specify an address range to follow here
+        auto bs = [this]() { return debug_bus_state_ ? debug_bus_state_() : std::string(""); };            
 
         if (kind == BusOp::MEM_READ || kind == BusOp::IO_READ || kind == BusOp::FETCH) {
             // ---- Read bus cycle: T1, T2, T3, Tw*, T4 ----
@@ -262,28 +262,28 @@ BIUTask IC_8088::biu_run() {
             t_state_ = TState::T1;
             drive_status(s2, s1, s0);
             drive_address(bus_op_.addr & 0xFFFFF);
-            if (trace_mmio) spdlog::info("[BIU] {} | RD {:05X} T1 S={}{}{}", bs(), bus_op_.addr & 0xFFFFF, s2, s1, s0);
+            if (trace_bus) spdlog::info("[BIU] {} | RD {:05X} T1 S={}{}{}", bs(), bus_op_.addr & 0xFFFFF, s2, s1, s0);
             check_nmi();
             co_await std::suspend_always{};
 
             // T2 -- ALE falls, release AD. Status stays active.
             t_state_ = TState::T2;
             release_data();
-            if (trace_mmio) spdlog::info("[BIU] {} | RD {:05X} T2", bs(), bus_op_.addr & 0xFFFFF);
+            if (trace_bus) spdlog::info("[BIU] {} | RD {:05X} T2", bs(), bus_op_.addr & 0xFFFFF);
             check_nmi();
             co_await std::suspend_always{};
 
             // T3 -- status goes passive. Data driven by memory/peripherals.
             t_state_ = TState::T3;
             drive_status_passive();
-            if (trace_mmio) spdlog::info("[BIU] {} | RD {:05X} T3", bs(), bus_op_.addr & 0xFFFFF);
+            if (trace_bus) spdlog::info("[BIU] {} | RD {:05X} T3", bs(), bus_op_.addr & 0xFFFFF);
             check_nmi();
             co_await std::suspend_always{};
 
             // Tw -- wait states while READY is low
             t_state_ = TState::Tw;
             while (pin_ready_.level() != Level::High) {
-                if (trace_mmio) spdlog::info("[BIU] {} | RD {:05X} Tw", bs(), bus_op_.addr & 0xFFFFF);
+                if (trace_bus) spdlog::info("[BIU] {} | RD {:05X} Tw", bs(), bus_op_.addr & 0xFFFFF);
                 check_nmi();
                 co_await std::suspend_always{};
             }
@@ -291,7 +291,7 @@ BIUTask IC_8088::biu_run() {
             // T4 -- bus cycle complete, read data
             t_state_ = TState::T4;
             bus_op_.read_data = read_data();
-            if (trace_mmio) spdlog::info("[BIU] {} | RD {:05X} T4 data={:02X}", bs(), bus_op_.addr & 0xFFFFF, bus_op_.read_data);
+            if (trace_bus) spdlog::info("[BIU] {} | RD {:05X} T4 data={:02X}", bs(), bus_op_.addr & 0xFFFFF, bus_op_.read_data);
             last_bus_tx_ = {bus_op_.addr & 0xFFFFF, bus_op_.read_data, bus_type};
             bus_t_ = BusT::T1;
             check_nmi();
@@ -305,35 +305,35 @@ BIUTask IC_8088::biu_run() {
             t_state_ = TState::T1;
             drive_status(s2, s1, s0);
             drive_address(bus_op_.addr & 0xFFFFF);
-            if (trace_mmio) spdlog::info("[BIU] {} | WR {:05X}={:02X} T1 S={}{}{}", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data, s2, s1, s0);
+            if (trace_bus) spdlog::info("[BIU] {} | WR {:05X}={:02X} T1 S={}{}{}", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data, s2, s1, s0);
             check_nmi();
             co_await std::suspend_always{};
 
             // T2 -- ALE falls. Switch AD to write data. Status stays active.
             t_state_ = TState::T2;
             drive_data(bus_op_.write_data);
-            if (trace_mmio) spdlog::info("[BIU] {} | WR {:05X}={:02X} T2", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data);
+            if (trace_bus) spdlog::info("[BIU] {} | WR {:05X}={:02X} T2", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data);
             check_nmi();
             co_await std::suspend_always{};
 
             // T3 -- status goes passive. Data held on bus.
             t_state_ = TState::T3;
             drive_status_passive();
-            if (trace_mmio) spdlog::info("[BIU] {} | WR {:05X}={:02X} T3", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data);
+            if (trace_bus) spdlog::info("[BIU] {} | WR {:05X}={:02X} T3", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data);
             check_nmi();
             co_await std::suspend_always{};
 
             // Tw -- wait states while READY is low
             t_state_ = TState::Tw;
             while (pin_ready_.level() != Level::High) {
-                if (trace_mmio) spdlog::info("[BIU] {} | WR {:05X}={:02X} Tw", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data);
+                if (trace_bus) spdlog::info("[BIU] {} | WR {:05X}={:02X} Tw", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data);
                 check_nmi();
                 co_await std::suspend_always{};
             }
 
             // T4 -- bus cycle complete, release data bus
             t_state_ = TState::T4;
-            if (trace_mmio) spdlog::info("[BIU] {} | WR {:05X}={:02X} T4", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data);
+            if (trace_bus) spdlog::info("[BIU] {} | WR {:05X}={:02X} T4", bs(), bus_op_.addr & 0xFFFFF, bus_op_.write_data);
             release_data();
             last_bus_tx_ = {bus_op_.addr & 0xFFFFF, bus_op_.write_data, bus_type};
             bus_t_ = BusT::T1;
@@ -531,17 +531,6 @@ EUTask<void> IC_8088::eu_run() {
     if (cs_ip == 0) { halted_ = true; break; }
 
     prefetch_base_ = cs_ip;
-    if (cs_ip != last_logged_cs_ip_) {
-        if (debug_peek_) {
-            constexpr uint32_t watch_addr = 0x9F840 + 0x00E7;
-            uint8_t lo = debug_peek_(watch_addr & 0xFFFFF);
-            uint8_t hi = debug_peek_((watch_addr + 1) & 0xFFFFF);
-            spdlog::info("[8088] {:04X}:{:04X}  [{:05X}]={:04X}", regs16()[REG_CS], reg_ip_, watch_addr, (hi << 8) | lo);
-        } else {
-            spdlog::info("[8088] {:04X}:{:04X}", regs16()[REG_CS], reg_ip_);
-        }
-        last_logged_cs_ip_ = cs_ip;
-    }
 
     uint8_t opbyte = co_await fetch_byte(0);
     set_opcode(opbyte);
@@ -952,9 +941,6 @@ EUTask<void> IC_8088::eu_run() {
                     regs16()[REG_CS] = (uint16_t)i_data2_;
                 } else {
                     PUSH16_(reg_ip_);
-                    spdlog::info("[8088] CALL {:04X}:{:04X} SS:SP={:04X}:{:04X}",
-                                 regs16()[REG_CS], (uint16_t)(reg_ip_ + (int16_t)i_data0_),
-                                 regs16()[REG_SS], regs16()[REG_SP]);
                 }
             }
             reg_ip_ += (int16_t)i_data0_;
