@@ -286,6 +286,19 @@ void DxState::render_overlay() {
     if (ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false) && dbg_visible)
         *dbg_visible = !*dbg_visible;
 
+    // --- Right-click context menu (same as bottom-right Menu) ---
+    if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+        ImGui::OpenPopup("MainMenu");
+
+    if (ImGui::BeginPopup("MainMenu")) {
+        if (ImGui::MenuItem("System"))        system_open = !system_open;
+        if (ImGui::MenuItem("Board"))         board_view.toggle();
+        if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
+        if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
+        if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
+        ImGui::EndPopup();
+    }
+
     // --- Status + Menu HUD (bottom-right) ---
     {
         ImGuiWindowFlags flags =
@@ -310,15 +323,15 @@ void DxState::render_overlay() {
             if (avail > btn_w) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - btn_w) * 0.5f);
             if (ImGui::Button("  Menu  "))
                 ImGui::OpenPopup("MainMenu");
-        }
 
-        if (ImGui::BeginPopup("MainMenu")) {
-            if (ImGui::MenuItem("System"))        system_open = !system_open;
-            if (ImGui::MenuItem("Board"))         board_view.toggle();
-            if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
-            if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
-            if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
-            ImGui::EndPopup();
+            if (ImGui::BeginPopup("MainMenu")) {
+                if (ImGui::MenuItem("System"))        system_open = !system_open;
+                if (ImGui::MenuItem("Board"))         board_view.toggle();
+                if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
+                if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
+                if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
+                ImGui::EndPopup();
+            }
         }
 
         // Status: PAUSED or MHz (clickable to toggle)
