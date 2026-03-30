@@ -93,7 +93,7 @@ mov byte [es:0x0062], 0x08
 mov byte [es:0x0063], 0x05
 mov byte [es:0x0064], 0x01
 mov byte [es:0x0065], 0x00
-mov byte [es:0x0066], 0xF4
+mov byte [es:0x0066], 0xCC
 
 ; =====================================================================
 ; Test 1 & 2: CALL FAR imm16:imm16 / RETF
