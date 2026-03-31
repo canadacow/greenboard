@@ -261,7 +261,7 @@ void ISA_CGA::on_cycle(Fiber) {
                 vtadj_counter_ = 0;
             }
         } else {
-            vcc_++;
+            vcc_ = (vcc_ + 1) & 0x7F;  // 7-bit counter per 6845
             ma_ += h_disp;
         }
     } else {

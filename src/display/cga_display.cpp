@@ -272,12 +272,28 @@ const ISA_Card* CgaRasterizer::card() const {
 }
 
 Rasterizer::UVRect CgaRasterizer::output_uv_rect() const {
+    // Crop to the active display area (where DE is active).
+    // Vertically: starts at active_start_ (first VCC=0 after VSYNC).
+    // Horizontally: starts after left overscan (back porch).
+    const uint8_t* r = cga_card_->crtc_regs();
+    bool hires = (cga_card_->mode_register() & ISA_CGA::MODE_HIRES_TEXT) ||
+                 (cga_card_->mode_register() & ISA_CGA::MODE_HIRES_GFX);
+    uint32_t char_w = hires ? 8 : 16;
+    uint32_t h_total_chars = r[ISA_CGA::CRTC_HTOTAL] + 1;
+    uint32_t hsync_pos = r[ISA_CGA::CRTC_HSYNC_POS];
+    uint32_t hsync_width = r[ISA_CGA::CRTC_SYNC_WIDTH] & 0x0F;
+    uint32_t left_porch_dots = (h_total_chars - hsync_pos - hsync_width) * char_w;
+
     uint32_t top = cga_card_->active_start_scanline();
     if (top >= (uint32_t)OUT_H) top = 0;
+
+    float u0 = float(left_porch_dots) / float(OUT_W);
     float v0 = float(top) / float(OUT_H);
+    float u1 = float(left_porch_dots + VIEW_W) / float(OUT_W);
     float v1 = float(top + VIEW_H) / float(OUT_H);
+    if (u1 > 1.0f) u1 = 1.0f;
     if (v1 > 1.0f) v1 = 1.0f;
-    return { 0.0f, v0, float(VIEW_W) / float(OUT_W), v1 };
+    return { u0, v0, u1, v1 };
 }
 
 bool CgaRasterizer::init(const RenderContext& rc) {
