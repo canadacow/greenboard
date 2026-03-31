@@ -35,6 +35,8 @@ void ISA_CGA::on_power_on() {
     ma_ = 0;
     vtadj_counter_ = 0;
     in_vtadj_ = false;
+    in_vsync_ = false;
+    vsync_counter_ = 0;
     std::memset(scanline_regs_, 0, sizeof(scanline_regs_));
     QueryPerformanceFrequency(&qpc_freq_);
     QueryPerformanceCounter(&qpc_start_);
@@ -79,8 +81,8 @@ uint8_t ISA_CGA::on_io_read(uint16_t port) {
             if (hcc_ >= crtc_reg_[CRTC_HDISPLAYED] ||
                 vcc_ >= crtc_reg_[CRTC_VDISPLAYED])
                 status |= 0x01;
-            // Bit 3: VSYNC. Active when VCC == R7.
-            if (vcc_ == (crtc_reg_[CRTC_VSYNC_POS] & 0x7F))
+            // Bit 3: VSYNC. Active during 16-scanline VSYNC pulse.
+            if (in_vsync_)
                 status |= 0x08;
             return status;
         }
@@ -270,10 +272,26 @@ void ISA_CGA::on_cycle(Fiber) {
         ra_++;
     }
 
+    // VSYNC: starts when VCC == R7, lasts 16 scanlines.
+    // The monitor retraces during VSYNC.  scanline_ resets to 0
+    // at the end of VSYNC -- that's when the beam reaches the top.
+    uint8_t vsync_pos = crtc_reg_[CRTC_VSYNC_POS] & 0x7F;
+    if (!in_vsync_ && vcc_ == vsync_pos && ra_ == 0) {
+        in_vsync_ = true;
+        vsync_counter_ = 0;
+    }
+    if (in_vsync_) {
+        vsync_counter_++;
+        if (vsync_counter_ >= 16) {
+            in_vsync_ = false;
+            scanline_ = 0;
+            return;
+        }
+    }
+
     // scanline_ tracks the physical beam on the monitor (0-261).
-    // It wraps independently of VCC -- the monitor resets at VSYNC.
     if (++scanline_ >= FRAME_LINES)
-        scanline_ = 0;
+        scanline_ = FRAME_LINES - 1;  // clamp, don't wrap -- wait for VSYNC
 }
 
 void ISA_CGA::stamp_scanline() {

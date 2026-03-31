@@ -237,6 +237,8 @@ private:
     uint32_t ma_ = 0;            // memory address (linear address for this row)
     uint32_t vtadj_counter_ = 0; // counts R5 adjust scanlines at frame end
     bool     in_vtadj_ = false;  // true while counting adjust scanlines
+    bool     in_vsync_ = false;  // true during 16-scanline VSYNC pulse
+    uint32_t vsync_counter_ = 0; // counts scanlines within VSYNC
     void stamp_scanline();       // write current state into scanline_regs_[scanline_]
 };
 
