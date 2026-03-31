@@ -113,6 +113,9 @@ private:
 
     ISA_Card* find_port_owner(uint16_t port) { return port < IO_PORTS ? port_map_[port] : nullptr; }
     ISA_Card* find_mmio_owner(uint32_t addr) { return addr < (MMIO_PAGES * 4096) ? mmio_map_[addr >> 12] : nullptr; }
+
+    // Cards that are also Components get on_cycle() dispatched from ISA_Bus::on_cycle().
+    std::vector<Component*> clocked_cards_;
 };
 
 } // namespace bench

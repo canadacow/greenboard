@@ -123,6 +123,10 @@ void ISA_Bus::insert_card(int slot_idx, ISA_Card* card,
     for (int ch = 1; ch <= 3; ++ch)
         if (dma_ch_mask & (1 << ch))
             dma_owner_[ch] = card;
+
+    // If the card is a clocked Component, track it for on_cycle dispatch.
+    if (auto* comp = dynamic_cast<Component*>(card))
+        clocked_cards_.push_back(comp);
 }
 
 void ISA_Bus::on_power_on() {
@@ -155,7 +159,11 @@ void ISA_Bus::on_power_on() {
 // Bus protocol -- one evaluation per cycle for all cards
 // =========================================================================
 
-void ISA_Bus::on_cycle(Fiber /*caller*/) {
+void ISA_Bus::on_cycle(Fiber caller) {
+    // Tick clocked cards (e.g. CGA beam simulation).
+    for (auto* c : clocked_cards_)
+        c->on_cycle(caller);
+
     Level ior_cur = ior_.level();
     Level iow_cur = iow_.level();
     Level tc_cur = tc_.level();

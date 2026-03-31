@@ -139,6 +139,7 @@ protected:
 
     friend class Signal;
     friend class Scheduler;
+    friend class ISA_Bus;
 
 private:
     std::string name_;

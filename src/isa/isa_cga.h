@@ -1,5 +1,6 @@
 #pragma once
 #include "isa/isa_card.h"
+#include "core/component.h"
 #include <cstdint>
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -36,9 +37,18 @@ namespace bench {
 //   - Graphics palette + interleaved scanline addressing
 //   - Composite NTSC artifact color (optional pass)
 //   - Aspect-correct upscale to display resolution
-class ISA_CGA final : public ISA_Card {
+class ISA_CGA final : public ISA_Card, public Component {
 public:
     ISA_CGA();
+
+    // Component overrides (clocked by ISA_Bus).
+    void power_on() override { on_power_on(); }
+    void power_off() override {}
+    bool is_powered() const override { return true; }
+    void on_cycle(Fiber) override;
+protected:
+    void subscribe_to(Signal&) override {}
+public:
 
     const std::string& card_name() const override { return name_; }
 
@@ -207,14 +217,16 @@ private:
     // Composite output mode
     bool composite_ = false;
 
-    // Per-scanline beam-racing state
+    // Continuous 6845 beam state, ticked every 304 CLK (1 scanline).
     static constexpr uint32_t CLK_PER_LINE  = 304;       // 912 dots / 3
     static constexpr uint32_t CLK_PER_FRAME = 304 * 262;  // 79648 CLK/frame
     ScanlineRegs scanline_regs_[FRAME_LINES] = {};
-    uint64_t last_frame_num_ = UINT64_MAX;
-    uint32_t current_scanline() const;
-    void snapshot_from_scanline(uint32_t from);
-    void check_frame_boundary();
+    uint32_t clk_counter_ = 0;   // counts 0..303 within a scanline
+    uint32_t scanline_ = 0;      // current scanline 0..261
+    uint32_t vcc_ = 0;           // vertical character counter
+    uint32_t ra_ = 0;            // raster address (scanline within char row)
+    uint32_t ma_ = 0;            // memory address (linear address for this row)
+    void stamp_scanline();       // write current state into scanline_regs_[scanline_]
 };
 
 } // namespace bench

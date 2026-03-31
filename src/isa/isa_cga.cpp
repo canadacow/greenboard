@@ -5,7 +5,7 @@
 
 namespace bench {
 
-ISA_CGA::ISA_CGA() {
+ISA_CGA::ISA_CGA() : Component("CGA") {
     load_font("assets/IBM_CGA-8.raw");
 }
 
@@ -27,8 +27,12 @@ void ISA_CGA::on_power_on() {
     mode_ = 0;
     color_ = 0;
     composite_ = false;
-    last_frame_num_ = UINT64_MAX;
-    snapshot_from_scanline(0);
+    clk_counter_ = 0;
+    scanline_ = 0;
+    vcc_ = 0;
+    ra_ = 0;
+    ma_ = 0;
+    std::memset(scanline_regs_, 0, sizeof(scanline_regs_));
     QueryPerformanceFrequency(&qpc_freq_);
     QueryPerformanceCounter(&qpc_start_);
 }
@@ -50,53 +54,36 @@ bool ISA_CGA::claims_mmio(uint32_t addr) {
 // =========================================================================
 
 uint8_t ISA_CGA::on_io_read(uint16_t port) {
-    check_frame_boundary();
     switch (port) {
-        // CRTC index (mirrored at even ports)
         case 0x3D0: case 0x3D2: case 0x3D4: case 0x3D6:
             return crtc_index_;
 
-        // CRTC data (mirrored at odd ports)
         case 0x3D1: case 0x3D3: case 0x3D5: case 0x3D7:
             if (crtc_index_ < 18)
                 return crtc_reg_[crtc_index_];
             return 0;
 
-        // Mode control register (write-only per spec, return 0)
         case 0x3D8:
             return 0;
 
-        // Color select register (write-only per spec, return 0)
         case 0x3D9:
             return 0;
 
-        // Status register -- CGA retrace timing derived from CLK cycles.
-        // CGA: 912 dots/line, 262 lines/frame. CLK = 4.77 MHz = OSC/3.
-        // 1 CLK = 3 dots. 304 CLK/line, 79648 CLK/frame.
-        // Display active: 640 dots = 213 CLK. H-retrace: 272 dots = 91 CLK.
-        // V-display: 200 lines. V-retrace: lines 224-226.
+        // Status register -- derived from running beam state.
         case 0x3DA: {
-            static constexpr uint32_t H_ACTIVE_CLK  = 213;  // 640 dots / 3
-            static constexpr uint32_t V_ACTIVE      = 200;
-            static constexpr uint32_t V_SYNC_START  = 224;
-            static constexpr uint32_t V_SYNC_END    = 227;
-
-            uint64_t clk = clk_cycles_ ? *clk_cycles_ : 0;
-            uint32_t pos_in_frame = static_cast<uint32_t>(clk % CLK_PER_FRAME);
-            uint32_t line = pos_in_frame / CLK_PER_LINE;
-            uint32_t pos_in_line = pos_in_frame % CLK_PER_LINE;
+            static constexpr uint32_t H_ACTIVE_CLK = 213;  // 640 dots / 3
+            static constexpr uint32_t V_ACTIVE     = 200;
+            static constexpr uint32_t V_SYNC_START = 224;
+            static constexpr uint32_t V_SYNC_END   = 227;
 
             uint8_t status = 0;
-            // Bit 0: display enable (1 = not in active display, safe for VRAM)
-            if (pos_in_line >= H_ACTIVE_CLK || line >= V_ACTIVE)
+            if (clk_counter_ >= H_ACTIVE_CLK || scanline_ >= V_ACTIVE)
                 status |= 0x01;
-            // Bit 3: vertical retrace
-            if (line >= V_SYNC_START && line < V_SYNC_END)
+            if (scanline_ >= V_SYNC_START && scanline_ < V_SYNC_END)
                 status |= 0x08;
             return status;
         }
 
-        // Light pen (not implemented)
         case 0x3DB: case 0x3DC:
             return 0;
 
@@ -106,11 +93,10 @@ uint8_t ISA_CGA::on_io_read(uint16_t port) {
 }
 
 // =========================================================================
-// I/O writes
+// I/O writes -- just update registers, on_cycle() stamps scanlines.
 // =========================================================================
 
 void ISA_CGA::on_io_write(uint16_t port, uint8_t val) {
-    check_frame_boundary();
     switch (port) {
         case 0x3D0: case 0x3D2: case 0x3D4: case 0x3D6:
             crtc_index_ = val & 0x1F;
@@ -118,10 +104,6 @@ void ISA_CGA::on_io_write(uint16_t port, uint8_t val) {
 
         case 0x3D1: case 0x3D3: case 0x3D5: case 0x3D7:
             if (crtc_index_ < 18) {
-                // MC6845 register masking per DOSBox vga_other.cpp:
-                //   R4 (vtotal): 7 bits. R6 (vdend): 7 bits.
-                //   R9 (max_scanline): 5 bits. R10 (cursor_start): 6 bits.
-                //   R11 (cursor_end): 5 bits. R12 (start_addr_h): 6 bits.
                 switch (crtc_index_) {
                     case CRTC_VTOTAL:      val &= 0x7F; break;
                     case CRTC_VDISPLAYED:  val &= 0x7F; break;
@@ -132,37 +114,15 @@ void ISA_CGA::on_io_write(uint16_t port, uint8_t val) {
                     default: break;
                 }
                 crtc_reg_[crtc_index_] = val;
-                // Any CRTC register that affects rendering triggers a
-                // snapshot for beam-racing support.
-                switch (crtc_index_) {
-                    case CRTC_START_ADDR_H:
-                    case CRTC_START_ADDR_L:
-                    case CRTC_MAX_SCANLINE:
-                    case CRTC_HDISPLAYED:
-                    case CRTC_VDISPLAYED:
-                    case CRTC_VTOTAL:
-                    case CRTC_VTOTAL_ADJ:
-                    case CRTC_HSYNC_POS:
-                    case CRTC_SYNC_WIDTH: {
-                        uint32_t sl = current_scanline();
-                        if (sl < FRAME_LINES) snapshot_from_scanline(sl);
-                        break;
-                    }
-                    default: break;
-                }
             }
             break;
 
         case 0x3D8:
             mode_ = val;
-            { uint32_t sl = current_scanline();
-              if (sl < FRAME_LINES) snapshot_from_scanline(sl); }
             break;
 
         case 0x3D9:
             color_ = val;
-            { uint32_t sl = current_scanline();
-              if (sl < FRAME_LINES) snapshot_from_scanline(sl); }
             break;
 
         case 0x3DB: case 0x3DC:
@@ -182,8 +142,7 @@ uint8_t ISA_CGA::on_mmio_read(uint32_t addr) {
 }
 
 void ISA_CGA::on_mmio_write(uint32_t addr, uint8_t val) {
-    uint32_t off = (addr - FB_BASE) & (FB_SIZE - 1);
-    vram_[off] = val;
+    vram_[(addr - FB_BASE) & (FB_SIZE - 1)] = val;
 }
 
 // =========================================================================
@@ -194,23 +153,19 @@ void ISA_CGA::fill_gpu_constants(GpuConstants& cb) const {
     cb.mode = mode_;
     cb.color = color_;
 
-    // Compute blink from wall clock at CGA frame rate (~59.92 Hz).
-    // 5-bit frame counter: cursor blinks at bit 3 (1/16), attr at bit 4 (1/32).
     LARGE_INTEGER qpc_now;
     QueryPerformanceCounter(&qpc_now);
     double elapsed = double(qpc_now.QuadPart - qpc_start_.QuadPart) / qpc_freq_.QuadPart;
     uint32_t frames = static_cast<uint32_t>(elapsed * CGA_FRAME_HZ);
     uint8_t counter = frames & 0x1F;
-    cb.cursor_blink = (counter & 0x08) ? 1 : 0;  // bit 3: ~3.75 Hz
-    cb.attr_blink = (counter & 0x10) ? 0 : 1;    // bit 4: ~1.875 Hz (inverted: visible when 0)
+    cb.cursor_blink = (counter & 0x08) ? 1 : 0;
+    cb.attr_blink = (counter & 0x10) ? 0 : 1;
 
     cb.composite = composite_ ? 1 : 0;
     cb.start_addr = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
     cb.cursor_addr = (crtc_reg_[CRTC_CURSOR_H] << 8) | crtc_reg_[CRTC_CURSOR_L];
     cb.cursor_start = crtc_reg_[CRTC_CURSOR_START] & 0x1F;
     cb.cursor_end = crtc_reg_[CRTC_CURSOR_END] & 0x1F;
-    // DOSBox: cursor enabled = ((val & 0x60) != 0x20)
-    // Bits 5:6 of cursor_start: 00=on, 01=off, 10=blink/16, 11=blink/32
     cb.cursor_enabled = ((crtc_reg_[CRTC_CURSOR_START] & 0x60) != 0x20) ? 1 : 0;
     cb.max_scanline = crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F;
     cb.h_displayed = crtc_reg_[CRTC_HDISPLAYED];
@@ -225,89 +180,52 @@ void ISA_CGA::fill_gpu_constants(GpuConstants& cb) const {
 }
 
 // =========================================================================
-// Per-scanline beam-racing support
+// Continuous 6845 beam simulation -- called every CLK cycle via DAG.
 // =========================================================================
 
-uint32_t ISA_CGA::current_scanline() const {
-    if (!clk_cycles_) return 0;
-    uint32_t pos = static_cast<uint32_t>(*clk_cycles_ % CLK_PER_FRAME);
-    return pos / CLK_PER_LINE;
-}
+void ISA_CGA::on_cycle(Fiber) {
+    if (++clk_counter_ >= CLK_PER_LINE) {
+        clk_counter_ = 0;
 
-void ISA_CGA::snapshot_from_scanline(uint32_t from) {
-    // Simulate the 6845 counters scanline-by-scanline from `from` onward.
-    //
-    // The 6845 has three key counters:
-    //   RA  (raster address)  - scanline within character row, 0..R9
-    //   VCC (vertical char counter) - character row, 0..R4
-    //   MA  (memory address)  - linear address, start_addr + VCC*h_disp
-    //
-    // RA increments each scanline.  When RA reaches R9 (max_scanline),
-    // on the next scanline RA resets to 0, VCC increments, and MA
-    // advances by h_displayed.  MA repeats the same value for all
-    // scanlines within a character row.
-    //
-    // When called mid-frame (from > 0), we inherit the counters from
-    // the previous scanline and continue with the (potentially changed)
-    // register values.
+        // Stamp the current scanline with registers + counters.
+        stamp_scanline();
 
-    uint8_t max_sl = crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F;
-    uint8_t h_disp = crtc_reg_[CRTC_HDISPLAYED];
-    if (h_disp == 0) h_disp = 80;
+        // Tick 6845 counters for next scanline.
+        uint8_t max_sl = crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F;
+        uint8_t h_disp = crtc_reg_[CRTC_HDISPLAYED];
+        if (h_disp == 0) h_disp = 80;
 
-    uint32_t vcc, ra, ma;
-    if (from > 0 && from < FRAME_LINES) {
-        // Continue from previous scanline's state, then tick.
-        vcc = scanline_regs_[from - 1].vcc;
-        ra  = scanline_regs_[from - 1].ra;
-        ma  = scanline_regs_[from - 1].ma;
-        // Tick: previous scanline completed.
-        if (ra >= max_sl) {
-            ra = 0;
-            vcc++;
-            ma += h_disp;
+        if (ra_ >= max_sl) {
+            ra_ = 0;
+            vcc_++;
+            ma_ += h_disp;
         } else {
-            ra++;
+            ra_++;
         }
-    } else {
-        // Frame start: counters reset, MA loads from start_addr.
-        vcc = 0;
-        ra  = 0;
-        ma  = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
-    }
 
-    for (uint32_t i = from; i < FRAME_LINES; ++i) {
-        ScanlineRegs sr;
-        sr.mode        = mode_;
-        sr.color       = color_;
-        sr.ma          = ma;
-        sr.ra          = ra;
-        sr.vcc         = vcc;
-        sr.h_displayed = h_disp;
-        sr.v_displayed = crtc_reg_[CRTC_VDISPLAYED];
-        sr.hsync_pos   = crtc_reg_[CRTC_HSYNC_POS];
-        sr.hsync_width = crtc_reg_[CRTC_SYNC_WIDTH] & 0x0F;
-        sr._pad[0] = sr._pad[1] = sr._pad[2] = 0;
-        scanline_regs_[i] = sr;
-
-        // Tick counters for next scanline.
-        if (ra >= max_sl) {
-            ra = 0;
-            vcc++;
-            ma += h_disp;
-        } else {
-            ra++;
+        // Advance scanline. On frame wrap, reset counters per 6845:
+        // VCC=0, RA=0, MA reloaded from start_addr (R12:R13).
+        if (++scanline_ >= FRAME_LINES) {
+            scanline_ = 0;
+            vcc_ = 0;
+            ra_ = 0;
+            ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
         }
     }
 }
 
-void ISA_CGA::check_frame_boundary() {
-    if (!clk_cycles_) return;
-    uint64_t frame = *clk_cycles_ / CLK_PER_FRAME;
-    if (frame != last_frame_num_) {
-        last_frame_num_ = frame;
-        snapshot_from_scanline(0);
-    }
+void ISA_CGA::stamp_scanline() {
+    ScanlineRegs& sr = scanline_regs_[scanline_];
+    sr.mode        = mode_;
+    sr.color       = color_;
+    sr.ma          = ma_;
+    sr.ra          = ra_;
+    sr.vcc         = vcc_;
+    sr.h_displayed = crtc_reg_[CRTC_HDISPLAYED];
+    sr.v_displayed = crtc_reg_[CRTC_VDISPLAYED];
+    sr.hsync_pos   = crtc_reg_[CRTC_HSYNC_POS];
+    sr.hsync_width = crtc_reg_[CRTC_SYNC_WIDTH] & 0x0F;
+    sr._pad[0] = sr._pad[1] = sr._pad[2] = 0;
 }
 
 } // namespace bench
