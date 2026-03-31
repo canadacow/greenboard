@@ -94,24 +94,32 @@ public:
     // Fill a GpuConstants struct from current register state.
     void fill_gpu_constants(GpuConstants& cb) const;
 
-    // --- Per-scanline register snapshots for beam-racing ---
-    // Programs that change mode/color/start_addr mid-frame (timed to h-retrace
-    // via polling 0x3DA bit 0) produce per-scanline variation.  The ISA_CGA
-    // card captures these changes as they happen during simulation.  The shader
-    // reads per-scanline values from a buffer instead of global constants.
+    // --- Rasterized scanline buffer ---
+    // The beam reads VRAM as it scans, like a real CRT hitting phosphor.
+    // Each scanline captures: register state, 6845 counters, AND the
+    // VRAM row the beam read at that moment.  The shader renders from
+    // this accumulated buffer, not from live VRAM.
     static constexpr uint32_t FRAME_LINES = 262;
+    static constexpr uint32_t SCANLINE_ROW_BYTES = 160;  // max 80 chars * 2 bytes
+    static constexpr uint32_t SCANLINE_ROW_U32S  = SCANLINE_ROW_BYTES / 4;  // 40
+
     struct ScanlineRegs {
-        uint32_t mode;          // 0x3D8 mode control register
-        uint32_t color;         // 0x3D9 color select register
-        uint32_t ma;            // effective MA (linear address) for this scanline
-        uint32_t ra;            // RA (raster address / scanline within char row)
-        uint32_t vcc;           // VCC (vertical character counter / char row)
-        uint32_t h_displayed;   // CRTC R1: columns displayed
-        uint32_t v_displayed;   // CRTC R6: rows displayed
-        uint32_t hsync_pos;     // CRTC R2: horizontal sync position
-        uint32_t hsync_width;   // CRTC R3 low nibble
-        uint32_t _pad[3];       // pad to 48 bytes (12 uint32s)
+        // Register state + counters (12 uint32s)
+        uint32_t mode;
+        uint32_t color;
+        uint32_t ma;            // 6845 MA for this scanline
+        uint32_t ra;            // 6845 RA (scanline within char row)
+        uint32_t vcc;           // 6845 VCC (character row counter)
+        uint32_t h_displayed;   // R1
+        uint32_t v_displayed;   // R6
+        uint32_t hsync_pos;     // R2
+        uint32_t hsync_width;   // R3 low nibble
+        uint32_t _pad[3];
+        // VRAM row captured by the beam (40 uint32s = 160 bytes)
+        uint32_t vram_row[SCANLINE_ROW_U32S];
     };
+    static_assert(sizeof(ScanlineRegs) == (12 + 40) * 4);  // 208 bytes
+
     const ScanlineRegs* scanline_regs() const { return scanline_regs_; }
 
     // --- CRTC register indices ---

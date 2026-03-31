@@ -226,6 +226,31 @@ void ISA_CGA::stamp_scanline() {
     sr.hsync_pos   = crtc_reg_[CRTC_HSYNC_POS];
     sr.hsync_width = crtc_reg_[CRTC_SYNC_WIDTH] & 0x0F;
     sr._pad[0] = sr._pad[1] = sr._pad[2] = 0;
+
+    // Capture the VRAM row the beam reads at this scanline.
+    // Text mode: MA addresses char+attr pairs, 2 bytes each.
+    //   Copy h_displayed * 2 bytes starting at (MA & 0x1FFF) * 2.
+    // Graphics mode: MA addresses bytes, RA0 selects bank.
+    //   Copy from ((MA & 0x0FFF) << 1) + (RA & 1) * 0x2000.
+    uint8_t h_disp = sr.h_displayed;
+    if (h_disp == 0) h_disp = 80;
+    uint32_t bytes = (mode_ & MODE_GRAPHICS) ? h_disp : h_disp * 2;
+    if (bytes > SCANLINE_ROW_BYTES) bytes = SCANLINE_ROW_BYTES;
+
+    uint32_t vram_offset;
+    if (mode_ & MODE_GRAPHICS) {
+        vram_offset = ((ma_ & 0x0FFF) << 1) + (ra_ & 1) * 0x2000;
+    } else {
+        vram_offset = (ma_ & 0x1FFF) * 2;
+    }
+
+    // Copy with wrap within 16KB VRAM.
+    auto* dst = reinterpret_cast<uint8_t*>(sr.vram_row);
+    for (uint32_t i = 0; i < bytes; ++i)
+        dst[i] = vram_[(vram_offset + i) & (FB_SIZE - 1)];
+    // Zero remainder.
+    for (uint32_t i = bytes; i < SCANLINE_ROW_BYTES; ++i)
+        dst[i] = 0;
 }
 
 } // namespace bench

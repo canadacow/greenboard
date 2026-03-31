@@ -43,7 +43,11 @@ Buffer<uint> vram : register(t0);          // 16KB VRAM (4096 uint32s)
 Buffer<uint> font_buf : register(t1);      // 2048-byte 8x8 font ROM (512 uint32s)
 Buffer<uint> palette : register(t2);       // 16 RGBA colors
 
-Buffer<uint> scanline_buf : register(t3);  // 262 scanlines x 4 uint32s (mode, color, start_addr, pad)
+Buffer<uint> scanline_buf : register(t3);  // 262 scanlines x 52 uint32s (12 header + 40 vram row)
+
+// Stride per scanline in the scanline buffer (uint32s).
+#define SL_STRIDE 52
+#define SL_VRAM_OFFSET 12  // vram_row starts at uint32 index 12
 
 RWTexture2D<float4> output_tex : register(u0);  // 912x262 full NTSC frame
 
@@ -55,10 +59,19 @@ RWTexture2D<float4> output_tex : register(u0);  // 912x262 full NTSC frame
 #define MODE_HIRES_GFX   0x10
 #define MODE_BLINK       0x20
 
-// Read a byte from VRAM
+// Read a byte from the global VRAM buffer (for font ROM fallback etc.)
 uint vram_byte(uint addr) {
     uint word = vram[addr >> 2];
     return (word >> ((addr & 3) * 8)) & 0xFF;
+}
+
+// Read a byte from a scanline's captured VRAM row.
+// `sl_base` is the scanline's base index in scanline_buf.
+// `byte_idx` is the byte offset within the row (0..159).
+uint sl_vram_byte(uint sl_base, uint byte_idx) {
+    uint word_idx = sl_base + SL_VRAM_OFFSET + (byte_idx >> 2);
+    uint word = scanline_buf[word_idx];
+    return (word >> ((byte_idx & 3) * 8)) & 0xFF;
 }
 
 // Read a byte from font ROM
@@ -118,7 +131,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     // Per-scanline register state (beam-racing support).
     // Programs that switch modes mid-frame also reprogram R9, R1, R6,
     // so ALL rendering-critical registers are captured per-scanline.
-    uint sl_base = py * 12;  // 12 uint32s per scanline (sizeof(ScanlineRegs)/4)
+    uint sl_base = py * SL_STRIDE;  // 52 uint32s per scanline
     uint sl_mode          = scanline_buf[sl_base + 0];
     uint sl_color         = scanline_buf[sl_base + 1];
     uint sl_ma            = scanline_buf[sl_base + 2];  // MA: linear address
@@ -180,15 +193,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     float4 out_color;
 
     if (sl_mode & MODE_GRAPHICS) {
-        // Graphics modes: interleaved scanlines.
-        // MA is the 6845 address for this row (precomputed).
-        // CGA graphics: RAM addr = (MA & 0x0FFF) << 1, bit 13 = RA0.
-        uint line_base = ((sl_ma & 0x0FFF) << 1)
-                       + (scanline & 1) * 0x2000;
-
+        // Graphics modes.  The scanline's vram_row was captured from
+        // the correct interleaved bank at stamp time.  Index by pixel
+        // position within the row.
         if (sl_mode & MODE_HIRES_GFX) {
             // 640x200 1bpp -- 8 pixels per byte, 1 dot per pixel.
-            uint byte_val = vram_byte(line_base + px / 8);
+            uint byte_val = sl_vram_byte(sl_base, px / 8);
             uint lit = (byte_val >> (7 - (px & 7))) & 1;
             uint fg = sl_color & 0xF;
             if (fg == 0) fg = 15;
@@ -196,7 +206,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
         } else {
             // 320x200 2bpp -- 4 pixels per byte, doubled to 640 dots.
             uint src_x = px / 2;
-            uint byte_val = vram_byte(line_base + src_x / 4);
+            uint byte_val = sl_vram_byte(sl_base, src_x / 4);
             uint pixel = (byte_val >> (6 - (src_x & 3) * 2)) & 3;
 
             uint color_idx;
@@ -214,13 +224,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
             out_color = pal_color(color_idx);
         }
     } else {
-        // Text modes: MA is the 6845 linear address for this scanline's
-        // character row (precomputed by counter simulation).
-        // CGA text: RAM addr = (MA + char_col) * 2, masked to 16KB.
-        uint cell = (sl_ma + char_col) & 0x1FFF;
-        uint addr = cell * 2;
-        uint ch   = vram_byte(addr);
-        uint attr  = vram_byte(addr + 1);
+        // Text modes.  The scanline's vram_row was captured from MA
+        // at stamp time.  char_col indexes into it (2 bytes per char).
+        uint cell = (sl_ma + char_col) & 0x1FFF;  // for cursor comparison
+        uint ch   = sl_vram_byte(sl_base, char_col * 2);
+        uint attr  = sl_vram_byte(sl_base, char_col * 2 + 1);
 
         uint fg = attr & 0x0F;
         uint bg = (attr >> 4) & 0x0F;
