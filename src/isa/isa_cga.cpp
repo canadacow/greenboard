@@ -27,6 +27,8 @@ void ISA_CGA::on_power_on() {
     mode_ = 0;
     color_ = 0;
     composite_ = false;
+    last_frame_num_ = UINT64_MAX;
+    snapshot_from_scanline(0);
     QueryPerformanceFrequency(&qpc_freq_);
     QueryPerformanceCounter(&qpc_start_);
 }
@@ -48,6 +50,7 @@ bool ISA_CGA::claims_mmio(uint32_t addr) {
 // =========================================================================
 
 uint8_t ISA_CGA::on_io_read(uint16_t port) {
+    check_frame_boundary();
     switch (port) {
         // CRTC index (mirrored at even ports)
         case 0x3D0: case 0x3D2: case 0x3D4: case 0x3D6:
@@ -73,8 +76,6 @@ uint8_t ISA_CGA::on_io_read(uint16_t port) {
         // Display active: 640 dots = 213 CLK. H-retrace: 272 dots = 91 CLK.
         // V-display: 200 lines. V-retrace: lines 224-226.
         case 0x3DA: {
-            static constexpr uint32_t CLK_PER_LINE  = 304;
-            static constexpr uint32_t CLK_PER_FRAME = 304 * 262;
             static constexpr uint32_t H_ACTIVE_CLK  = 213;  // 640 dots / 3
             static constexpr uint32_t V_ACTIVE      = 200;
             static constexpr uint32_t V_SYNC_START  = 224;
@@ -109,6 +110,7 @@ uint8_t ISA_CGA::on_io_read(uint16_t port) {
 // =========================================================================
 
 void ISA_CGA::on_io_write(uint16_t port, uint8_t val) {
+    check_frame_boundary();
     switch (port) {
         case 0x3D0: case 0x3D2: case 0x3D4: case 0x3D6:
             crtc_index_ = val & 0x1F;
@@ -130,15 +132,24 @@ void ISA_CGA::on_io_write(uint16_t port, uint8_t val) {
                     default: break;
                 }
                 crtc_reg_[crtc_index_] = val;
+                if (crtc_index_ == CRTC_START_ADDR_H ||
+                    crtc_index_ == CRTC_START_ADDR_L) {
+                    uint32_t sl = current_scanline();
+                    if (sl < FRAME_LINES) snapshot_from_scanline(sl);
+                }
             }
             break;
 
         case 0x3D8:
             mode_ = val;
+            { uint32_t sl = current_scanline();
+              if (sl < FRAME_LINES) snapshot_from_scanline(sl); }
             break;
 
         case 0x3D9:
             color_ = val;
+            { uint32_t sl = current_scanline();
+              if (sl < FRAME_LINES) snapshot_from_scanline(sl); }
             break;
 
         case 0x3DB: case 0x3DC:
@@ -191,7 +202,39 @@ void ISA_CGA::fill_gpu_constants(GpuConstants& cb) const {
     cb.max_scanline = crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F;
     cb.h_displayed = crtc_reg_[CRTC_HDISPLAYED];
     cb.v_displayed = crtc_reg_[CRTC_VDISPLAYED];
-    cb._pad[0] = cb._pad[1] = cb._pad[2] = 0;
+    cb.h_total = crtc_reg_[CRTC_HTOTAL];
+    cb.hsync_pos = crtc_reg_[CRTC_HSYNC_POS];
+    cb.hsync_width = crtc_reg_[CRTC_SYNC_WIDTH] & 0x0F;
+    cb.v_total = crtc_reg_[CRTC_VTOTAL] & 0x7F;
+    cb.vtotal_adj = crtc_reg_[CRTC_VTOTAL_ADJ] & 0x1F;
+    cb.vsync_pos = crtc_reg_[CRTC_VSYNC_POS] & 0x7F;
+    cb._pad[0] = cb._pad[1] = 0;
+}
+
+// =========================================================================
+// Per-scanline beam-racing support
+// =========================================================================
+
+uint32_t ISA_CGA::current_scanline() const {
+    if (!clk_cycles_) return 0;
+    uint32_t pos = static_cast<uint32_t>(*clk_cycles_ % CLK_PER_FRAME);
+    return pos / CLK_PER_LINE;
+}
+
+void ISA_CGA::snapshot_from_scanline(uint32_t from) {
+    uint16_t sa = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
+    ScanlineRegs s = { mode_, color_, sa, 0 };
+    for (uint32_t i = from; i < FRAME_LINES; ++i)
+        scanline_regs_[i] = s;
+}
+
+void ISA_CGA::check_frame_boundary() {
+    if (!clk_cycles_) return;
+    uint64_t frame = *clk_cycles_ / CLK_PER_FRAME;
+    if (frame != last_frame_num_) {
+        last_frame_num_ = frame;
+        snapshot_from_scanline(0);
+    }
 }
 
 } // namespace bench

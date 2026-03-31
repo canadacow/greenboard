@@ -14,7 +14,7 @@ namespace bench {
 // Embedded HLSL source compiled at runtime.
 static const char CGA_CS_HLSL[] = R"HLSL(
 
-// --- Constant buffer: CGA register state (no arrays -- avoid HLSL 16-byte alignment) ---
+// --- Constant buffer: CGA register state (must match GpuConstants struct) ---
 cbuffer CGA_CB : register(b0) {
     uint mode;           // 0x3D8
     uint color;          // 0x3D9
@@ -29,7 +29,13 @@ cbuffer CGA_CB : register(b0) {
     uint max_scanline;   // CRTC R9: char height = max_scanline + 1
     uint h_displayed;    // CRTC R1: columns displayed
     uint v_displayed;    // CRTC R6: rows displayed
-    uint _pad0, _pad1, _pad2;
+    uint h_total;        // CRTC R0: horizontal total (char clocks - 1)
+    uint hsync_pos;      // CRTC R2: horizontal sync position
+    uint hsync_width;    // CRTC R3 low nibble: hsync width in char clocks
+    uint v_total;        // CRTC R4: vertical total (char rows - 1)
+    uint vtotal_adj;     // CRTC R5: vertical total adjust (scanlines)
+    uint vsync_pos;      // CRTC R7: vertical sync position
+    uint _pad0, _pad1;
 };
 
 // --- Resources ---
@@ -37,7 +43,9 @@ Buffer<uint> vram : register(t0);          // 16KB VRAM (4096 uint32s)
 Buffer<uint> font_buf : register(t1);      // 2048-byte 8x8 font ROM (512 uint32s)
 Buffer<uint> palette : register(t2);       // 16 RGBA colors
 
-RWTexture2D<float4> output_tex : register(u0);  // 640x200 RGBA output
+Buffer<uint> scanline_buf : register(t3);  // 262 scanlines x 4 uint32s (mode, color, start_addr, pad)
+
+RWTexture2D<float4> output_tex : register(u0);  // 912x262 full NTSC frame
 
 // --- Mode bits ---
 #define MODE_HIRES_TEXT  0x01
@@ -79,62 +87,121 @@ static const uint gfx_pal[6][4] = {
 };
 
 // =========================================================================
-// CGA rendering -- follows DOSBox-X vga_draw.cpp logic.
+// CGA CRT beam model.
 //
-// Output is always 640x200 RGBA.  Text modes render 8 pixels per character
-// (40-col is pixel-doubled).  Graphics modes render at native resolution
-// (320x200 pixel-doubled, 640x200 native).
+// Each thread IS a dot on the phosphor at position (px, py) within the
+// full 912x262 NTSC frame.  The MC6845 CRTC counters determine what the
+// beam produces at each dot:
 //
-// CRTC registers drive character height (R9), displayed columns (R1),
-// and displayed rows (R6).  This handles standard modes AND tweaked modes
-// like 160x100x16 (R9=1, R1=80, R6=100).
+//   Horizontal: char counter 0..R0.
+//     0..R1-1           = active display (VRAM fetch)
+//     R1..R2-1          = right overscan (border color)
+//     R2..R2+hsync_w-1  = hsync (blanked, black)
+//     R2+hsync_w..R0    = left overscan of next line (border color)
+//
+//   Vertical: row counter 0..R4, scanline counter 0..R9 within each row.
+//     row 0..R6-1       = active display rows
+//     row R6..R7-1      = bottom overscan
+//     row R7            = vsync start (16 scanlines, blanked)
+//     remaining         = top overscan (wraps visually)
+//
+// Character width: 8 dots (hires/80-col) or 16 dots (lores/40-col).
+// Both produce 912 dots/line: 114*8 or 57*16.
 // =========================================================================
 
 [numthreads(16, 16, 1)]
 void CSMain(uint3 dtid : SV_DispatchThreadID) {
-    uint px = dtid.x;  // 0-639
-    uint py = dtid.y;  // 0-199
-    if (px >= 640 || py >= 200) return;
+    uint px = dtid.x;  // 0-911  dot position in full NTSC line
+    uint py = dtid.y;  // 0-261  scanline in full NTSC frame
+    if (px >= 912 || py >= 262) return;
 
-    float4 overscan = pal_color(color & 0xF);
+    // Per-scanline register state (beam-racing support).
+    // Programs that change mode/color/start_addr mid-frame produce
+    // per-scanline variation captured in the scanline buffer.
+    uint sl_base = py * 4;
+    uint sl_mode       = scanline_buf[sl_base + 0];
+    uint sl_color      = scanline_buf[sl_base + 1];
+    uint sl_start_addr = scanline_buf[sl_base + 2];
 
-    // Display disabled: overscan
-    if (!(mode & MODE_ENABLE)) {
-        output_tex[dtid.xy] = overscan;
+    float4 border = pal_color(sl_color & 0xF);
+
+    // Character width in dots -- fixed by dot clock divider.
+    bool hires = (sl_mode & MODE_GRAPHICS) ? (sl_mode & MODE_HIRES_GFX) != 0
+                                           : (sl_mode & MODE_HIRES_TEXT) != 0;
+    uint char_w = hires ? 8 : 16;
+
+    // Character height from CRTC R9.
+    uint char_h = (max_scanline & 0x1F) + 1;
+    if (char_h == 0 || char_h > 32) char_h = 8;
+
+    // Horizontal beam position in character clocks.
+    uint char_col = px / char_w;
+
+    // Vertical beam position: character row and scanline within row.
+    uint char_row = py / char_h;
+    uint scanline = py % char_h;
+
+    // --- Horizontal blanking/sync ---
+    // hsync region: char_col in [hsync_pos, hsync_pos + hsync_width)
+    uint h_sync_end = hsync_pos + hsync_width;
+    bool in_hsync = (hsync_pos > 0) && (char_col >= hsync_pos) && (char_col < h_sync_end);
+
+    // --- Vertical blanking/sync ---
+    // vsync: 16 scanlines starting at vsync_pos row boundary.
+    uint vsync_sl_start = vsync_pos * char_h;
+    bool in_vsync = (vsync_pos > 0) && (py >= vsync_sl_start) && (py < vsync_sl_start + 16);
+
+    // During sync pulses: beam is blanked (black).
+    if (in_hsync || in_vsync) {
+        output_tex[dtid.xy] = float4(0, 0, 0, 1);
         return;
     }
 
-    float4 out_color = float4(0, 0, 0, 1);
+    // Display disabled (MODE_ENABLE=0): entire frame is border color.
+    if (!(sl_mode & MODE_ENABLE)) {
+        output_tex[dtid.xy] = border;
+        return;
+    }
 
-    if (mode & MODE_GRAPHICS) {
-        // =============================================================
-        // Graphics modes (interleaved scanlines: even at +0, odd at +0x2000)
-        // =============================================================
+    // Outside active display area: overscan border.
+    uint h_disp = (h_displayed > 0) ? h_displayed : (hires ? 80 : 40);
+    uint v_disp = (v_displayed > 0) ? v_displayed : (200 / char_h);
+
+    if (char_col >= h_disp || char_row >= v_disp) {
+        output_tex[dtid.xy] = border;
+        return;
+    }
+
+    // === Active display: fetch from VRAM and render ===
+
+    float4 out_color;
+
+    if (sl_mode & MODE_GRAPHICS) {
+        // Graphics modes: interleaved scanlines (even +0, odd +0x2000).
+        // The active scanline index within the displayed area.
         uint row_addr = (py / 2) * 80 + (py & 1) * 0x2000;
 
-        if (mode & MODE_HIRES_GFX) {
-            // 640x200, 1bpp.  8 pixels per byte.
+        if (sl_mode & MODE_HIRES_GFX) {
+            // 640x200 1bpp -- 8 pixels per byte, 1 dot per pixel.
             uint byte_val = vram_byte(row_addr + px / 8);
             uint lit = (byte_val >> (7 - (px & 7))) & 1;
-            uint fg = color & 0xF;
-            if (fg == 0) fg = 15;  // default white if overscan black
+            uint fg = sl_color & 0xF;
+            if (fg == 0) fg = 15;
             out_color = pal_color(lit ? fg : 0);
         } else {
-            // 320x200, 2bpp.  4 pixels per byte, doubled to 640.
+            // 320x200 2bpp -- 4 pixels per byte, doubled to 640 dots.
             uint src_x = px / 2;
             uint byte_val = vram_byte(row_addr + src_x / 4);
             uint pixel = (byte_val >> (6 - (src_x & 3) * 2)) & 3;
 
             uint color_idx;
             if (pixel == 0) {
-                color_idx = color & 0xF;
+                color_idx = sl_color & 0xF;
             } else {
-                // DOSBox vga_other.cpp write_cga_color_select():
-                // BW bit selects alternate palette; otherwise palette/bright bits.
-                uint base = (color & 0x10) ? 8 : 0;  // intensity
-                if (mode & MODE_BW)
+                uint base = (sl_color & 0x10) ? 8 : 0;
+                if (sl_mode & MODE_BW)
                     color_idx = gfx_pal[4 + (base ? 1 : 0)][pixel];
-                else if (color & 0x20)
+                else if (sl_color & 0x20)
                     color_idx = gfx_pal[2 + (base ? 1 : 0)][pixel];
                 else
                     color_idx = gfx_pal[0 + (base ? 1 : 0)][pixel];
@@ -142,76 +209,39 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
             out_color = pal_color(color_idx);
         }
     } else {
-        // =============================================================
-        // Text modes (40x25, 80x25, or CRTC-tweaked like 80x100)
-        //
-        // DOSBox: each character is always 8 output pixels wide.
-        //   40-col mode (MODE_HIRES_TEXT=0): pixel-doubled -> 16px/char
-        //   80-col mode (MODE_HIRES_TEXT=1): native -> 8px/char
-        //
-        // Character height from CRTC R9 (max_scanline + 1).
-        // Column count from CRTC R1 (h_displayed), default 80 or 40.
-        // Row count from CRTC R6 (v_displayed), default 200/char_h.
-        // =============================================================
-        uint char_h = (max_scanline & 0x1F) + 1;
-        if (char_h == 0 || char_h > 32) char_h = 8;
+        // Text modes: character cell at (char_col, char_row).
+        // VRAM address: (sl_start_addr + char_row * h_disp + char_col) * 2
+        uint cell = sl_start_addr + char_row * h_disp + char_col;
+        uint addr = (cell * 2) & 0x3FFF;
+        uint ch   = vram_byte(addr);
+        uint attr  = vram_byte(addr + 1);
 
-        // Columns from CRTC R1. Default from mode bit if R1 not yet programmed.
-        uint cols = (h_displayed > 0 && h_displayed <= 160) ? h_displayed
-                  : ((mode & MODE_HIRES_TEXT) ? 80 : 40);
-        uint char_w = 640 / cols;
-        if (char_w == 0) char_w = 8;
-        uint rows = (v_displayed > 0 && v_displayed <= 128) ? v_displayed : (200 / char_h);
+        uint fg = attr & 0x0F;
+        uint bg = (attr >> 4) & 0x0F;
 
-        uint col = px / char_w;
-        uint row = py / char_h;
-        uint scanline = py % char_h;
+        if (sl_mode & MODE_BLINK) {
+            bg &= 0x07;
+            if ((attr & 0x80) && !attr_blink)
+                fg = bg;
+        }
 
-        if (col >= cols || row >= rows) {
-            out_color = overscan;
+        // Font glyph lookup -- 8 bytes per character, 8 pixels wide.
+        uint font_sl = scanline < 8 ? scanline : (scanline & 7);
+        uint glyph = font_byte(ch * 8 + font_sl);
+
+        // Map dot position within cell to font column.
+        // char_w=8: 1:1.  char_w=16: each font pixel spans 2 dots.
+        uint dot_in_cell = px % char_w;
+        uint font_col = dot_in_cell * 8 / char_w;
+        uint bit = (glyph >> (7 - font_col)) & 1;
+
+        // Cursor overlay.
+        if (cursor_enabled && cursor_blink &&
+            cell == cursor_addr &&
+            scanline >= cursor_start && scanline <= cursor_end) {
+            out_color = pal_color(fg);
         } else {
-            // VRAM address: (start_addr + row * cols + col) * 2
-            uint cell = start_addr + row * cols + col;
-            uint addr = (cell * 2) & 0x3FFF;
-            uint ch   = vram_byte(addr);
-            uint attr  = vram_byte(addr + 1);
-
-            // Attribute decode (DOSBox vga_draw.cpp line 2069-2070):
-            //   fg = attr[3:0]      (16 foreground colors)
-            //   bg = attr[6:4]      (8 background colors)
-            //   blink = attr[7]
-            uint fg = attr & 0x0F;
-            uint bg = (attr >> 4) & 0x0F;  // full 4 bits initially
-
-            if (mode & MODE_BLINK) {
-                // Blink mode: bg is 3 bits (0-7), bit 7 controls blink.
-                bg &= 0x07;
-                // DOSBox FontMask: when blink bit set and blink phase off,
-                // font mask = 0 -> all pixels show background.
-                if ((attr & 0x80) && !attr_blink)
-                    fg = bg;
-            }
-            // else: intensity mode -- bg keeps all 4 bits (0-15).
-
-            // Font lookup.  ROM is 8 bytes per character.
-            // Clamp scanline to 0-7 for font ROM access.
-            uint font_sl = scanline < 8 ? scanline : (scanline & 7);
-            uint glyph = font_byte(ch * 8 + font_sl);
-
-            // Pixel within character cell -> font column (0-7).
-            // Maps char_w output pixels to 8 font columns.
-            uint font_col = (px % char_w) * 8 / char_w;
-            uint bit = (glyph >> (7 - font_col)) & 1;
-
-            // Cursor overlay (DOSBox vga_draw.cpp line 2078-2086).
-            if (cursor_enabled && cursor_blink &&
-                cell == cursor_addr &&
-                scanline >= cursor_start && scanline <= cursor_end) {
-                // Cursor: force foreground color across full cell width.
-                out_color = pal_color(fg);
-            } else {
-                out_color = pal_color(bit ? fg : bg);
-            }
+            out_color = pal_color(bit ? fg : bg);
         }
     }
 
@@ -303,7 +333,24 @@ bool CgaRasterizer::init(const RenderContext& rc) {
         device->CreateShaderResourceView(palette_buf_.Get(), &srv, &palette_srv_);
     }
 
-    // Output texture (640x200 RGBA8)
+    // Per-scanline register buffer (262 scanlines x 4 uint32s)
+    {
+        D3D11_BUFFER_DESC bd = {};
+        bd.ByteWidth = ISA_CGA::FRAME_LINES * sizeof(ISA_CGA::ScanlineRegs);
+        bd.Usage = D3D11_USAGE_DYNAMIC;
+        bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        device->CreateBuffer(&bd, nullptr, &scanline_buf_);
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srv = {};
+        srv.Format = DXGI_FORMAT_R32_UINT;
+        srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        srv.Buffer.NumElements = ISA_CGA::FRAME_LINES * 4;
+        HRESULT hr2 = device->CreateShaderResourceView(scanline_buf_.Get(), &srv, &scanline_srv_);
+        if (FAILED(hr2)) spdlog::error("[CGA] Scanline SRV failed: 0x{:08X}", (unsigned)hr2);
+    }
+
+    // Output texture (912x262 RGBA8)
     {
         D3D11_TEXTURE2D_DESC td = {};
         td.Width = OUT_W;
@@ -320,7 +367,8 @@ bool CgaRasterizer::init(const RenderContext& rc) {
         device->CreateShaderResourceView(out_tex_.Get(), nullptr, &out_srv_);
     }
 
-    spdlog::info("[CGA] GPU rasterizer initialized ({}x{})", OUT_W, OUT_H);
+    spdlog::info("[CGA] GPU rasterizer initialized ({}x{}, viewport {}x{})",
+                 OUT_W, OUT_H, VIEW_W, VIEW_H);
     return true;
 }
 
@@ -355,21 +403,30 @@ void CgaRasterizer::render(const RenderContext& rc) {
         ctx->Unmap(cb_.Get(), 0);
     }
 
+    // Upload per-scanline register snapshots (beam-racing)
+    {
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        ctx->Map(scanline_buf_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        memcpy(mapped.pData, card->scanline_regs(),
+               ISA_CGA::FRAME_LINES * sizeof(ISA_CGA::ScanlineRegs));
+        ctx->Unmap(scanline_buf_.Get(), 0);
+    }
+
     // Dispatch compute shader
     ctx->CSSetShader(cs_.Get(), nullptr, 0);
     ctx->CSSetConstantBuffers(0, 1, cb_.GetAddressOf());
-    ID3D11ShaderResourceView* srvs[] = { vram_srv_.Get(), font_srv_.Get(), palette_srv_.Get() };
-    ctx->CSSetShaderResources(0, 3, srvs);
+    ID3D11ShaderResourceView* srvs[] = { vram_srv_.Get(), font_srv_.Get(), palette_srv_.Get(), scanline_srv_.Get() };
+    ctx->CSSetShaderResources(0, 4, srvs);
     ctx->CSSetUnorderedAccessViews(0, 1, out_uav_.GetAddressOf(), nullptr);
 
-    // 640x200 / (16,16) = (40, 13) thread groups
+    // 912x262 / (16,16) = (57, 17) thread groups
     ctx->Dispatch((OUT_W + 15) / 16, (OUT_H + 15) / 16, 1);
 
     // Unbind
     ID3D11UnorderedAccessView* null_uav = nullptr;
     ctx->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
-    ID3D11ShaderResourceView* null_srvs[3] = {};
-    ctx->CSSetShaderResources(0, 3, null_srvs);
+    ID3D11ShaderResourceView* null_srvs[4] = {};
+    ctx->CSSetShaderResources(0, 4, null_srvs);
 
     // output_srv() is now valid -- renderer blits it to the swap chain.
 }

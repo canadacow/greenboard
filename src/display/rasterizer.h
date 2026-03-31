@@ -38,6 +38,11 @@ public:
     // Output texture SRV for D3D11 blit (nullptr if renders via D2D).
     virtual ID3D11ShaderResourceView* output_srv() const { return nullptr; }
 
+    // Source UV rect within the output texture for blitting.
+    // Default: full texture.  Override to crop (e.g. 640x200 from 912x262).
+    struct UVRect { float u0, v0, u1, v1; };
+    virtual UVRect output_uv_rect() const { return {0, 0, 1, 1}; }
+
     // Whether this rasterizer renders directly to the back buffer via D2D.
     virtual bool uses_d2d() const { return false; }
 };

@@ -18,9 +18,22 @@ public:
     const ISA_Card* card() const override;
     ID3D11ShaderResourceView* output_srv() const override { return out_srv_.Get(); }
 
-    // Output texture dimensions
-    static constexpr int OUT_W = 640;
-    static constexpr int OUT_H = 200;
+    // Crop: 640x200 visible portion from the 912x262 full frame.
+    UVRect output_uv_rect() const override {
+        return { 0.0f, 0.0f,
+                 float(VIEW_W) / float(OUT_W),
+                 float(VIEW_H) / float(OUT_H) };
+    }
+
+    // Output texture: full NTSC frame in dot resolution.
+    // 912 dots/line (114 char clocks * 8 dots), 262 scanlines/frame.
+    // The renderer crops a 640x200 visible portion from this.
+    static constexpr int OUT_W = 912;
+    static constexpr int OUT_H = 262;
+
+    // Visible portion cropped for display (standard CGA active area).
+    static constexpr int VIEW_W = 640;
+    static constexpr int VIEW_H = 200;
 
 private:
     const ISA_CGA* cga_card_;
@@ -33,6 +46,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Buffer> cb_;
     Microsoft::WRL::ComPtr<ID3D11Buffer> palette_buf_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> palette_srv_;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> scanline_buf_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> scanline_srv_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> out_tex_;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> out_uav_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> out_srv_;

@@ -15,6 +15,7 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
+#include <cstring>
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
@@ -70,6 +71,7 @@ struct DxState {
     ComPtr<ID3D11VertexShader> blit_vs;
     ComPtr<ID3D11PixelShader> blit_ps;
     ComPtr<ID3D11SamplerState> blit_sampler;
+    ComPtr<ID3D11Buffer> blit_cb;  // UV rect constant buffer
 
     // Active display rasterizer (MDA or CGA, owned by renderer)
     std::unique_ptr<Rasterizer> rasterizer;
@@ -177,11 +179,15 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
     // Fullscreen blit shaders (for texture-based rasterizers)
     {
         static const char blit_hlsl[] = R"(
+            cbuffer BlitCB : register(b0) {
+                float4 uv_rect;  // (u0, v0, u1, v1) source rect in texture
+            };
             struct VS_OUT { float4 pos : SV_Position; float2 uv : TEXCOORD; };
             VS_OUT VS(uint id : SV_VertexID) {
                 VS_OUT o;
-                o.uv = float2((id << 1) & 2, id & 2);
-                o.pos = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+                float2 t = float2((id << 1) & 2, id & 2);  // 0..1 fullscreen
+                o.uv = uv_rect.xy + t * (uv_rect.zw - uv_rect.xy);
+                o.pos = float4(t * float2(2, -2) + float2(-1, 1), 0, 1);
                 return o;
             }
             Texture2D tex : register(t0);
@@ -200,6 +206,14 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
         sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
         device->CreateSamplerState(&sd, &blit_sampler);
+
+        // UV rect constant buffer for source crop
+        D3D11_BUFFER_DESC cbd = {};
+        cbd.ByteWidth = 16;  // float4
+        cbd.Usage = D3D11_USAGE_DYNAMIC;
+        cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        device->CreateBuffer(&cbd, nullptr, &blit_cb);
     }
 
     // ImGui -- scale font + style for high-DPI.
@@ -244,12 +258,21 @@ void DxState::render_display() {
             float clear[] = { 0, 0, 0, 1 };
             ctx->ClearRenderTargetView(rtv.Get(), clear);
 
+            // Upload source UV rect from the rasterizer
+            auto uv = rasterizer->output_uv_rect();
+            D3D11_MAPPED_SUBRESOURCE mapped;
+            ctx->Map(blit_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+            float uv_data[4] = { uv.u0, uv.v0, uv.u1, uv.v1 };
+            memcpy(mapped.pData, uv_data, 16);
+            ctx->Unmap(blit_cb.Get(), 0);
+
             ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
             D3D11_VIEWPORT vp = { 0, 0, (float)winW, (float)winH, 0, 1 };
             ctx->RSSetViewports(1, &vp);
             ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             ctx->IASetInputLayout(nullptr);
             ctx->VSSetShader(blit_vs.Get(), nullptr, 0);
+            ctx->VSSetConstantBuffers(0, 1, blit_cb.GetAddressOf());
             ctx->PSSetShader(blit_ps.Get(), nullptr, 0);
             ctx->PSSetShaderResources(0, 1, &srv);
             ctx->PSSetSamplers(0, 1, blit_sampler.GetAddressOf());

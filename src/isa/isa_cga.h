@@ -72,11 +72,31 @@ public:
         uint32_t max_scanline;  // CRTC R9: character height = max_scanline + 1
         uint32_t h_displayed;   // CRTC R1: columns displayed
         uint32_t v_displayed;   // CRTC R6: rows displayed
-        uint32_t _pad[3];       // align to 64 bytes (4x16)
+        uint32_t h_total;       // CRTC R0: horizontal total (char clocks - 1)
+        uint32_t hsync_pos;     // CRTC R2: horizontal sync position
+        uint32_t hsync_width;   // CRTC R3 low nibble: horizontal sync width
+        uint32_t v_total;       // CRTC R4: vertical total (char rows - 1)
+        uint32_t vtotal_adj;    // CRTC R5: vertical total adjust (scanlines)
+        uint32_t vsync_pos;     // CRTC R7: vertical sync position
+        uint32_t _pad[2];       // align to 80 bytes (5x16)
     };
 
     // Fill a GpuConstants struct from current register state.
     void fill_gpu_constants(GpuConstants& cb) const;
+
+    // --- Per-scanline register snapshots for beam-racing ---
+    // Programs that change mode/color/start_addr mid-frame (timed to h-retrace
+    // via polling 0x3DA bit 0) produce per-scanline variation.  The ISA_CGA
+    // card captures these changes as they happen during simulation.  The shader
+    // reads per-scanline values from a buffer instead of global constants.
+    static constexpr uint32_t FRAME_LINES = 262;
+    struct alignas(16) ScanlineRegs {
+        uint32_t mode;
+        uint32_t color;
+        uint32_t start_addr;
+        uint32_t _pad;
+    };
+    const ScanlineRegs* scanline_regs() const { return scanline_regs_; }
 
     // --- CRTC register indices ---
     static constexpr int CRTC_HTOTAL           = 0;
@@ -180,6 +200,15 @@ private:
 
     // Composite output mode
     bool composite_ = false;
+
+    // Per-scanline beam-racing state
+    static constexpr uint32_t CLK_PER_LINE  = 304;       // 912 dots / 3
+    static constexpr uint32_t CLK_PER_FRAME = 304 * 262;  // 79648 CLK/frame
+    ScanlineRegs scanline_regs_[FRAME_LINES] = {};
+    uint64_t last_frame_num_ = UINT64_MAX;
+    uint32_t current_scanline() const;
+    void snapshot_from_scanline(uint32_t from);
+    void check_frame_boundary();
 };
 
 } // namespace bench
