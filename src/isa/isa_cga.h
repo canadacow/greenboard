@@ -239,6 +239,11 @@ private:
     bool     in_vtadj_ = false;  // true while counting adjust scanlines
     bool     in_vsync_ = false;  // true during 16-scanline VSYNC pulse
     uint32_t vsync_counter_ = 0; // counts scanlines within VSYNC
+    uint32_t active_start_ = 0;  // buffer scanline where VCC first hit 0 after VSYNC
+    bool     active_start_set_ = false; // only record the first VCC=0 per monitor frame
+public:
+    uint32_t active_start_scanline() const { return active_start_; }
+private:
     void stamp_scanline();       // write current state into scanline_regs_[scanline_]
 };
 

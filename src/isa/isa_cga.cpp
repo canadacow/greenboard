@@ -37,6 +37,8 @@ void ISA_CGA::on_power_on() {
     in_vtadj_ = false;
     in_vsync_ = false;
     vsync_counter_ = 0;
+    active_start_ = 0;
+    active_start_set_ = false;
     std::memset(scanline_regs_, 0, sizeof(scanline_regs_));
     QueryPerformanceFrequency(&qpc_freq_);
     QueryPerformanceCounter(&qpc_start_);
@@ -221,7 +223,7 @@ void ISA_CGA::on_cycle(Fiber) {
     // RA increments each scanline.  When RA == R9 (coincidence), RA
     // resets to 0 and either VCC increments or the frame ends.
     //
-    // Frame end logic (per MartyPC/datasheet): at the start of each
+    // Frame end logic (per datasheet): at the start of each
     // character row (RA==0), if VCC == R4, an internal "last row" flag
     // is set.  When RA reaches R9 at the end of that row, if "last row"
     // is set, VCC resets to 0, MA reloads from start_addr, and R5
@@ -271,15 +273,21 @@ void ISA_CGA::on_cycle(Fiber) {
     if (!in_vsync_ && vcc_ == vsync_pos && ra_ == 0) {
         in_vsync_ = true;
         vsync_counter_ = 0;
+        active_start_set_ = false;  // reset: next VCC=0 is the active start
     }
     if (in_vsync_) {
         vsync_counter_++;
         if (vsync_counter_ >= 16) {
             in_vsync_ = false;
-            // VSYNC end = monitor retraces to top of screen.
             scanline_ = 0;
             return;
         }
+    }
+
+    // Record where active display starts (first VCC=0 after VSYNC).
+    if (!active_start_set_ && vcc_ == 0 && ra_ == 0) {
+        active_start_ = scanline_ + 1;  // next scanline will be stamped as VCC=0
+        active_start_set_ = true;
     }
 
     // scanline_ advances unconditionally, wraps within buffer.
