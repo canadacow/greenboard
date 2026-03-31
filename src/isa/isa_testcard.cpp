@@ -423,17 +423,26 @@ void ISA_TestCard::hfs_cmd_read() {
 
     auto it = hfs_files_.find(h);
     if (it == hfs_files_.end()) {
+        spdlog::warn("[HostFS] read: handle {} not found", h);
         hfs_status_ = 0xFF;
         return;
     }
 
+    auto& s = it->second.stream;
+    auto pos_before = s.tellg();
+    auto state_before = s.rdstate();
+
     hfs_result_.resize(count);
-    it->second.stream.read(reinterpret_cast<char*>(hfs_result_.data()), count);
-    auto got = it->second.stream.gcount();
+    s.read(reinterpret_cast<char*>(hfs_result_.data()), count);
+    auto got = s.gcount();
     hfs_result_.resize(static_cast<size_t>(got));
 
-    if (got == 0 && it->second.stream.eof())
-        hfs_status_ = 0xFF;  // EOF
+    auto fsize = std::filesystem::file_size(it->second.path);
+    spdlog::info("[HostFS] read h={} count={} pos={} fsize={} state={} got={} eof={}",
+                 h, count, (long)pos_before, (unsigned long)fsize, (int)state_before, (long)got, s.eof());
+
+    /* EOF is not an error -- return success with 0 bytes.
+     * DOS expects CX=0, CF=0 for end-of-file. */
 }
 
 void ISA_TestCard::hfs_cmd_write() {
@@ -515,6 +524,7 @@ void ISA_TestCard::hfs_cmd_seek() {
     it->second.stream.seekg(offset, dir);
     auto pos = static_cast<uint32_t>(it->second.stream.tellg());
     hfs_put_u32(hfs_result_, pos);
+    spdlog::info("[HostFS] seek h={} offset={} whence={} -> pos={}", h, offset, whence, pos);
 }
 
 void ISA_TestCard::hfs_cmd_create() {
