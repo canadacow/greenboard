@@ -28,7 +28,6 @@ void ISA_CGA::on_power_on() {
     color_ = 0;
     composite_ = false;
     last_frame_num_ = UINT64_MAX;
-    latched_start_addr_ = 0;
     snapshot_from_scanline(0);
     QueryPerformanceFrequency(&qpc_freq_);
     QueryPerformanceCounter(&qpc_start_);
@@ -236,44 +235,69 @@ uint32_t ISA_CGA::current_scanline() const {
 }
 
 void ISA_CGA::snapshot_from_scanline(uint32_t from) {
-    // Capture the full register state at scanline `from` and precompute
-    // the CRTC address counter advancement for remaining scanlines.
-    // Programs that switch modes mid-frame also reprogram R9, R1, R6
-    // alongside the mode register, so we capture all of them.
+    // Simulate the 6845 counters scanline-by-scanline from `from` onward.
     //
-    // start_addr uses the latched value (set at frame boundary), not the
-    // live R12/R13 registers.  The real 6845 latches start_addr from
-    // R12/R13 only when VCC resets (frame start).  Mid-frame writes to
-    // R12/R13 don't affect the current frame.
-    uint16_t sa = latched_start_addr_;
+    // The 6845 has three key counters:
+    //   RA  (raster address)  - scanline within character row, 0..R9
+    //   VCC (vertical char counter) - character row, 0..R4
+    //   MA  (memory address)  - linear address, start_addr + VCC*h_disp
+    //
+    // RA increments each scanline.  When RA reaches R9 (max_scanline),
+    // on the next scanline RA resets to 0, VCC increments, and MA
+    // advances by h_displayed.  MA repeats the same value for all
+    // scanlines within a character row.
+    //
+    // When called mid-frame (from > 0), we inherit the counters from
+    // the previous scanline and continue with the (potentially changed)
+    // register values.
+
+    uint8_t max_sl = crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F;
     uint8_t h_disp = crtc_reg_[CRTC_HDISPLAYED];
-    uint8_t char_h = (crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F) + 1;
-    uint8_t v_disp = crtc_reg_[CRTC_VDISPLAYED];
-    if (char_h == 0) char_h = 1;
     if (h_disp == 0) h_disp = 80;
 
-    // The CRTC MA counter advances by h_displayed each character row.
-    // We precompute the row counter and scanline-within-row (RA) so the
-    // shader doesn't need to derive them from absolute py.
+    uint32_t vcc, ra, ma;
+    if (from > 0 && from < FRAME_LINES) {
+        // Continue from previous scanline's state, then tick.
+        vcc = scanline_regs_[from - 1].vcc;
+        ra  = scanline_regs_[from - 1].ra;
+        ma  = scanline_regs_[from - 1].ma;
+        // Tick: previous scanline completed.
+        if (ra >= max_sl) {
+            ra = 0;
+            vcc++;
+            ma += h_disp;
+        } else {
+            ra++;
+        }
+    } else {
+        // Frame start: counters reset, MA loads from start_addr.
+        vcc = 0;
+        ra  = 0;
+        ma  = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
+    }
+
     for (uint32_t i = from; i < FRAME_LINES; ++i) {
-        uint32_t offset = i - from;
-        uint32_t row = offset / char_h;
-        uint32_t ra  = offset % char_h;
-        uint16_t addr = sa + row * h_disp;
         ScanlineRegs sr;
-        sr.mode         = mode_;
-        sr.color        = color_;
-        sr.start_addr   = addr;
-        sr.max_scanline = char_h - 1;
-        sr.h_displayed  = h_disp;
-        sr.v_displayed  = v_disp;
-        sr.row_scanline = ra;
-        sr.char_row     = row;
-        sr.h_total      = crtc_reg_[CRTC_HTOTAL];
-        sr.hsync_pos    = crtc_reg_[CRTC_HSYNC_POS];
-        sr.hsync_width  = crtc_reg_[CRTC_SYNC_WIDTH] & 0x0F;
-        sr.vsync_pos    = crtc_reg_[CRTC_VSYNC_POS] & 0x7F;
+        sr.mode        = mode_;
+        sr.color       = color_;
+        sr.ma          = ma;
+        sr.ra          = ra;
+        sr.vcc         = vcc;
+        sr.h_displayed = h_disp;
+        sr.v_displayed = crtc_reg_[CRTC_VDISPLAYED];
+        sr.hsync_pos   = crtc_reg_[CRTC_HSYNC_POS];
+        sr.hsync_width = crtc_reg_[CRTC_SYNC_WIDTH] & 0x0F;
+        sr._pad[0] = sr._pad[1] = sr._pad[2] = 0;
         scanline_regs_[i] = sr;
+
+        // Tick counters for next scanline.
+        if (ra >= max_sl) {
+            ra = 0;
+            vcc++;
+            ma += h_disp;
+        } else {
+            ra++;
+        }
     }
 }
 
@@ -282,9 +306,6 @@ void ISA_CGA::check_frame_boundary() {
     uint64_t frame = *clk_cycles_ / CLK_PER_FRAME;
     if (frame != last_frame_num_) {
         last_frame_num_ = frame;
-        // Latch start_addr from R12/R13, just as the real 6845 does at VCC reset.
-        latched_start_addr_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) |
-                               crtc_reg_[CRTC_START_ADDR_L];
         snapshot_from_scanline(0);
     }
 }

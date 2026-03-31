@@ -118,19 +118,16 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     // Per-scanline register state (beam-racing support).
     // Programs that switch modes mid-frame also reprogram R9, R1, R6,
     // so ALL rendering-critical registers are captured per-scanline.
-    uint sl_base = py * 12;  // 12 uint32s per scanline
+    uint sl_base = py * 12;  // 12 uint32s per scanline (sizeof(ScanlineRegs)/4)
     uint sl_mode          = scanline_buf[sl_base + 0];
     uint sl_color         = scanline_buf[sl_base + 1];
-    uint sl_start_addr    = scanline_buf[sl_base + 2];
-    uint sl_max_scanline  = scanline_buf[sl_base + 3];
-    uint sl_h_displayed   = scanline_buf[sl_base + 4];
-    uint sl_v_displayed   = scanline_buf[sl_base + 5];
-    uint sl_row_scanline  = scanline_buf[sl_base + 6];  // RA: scanline within char row
-    uint sl_char_row      = scanline_buf[sl_base + 7];  // character row counter
-    uint sl_h_total       = scanline_buf[sl_base + 8];
-    uint sl_hsync_pos     = scanline_buf[sl_base + 9];
-    uint sl_hsync_width   = scanline_buf[sl_base + 10];
-    uint sl_vsync_pos     = scanline_buf[sl_base + 11];
+    uint sl_ma            = scanline_buf[sl_base + 2];  // MA: linear address
+    uint sl_ra            = scanline_buf[sl_base + 3];  // RA: scanline within char row
+    uint sl_vcc           = scanline_buf[sl_base + 4];  // VCC: character row counter
+    uint sl_h_displayed   = scanline_buf[sl_base + 5];
+    uint sl_v_displayed   = scanline_buf[sl_base + 6];
+    uint sl_hsync_pos     = scanline_buf[sl_base + 7];
+    uint sl_hsync_width   = scanline_buf[sl_base + 8];
 
     float4 border = pal_color(sl_color & 0xF);
 
@@ -139,18 +136,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
                                            : (sl_mode & MODE_HIRES_TEXT) != 0;
     uint char_w = hires ? 8 : 16;
 
-    // Character height from per-scanline R9.
-    uint char_h = (sl_max_scanline & 0x1F) + 1;
-    if (char_h == 0 || char_h > 32) char_h = 8;
-
     // Horizontal beam position in character clocks.
     uint char_col = px / char_w;
 
-    // Vertical position: precomputed by the ISA_CGA snapshot logic,
-    // relative to where the current register set took effect.
-    // This handles mid-frame mode switches correctly.
-    uint char_row = sl_char_row;
-    uint scanline = sl_row_scanline;
+    // Vertical position from the 6845 counters, simulated per-scanline.
+    // VCC = character row, RA = scanline within character row.
+    uint char_row = sl_vcc;
+    uint scanline = sl_ra;
 
     // --- Horizontal blanking ---
     // The beam is blanked beyond the active+overscan area.
@@ -176,7 +168,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
 
     // Outside active display area: overscan border.
     uint h_disp = (sl_h_displayed > 0) ? sl_h_displayed : (hires ? 80 : 40);
-    uint v_disp = (sl_v_displayed > 0) ? sl_v_displayed : (200 / char_h);
+    uint v_disp = (sl_v_displayed > 0) ? sl_v_displayed : 25;
 
     if (char_col >= h_disp || char_row >= v_disp) {
         output_tex[dtid.xy] = border;
@@ -189,11 +181,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
 
     if (sl_mode & MODE_GRAPHICS) {
         // Graphics modes: interleaved scanlines.
-        // sl_start_addr is the effective CRTC address for this scanline
-        // (with row advancement already computed).  RA0 (scanline & 1)
-        // selects the 0x2000 bank for CGA's interleaved addressing.
+        // MA is the 6845 address for this row (precomputed).
         // CGA graphics: RAM addr = (MA & 0x0FFF) << 1, bit 13 = RA0.
-        uint line_base = ((sl_start_addr & 0x0FFF) << 1)
+        uint line_base = ((sl_ma & 0x0FFF) << 1)
                        + (scanline & 1) * 0x2000;
 
         if (sl_mode & MODE_HIRES_GFX) {
@@ -224,10 +214,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
             out_color = pal_color(color_idx);
         }
     } else {
-        // Text modes: sl_start_addr is the effective CRTC address for
-        // this scanline (row advancement already computed).
-        // CGA text: RAM addr = (6845 addr & 0x1FFF) << 1.
-        uint cell = (sl_start_addr + char_col) & 0x1FFF;
+        // Text modes: MA is the 6845 linear address for this scanline's
+        // character row (precomputed by counter simulation).
+        // CGA text: RAM addr = (MA + char_col) * 2, masked to 16KB.
+        uint cell = (sl_ma + char_col) & 0x1FFF;
         uint addr = cell * 2;
         uint ch   = vram_byte(addr);
         uint attr  = vram_byte(addr + 1);
