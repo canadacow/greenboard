@@ -19,11 +19,10 @@ public:
     ID3D11ShaderResourceView* output_srv() const override { return out_srv_.Get(); }
 
     // Crop: 640x200 visible portion from the 912x262 full frame.
-    UVRect output_uv_rect() const override {
-        return { 0.0f, 0.0f,
-                 float(VIEW_W) / float(OUT_W),
-                 float(VIEW_H) / float(OUT_H) };
-    }
+    // The buffer starts at VSYNC end (monitor retrace).  Active display
+    // (VCC=0) begins after top overscan.  Compute the offset from
+    // CRTC registers: scanlines from VSYNC end to VCC=0.
+    UVRect output_uv_rect() const override;
 
     // Output texture: full NTSC frame in dot resolution.
     // 912 dots/line (114 char clocks * 8 dots), 262 scanlines/frame.

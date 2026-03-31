@@ -268,6 +268,38 @@ const ISA_Card* CgaRasterizer::card() const {
     return cga_card_;
 }
 
+Rasterizer::UVRect CgaRasterizer::output_uv_rect() const {
+    // Buffer scanline 0 = VSYNC end (monitor retrace complete).
+    // Active display (VCC=0) starts after top overscan/blanking.
+    // Compute from CRTC registers:
+    //   VSYNC fires at VCC=R7, lasts 16 scanlines.
+    //   During those 16 scanlines, VCC/RA keep ticking.
+    //   After VSYNC, remaining rows until vtotal: (R4 - R7') rows
+    //   where R7' is VCC after 16 scanlines of ticking.
+    //   Then R5 adjust scanlines. Then VCC=0.
+    //
+    // Simpler: total frame = (R4+1)*(R9+1) + R5.
+    // VSYNC starts at scanline R7*(R9+1) from VCC=0.
+    // From VSYNC end to frame end = total - (R7*(R9+1) + 16).
+    // That's the top porch (scanlines before active display in our buffer).
+    const uint8_t* r = cga_card_->crtc_regs();
+    uint32_t r4 = r[ISA_CGA::CRTC_VTOTAL] & 0x7F;
+    uint32_t r5 = r[ISA_CGA::CRTC_VTOTAL_ADJ] & 0x1F;
+    uint32_t r7 = r[ISA_CGA::CRTC_VSYNC_POS] & 0x7F;
+    uint32_t r9 = r[ISA_CGA::CRTC_MAX_SCANLINE] & 0x1F;
+    uint32_t char_h = r9 + 1;
+    uint32_t total = (r4 + 1) * char_h + r5;
+    uint32_t vsync_start = r7 * char_h;
+    uint32_t top_porch = 0;
+    if (total > vsync_start + 16)
+        top_porch = total - (vsync_start + 16);
+
+    float v0 = float(top_porch) / float(OUT_H);
+    float v1 = float(top_porch + VIEW_H) / float(OUT_H);
+    if (v1 > 1.0f) v1 = 1.0f;
+    return { 0.0f, v0, float(VIEW_W) / float(OUT_W), v1 };
+}
+
 bool CgaRasterizer::init(const RenderContext& rc) {
     auto* device = rc.device;
     // Compile compute shader

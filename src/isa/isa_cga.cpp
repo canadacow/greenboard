@@ -231,29 +231,25 @@ void ISA_CGA::on_cycle(Fiber) {
     uint8_t vtotal = crtc_reg_[CRTC_VTOTAL] & 0x7F;
     if (h_disp == 0) h_disp = 80;
 
-    if (ra_ >= max_sl) {
-        // End of character row.
+    // --- 6845 vertical counter logic (per datasheet) ---
+
+    if (in_vtadj_) {
+        // R5 adjust phase: count individual scanlines.
+        vtadj_counter_++;
+        uint8_t vtotal_adj = crtc_reg_[CRTC_VTOTAL_ADJ] & 0x1F;
+        if (vtadj_counter_ >= vtotal_adj) {
+            in_vtadj_ = false;
+            vtadj_counter_ = 0;
+            vcc_ = 0;
+            ra_ = 0;
+            ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) |
+                   crtc_reg_[CRTC_START_ADDR_L];
+        }
+    } else if (ra_ >= max_sl) {
         ra_ = 0;
-        if (in_vtadj_) {
-            // Counting R5 adjust scanlines after vtotal.
-            vtadj_counter_++;
-            uint8_t vtotal_adj = crtc_reg_[CRTC_VTOTAL_ADJ] & 0x1F;
-            if (vtadj_counter_ >= vtotal_adj) {
-                // 6845 frame complete: VCC/RA reset, MA reloads.
-                // scanline_ does NOT reset -- it tracks the physical
-                // beam position on the monitor.  The beam only returns
-                // to the top when the monitor sees VSYNC (scanline 262).
-                in_vtadj_ = false;
-                vtadj_counter_ = 0;
-                vcc_ = 0;
-                ra_ = 0;
-                ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) |
-                       crtc_reg_[CRTC_START_ADDR_L];
-            }
-        } else if (vcc_ == vtotal) {
+        if (vcc_ == vtotal) {
             uint8_t vtotal_adj = crtc_reg_[CRTC_VTOTAL_ADJ] & 0x1F;
             if (vtotal_adj == 0) {
-                // No adjust -- frame ends immediately.
                 vcc_ = 0;
                 ra_ = 0;
                 ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) |
@@ -261,8 +257,6 @@ void ISA_CGA::on_cycle(Fiber) {
             } else {
                 in_vtadj_ = true;
                 vtadj_counter_ = 0;
-                vcc_++;
-                ma_ += h_disp;
             }
         } else {
             vcc_++;
@@ -272,9 +266,7 @@ void ISA_CGA::on_cycle(Fiber) {
         ra_++;
     }
 
-    // VSYNC: starts when VCC == R7, lasts 16 scanlines.
-    // The monitor retraces during VSYNC.  scanline_ resets to 0
-    // at the end of VSYNC -- that's when the beam reaches the top.
+    // --- VSYNC (per datasheet: VCC == R7, lasts 16 scanlines) ---
     uint8_t vsync_pos = crtc_reg_[CRTC_VSYNC_POS] & 0x7F;
     if (!in_vsync_ && vcc_ == vsync_pos && ra_ == 0) {
         in_vsync_ = true;
@@ -284,14 +276,17 @@ void ISA_CGA::on_cycle(Fiber) {
         vsync_counter_++;
         if (vsync_counter_ >= 16) {
             in_vsync_ = false;
+            // VSYNC end = monitor retraces to top of screen.
             scanline_ = 0;
             return;
         }
     }
 
-    // scanline_ tracks the physical beam on the monitor (0-261).
+    // scanline_ advances unconditionally, wraps within buffer.
+    // Clamped at FRAME_LINES-1 if VSYNC hasn't fired (shouldn't happen
+    // in normal operation but prevents buffer overflow).
     if (++scanline_ >= FRAME_LINES)
-        scanline_ = FRAME_LINES - 1;  // clamp, don't wrap -- wait for VSYNC
+        scanline_ = FRAME_LINES - 1;
 }
 
 void ISA_CGA::stamp_scanline() {
