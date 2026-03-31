@@ -116,12 +116,17 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     if (px >= 912 || py >= 262) return;
 
     // Per-scanline register state (beam-racing support).
-    // Programs that change mode/color/start_addr mid-frame produce
-    // per-scanline variation captured in the scanline buffer.
-    uint sl_base = py * 4;
-    uint sl_mode       = scanline_buf[sl_base + 0];
-    uint sl_color      = scanline_buf[sl_base + 1];
-    uint sl_start_addr = scanline_buf[sl_base + 2];
+    // Programs that switch modes mid-frame also reprogram R9, R1, R6,
+    // so ALL rendering-critical registers are captured per-scanline.
+    uint sl_base = py * 8;  // 8 uint32s per scanline (32 bytes)
+    uint sl_mode          = scanline_buf[sl_base + 0];
+    uint sl_color         = scanline_buf[sl_base + 1];
+    uint sl_start_addr    = scanline_buf[sl_base + 2];
+    uint sl_max_scanline  = scanline_buf[sl_base + 3];
+    uint sl_h_displayed   = scanline_buf[sl_base + 4];
+    uint sl_v_displayed   = scanline_buf[sl_base + 5];
+    uint sl_row_scanline  = scanline_buf[sl_base + 6];  // RA: scanline within char row
+    uint sl_char_row      = scanline_buf[sl_base + 7];  // character row counter
 
     float4 border = pal_color(sl_color & 0xF);
 
@@ -130,16 +135,18 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
                                            : (sl_mode & MODE_HIRES_TEXT) != 0;
     uint char_w = hires ? 8 : 16;
 
-    // Character height from CRTC R9.
-    uint char_h = (max_scanline & 0x1F) + 1;
+    // Character height from per-scanline R9.
+    uint char_h = (sl_max_scanline & 0x1F) + 1;
     if (char_h == 0 || char_h > 32) char_h = 8;
 
     // Horizontal beam position in character clocks.
     uint char_col = px / char_w;
 
-    // Vertical beam position: character row and scanline within row.
-    uint char_row = py / char_h;
-    uint scanline = py % char_h;
+    // Vertical position: precomputed by the ISA_CGA snapshot logic,
+    // relative to where the current register set took effect.
+    // This handles mid-frame mode switches correctly.
+    uint char_row = sl_char_row;
+    uint scanline = sl_row_scanline;
 
     // --- Horizontal blanking/sync ---
     // hsync region: char_col in [hsync_pos, hsync_pos + hsync_width)
@@ -164,8 +171,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     }
 
     // Outside active display area: overscan border.
-    uint h_disp = (h_displayed > 0) ? h_displayed : (hires ? 80 : 40);
-    uint v_disp = (v_displayed > 0) ? v_displayed : (200 / char_h);
+    uint h_disp = (sl_h_displayed > 0) ? sl_h_displayed : (hires ? 80 : 40);
+    uint v_disp = (sl_v_displayed > 0) ? sl_v_displayed : (200 / char_h);
 
     if (char_col >= h_disp || char_row >= v_disp) {
         output_tex[dtid.xy] = border;
@@ -177,13 +184,17 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     float4 out_color;
 
     if (sl_mode & MODE_GRAPHICS) {
-        // Graphics modes: interleaved scanlines (even +0, odd +0x2000).
-        // The active scanline index within the displayed area.
-        uint row_addr = (py / 2) * 80 + (py & 1) * 0x2000;
+        // Graphics modes: interleaved scanlines.
+        // sl_start_addr is the effective CRTC address for this scanline
+        // (with row advancement already computed).  RA0 (scanline & 1)
+        // selects the 0x2000 bank for CGA's interleaved addressing.
+        // CGA graphics: RAM addr = (MA & 0x0FFF) << 1, bit 13 = RA0.
+        uint line_base = ((sl_start_addr & 0x0FFF) << 1)
+                       + (scanline & 1) * 0x2000;
 
         if (sl_mode & MODE_HIRES_GFX) {
             // 640x200 1bpp -- 8 pixels per byte, 1 dot per pixel.
-            uint byte_val = vram_byte(row_addr + px / 8);
+            uint byte_val = vram_byte(line_base + px / 8);
             uint lit = (byte_val >> (7 - (px & 7))) & 1;
             uint fg = sl_color & 0xF;
             if (fg == 0) fg = 15;
@@ -191,7 +202,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
         } else {
             // 320x200 2bpp -- 4 pixels per byte, doubled to 640 dots.
             uint src_x = px / 2;
-            uint byte_val = vram_byte(row_addr + src_x / 4);
+            uint byte_val = vram_byte(line_base + src_x / 4);
             uint pixel = (byte_val >> (6 - (src_x & 3) * 2)) & 3;
 
             uint color_idx;
@@ -209,10 +220,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
             out_color = pal_color(color_idx);
         }
     } else {
-        // Text modes: character cell at (char_col, char_row).
-        // VRAM address: (sl_start_addr + char_row * h_disp + char_col) * 2
-        uint cell = sl_start_addr + char_row * h_disp + char_col;
-        uint addr = (cell * 2) & 0x3FFF;
+        // Text modes: sl_start_addr is the effective CRTC address for
+        // this scanline (row advancement already computed).
+        // CGA text: RAM addr = (6845 addr & 0x1FFF) << 1.
+        uint cell = (sl_start_addr + char_col) & 0x1FFF;
+        uint addr = cell * 2;
         uint ch   = vram_byte(addr);
         uint attr  = vram_byte(addr + 1);
 
@@ -333,7 +345,7 @@ bool CgaRasterizer::init(const RenderContext& rc) {
         device->CreateShaderResourceView(palette_buf_.Get(), &srv, &palette_srv_);
     }
 
-    // Per-scanline register buffer (262 scanlines x 4 uint32s)
+    // Per-scanline register buffer (262 scanlines x 8 uint32s = 32 bytes each)
     {
         D3D11_BUFFER_DESC bd = {};
         bd.ByteWidth = ISA_CGA::FRAME_LINES * sizeof(ISA_CGA::ScanlineRegs);
@@ -345,7 +357,7 @@ bool CgaRasterizer::init(const RenderContext& rc) {
         D3D11_SHADER_RESOURCE_VIEW_DESC srv = {};
         srv.Format = DXGI_FORMAT_R32_UINT;
         srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-        srv.Buffer.NumElements = ISA_CGA::FRAME_LINES * 4;
+        srv.Buffer.NumElements = ISA_CGA::FRAME_LINES * (sizeof(ISA_CGA::ScanlineRegs) / 4);
         HRESULT hr2 = device->CreateShaderResourceView(scanline_buf_.Get(), &srv, &scanline_srv_);
         if (FAILED(hr2)) spdlog::error("[CGA] Scanline SRV failed: 0x{:08X}", (unsigned)hr2);
     }

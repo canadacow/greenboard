@@ -91,10 +91,14 @@ public:
     // reads per-scanline values from a buffer instead of global constants.
     static constexpr uint32_t FRAME_LINES = 262;
     struct alignas(16) ScanlineRegs {
-        uint32_t mode;
-        uint32_t color;
-        uint32_t start_addr;
-        uint32_t _pad;
+        uint32_t mode;          // 0x3D8 mode control register
+        uint32_t color;         // 0x3D9 color select register
+        uint32_t start_addr;    // effective CRTC address (with row advancement)
+        uint32_t max_scanline;  // CRTC R9: char height - 1
+        uint32_t h_displayed;   // CRTC R1: columns displayed
+        uint32_t v_displayed;   // CRTC R6: rows displayed
+        uint32_t row_scanline;  // RA: scanline within current character row (0..R9)
+        uint32_t char_row;      // character row counter relative to this region
     };
     const ScanlineRegs* scanline_regs() const { return scanline_regs_; }
 

@@ -132,10 +132,23 @@ void ISA_CGA::on_io_write(uint16_t port, uint8_t val) {
                     default: break;
                 }
                 crtc_reg_[crtc_index_] = val;
-                if (crtc_index_ == CRTC_START_ADDR_H ||
-                    crtc_index_ == CRTC_START_ADDR_L) {
-                    uint32_t sl = current_scanline();
-                    if (sl < FRAME_LINES) snapshot_from_scanline(sl);
+                // Any CRTC register that affects rendering triggers a
+                // snapshot for beam-racing support.
+                switch (crtc_index_) {
+                    case CRTC_START_ADDR_H:
+                    case CRTC_START_ADDR_L:
+                    case CRTC_MAX_SCANLINE:
+                    case CRTC_HDISPLAYED:
+                    case CRTC_VDISPLAYED:
+                    case CRTC_VTOTAL:
+                    case CRTC_VTOTAL_ADJ:
+                    case CRTC_HSYNC_POS:
+                    case CRTC_SYNC_WIDTH: {
+                        uint32_t sl = current_scanline();
+                        if (sl < FRAME_LINES) snapshot_from_scanline(sl);
+                        break;
+                    }
+                    default: break;
                 }
             }
             break;
@@ -222,10 +235,36 @@ uint32_t ISA_CGA::current_scanline() const {
 }
 
 void ISA_CGA::snapshot_from_scanline(uint32_t from) {
+    // Capture the full register state at scanline `from` and precompute
+    // the CRTC address counter advancement for remaining scanlines.
+    // Programs that switch modes mid-frame also reprogram R9, R1, R6
+    // alongside the mode register, so we capture all of them.
     uint16_t sa = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
-    ScanlineRegs s = { mode_, color_, sa, 0 };
-    for (uint32_t i = from; i < FRAME_LINES; ++i)
-        scanline_regs_[i] = s;
+    uint8_t h_disp = crtc_reg_[CRTC_HDISPLAYED];
+    uint8_t char_h = (crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F) + 1;
+    uint8_t v_disp = crtc_reg_[CRTC_VDISPLAYED];
+    if (char_h == 0) char_h = 1;
+    if (h_disp == 0) h_disp = 80;
+
+    // The CRTC MA counter advances by h_displayed each character row.
+    // We precompute the row counter and scanline-within-row (RA) so the
+    // shader doesn't need to derive them from absolute py.
+    for (uint32_t i = from; i < FRAME_LINES; ++i) {
+        uint32_t offset = i - from;
+        uint32_t row = offset / char_h;
+        uint32_t ra  = offset % char_h;
+        uint16_t addr = sa + row * h_disp;
+        ScanlineRegs sr;
+        sr.mode         = mode_;
+        sr.color        = color_;
+        sr.start_addr   = addr;
+        sr.max_scanline = char_h - 1;
+        sr.h_displayed  = h_disp;
+        sr.v_displayed  = v_disp;
+        sr.row_scanline = ra;
+        sr.char_row     = row;
+        scanline_regs_[i] = sr;
+    }
 }
 
 void ISA_CGA::check_frame_boundary() {
