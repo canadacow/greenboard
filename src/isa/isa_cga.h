@@ -229,7 +229,8 @@ private:
     static constexpr uint32_t CLK_PER_LINE  = 304;       // 912 dots / 3
     static constexpr uint32_t CLK_PER_FRAME = 304 * 262;  // 79648 CLK/frame
     ScanlineRegs scanline_regs_[FRAME_LINES] = {};
-    uint32_t clk_counter_ = 0;   // counts 0..303 within a scanline
+    uint32_t dot_counter_ = 0;    // dot clock accumulator (3 per system CLK)
+    uint32_t hcc_ = 0;           // horizontal character counter (0..R0)
     uint32_t scanline_ = 0;      // current scanline 0..261
     uint32_t vcc_ = 0;           // vertical character counter
     uint32_t ra_ = 0;            // raster address (scanline within char row)

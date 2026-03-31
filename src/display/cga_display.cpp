@@ -173,20 +173,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
         return;
     }
 
+    // DEBUG: border checks disabled to see what's underneath.
     // Display disabled (MODE_ENABLE=0): entire frame is border color.
-    if (!(sl_mode & MODE_ENABLE)) {
-        output_tex[dtid.xy] = border;
-        return;
-    }
+    //if (!(sl_mode & MODE_ENABLE)) {
+    //    output_tex[dtid.xy] = border;
+    //    return;
+    //}
 
     // Outside active display area: overscan border.
     uint h_disp = (sl_h_displayed > 0) ? sl_h_displayed : (hires ? 80 : 40);
     uint v_disp = (sl_v_displayed > 0) ? sl_v_displayed : 25;
 
-    if (char_col >= h_disp || char_row >= v_disp) {
-        output_tex[dtid.xy] = border;
-        return;
-    }
+    //if (char_col >= h_disp || char_row >= v_disp) {
+    //    output_tex[dtid.xy] = border;
+    //    return;
+    //}
 
     // === Active display: fetch from VRAM and render ===
 

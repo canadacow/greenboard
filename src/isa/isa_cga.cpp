@@ -27,7 +27,8 @@ void ISA_CGA::on_power_on() {
     mode_ = 0;
     color_ = 0;
     composite_ = false;
-    clk_counter_ = 0;
+    dot_counter_ = 0;
+    hcc_ = 0;
     scanline_ = 0;
     vcc_ = 0;
     ra_ = 0;
@@ -71,15 +72,13 @@ uint8_t ISA_CGA::on_io_read(uint16_t port) {
 
         // Status register -- derived from running beam state.
         case 0x3DA: {
-            static constexpr uint32_t H_ACTIVE_CLK = 213;  // 640 dots / 3
-            static constexpr uint32_t V_ACTIVE     = 200;
-            static constexpr uint32_t V_SYNC_START = 224;
-            static constexpr uint32_t V_SYNC_END   = 227;
-
             uint8_t status = 0;
-            if (clk_counter_ >= H_ACTIVE_CLK || scanline_ >= V_ACTIVE)
+            // Bit 0: ~DE. Display Enable is active when HCC < R1 AND VCC < R6.
+            if (hcc_ >= crtc_reg_[CRTC_HDISPLAYED] ||
+                vcc_ >= crtc_reg_[CRTC_VDISPLAYED])
                 status |= 0x01;
-            if (scanline_ >= V_SYNC_START && scanline_ < V_SYNC_END)
+            // Bit 3: VSYNC. Active when VCC == R7.
+            if (vcc_ == (crtc_reg_[CRTC_VSYNC_POS] & 0x7F))
                 status |= 0x08;
             return status;
         }
@@ -184,33 +183,54 @@ void ISA_CGA::fill_gpu_constants(GpuConstants& cb) const {
 // =========================================================================
 
 void ISA_CGA::on_cycle(Fiber) {
-    if (++clk_counter_ >= CLK_PER_LINE) {
-        clk_counter_ = 0;
+    // The 6845 CLK input is the character clock.  We receive system CLK
+    // (4.77 MHz = 14.318 / 3).  Accumulate dots (3 per system CLK),
+    // tick HCC when a full character clock has elapsed.
+    //
+    // 80-col / hi-res: 8 dots per char clock.
+    // 40-col / lo-res: 16 dots per char clock.
+    // CGA character clock: 8 dots if +HRES (80-col text OR 640x200 gfx),
+    // 16 dots otherwise (40-col text, 320x200 gfx).
+    bool hires = (mode_ & MODE_HIRES_TEXT) || (mode_ & MODE_HIRES_GFX);
+    uint32_t dots_per_char = hires ? 8 : 16;
 
-        // Stamp the current scanline with registers + counters.
-        stamp_scanline();
+    dot_counter_ += 3;
+    if (dot_counter_ < dots_per_char)
+        return;
+    dot_counter_ -= dots_per_char;
 
-        // Tick 6845 counters for next scanline.
-        uint8_t max_sl = crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F;
-        uint8_t h_disp = crtc_reg_[CRTC_HDISPLAYED];
-        if (h_disp == 0) h_disp = 80;
+    // --- One character clock tick: HCC increments ---
+    hcc_++;
+    uint8_t htotal = crtc_reg_[CRTC_HTOTAL];
 
-        if (ra_ >= max_sl) {
-            ra_ = 0;
-            vcc_++;
-            ma_ += h_disp;
-        } else {
-            ra_++;
-        }
+    if (hcc_ <= htotal)
+        return;
 
-        // Advance scanline. On frame wrap, reset counters per 6845:
-        // VCC=0, RA=0, MA reloaded from start_addr (R12:R13).
-        if (++scanline_ >= FRAME_LINES) {
-            scanline_ = 0;
-            vcc_ = 0;
-            ra_ = 0;
-            ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
-        }
+    // --- HCC reached R0: scanline complete ---
+    hcc_ = 0;
+
+    // Stamp this scanline.
+    stamp_scanline();
+
+    // Tick vertical counters per the 6845 datasheet.
+    uint8_t max_sl = crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F;
+    uint8_t h_disp = crtc_reg_[CRTC_HDISPLAYED];
+    if (h_disp == 0) h_disp = 80;
+
+    if (ra_ >= max_sl) {
+        ra_ = 0;
+        vcc_++;
+        ma_ += h_disp;
+    } else {
+        ra_++;
+    }
+
+    // Frame wrap: keep scanline_ within 262-line buffer.
+    if (++scanline_ >= FRAME_LINES) {
+        scanline_ = 0;
+        vcc_ = 0;
+        ra_ = 0;
+        ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
     }
 }
 
@@ -228,13 +248,13 @@ void ISA_CGA::stamp_scanline() {
     sr._pad[0] = sr._pad[1] = sr._pad[2] = 0;
 
     // Capture the VRAM row the beam reads at this scanline.
-    // Text mode: MA addresses char+attr pairs, 2 bytes each.
-    //   Copy h_displayed * 2 bytes starting at (MA & 0x1FFF) * 2.
-    // Graphics mode: MA addresses bytes, RA0 selects bank.
-    //   Copy from ((MA & 0x0FFF) << 1) + (RA & 1) * 0x2000.
+    // The 6845 outputs MA (14-bit).  CGA maps MA to VRAM bytes:
+    //   Text mode:     byte addr = (MA & 0x1FFF) * 2
+    //   Graphics mode: byte addr = (MA & 0x0FFF) * 2 + (RA & 1) * 0x2000
+    // Each MA = 2 VRAM bytes in both modes.  Row = h_displayed * 2 bytes.
     uint8_t h_disp = sr.h_displayed;
     if (h_disp == 0) h_disp = 80;
-    uint32_t bytes = (mode_ & MODE_GRAPHICS) ? h_disp : h_disp * 2;
+    uint32_t bytes = h_disp * 2;
     if (bytes > SCANLINE_ROW_BYTES) bytes = SCANLINE_ROW_BYTES;
 
     uint32_t vram_offset;
