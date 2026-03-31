@@ -33,6 +33,8 @@ void ISA_CGA::on_power_on() {
     vcc_ = 0;
     ra_ = 0;
     ma_ = 0;
+    vtadj_counter_ = 0;
+    in_vtadj_ = false;
     std::memset(scanline_regs_, 0, sizeof(scanline_regs_));
     QueryPerformanceFrequency(&qpc_freq_);
     QueryPerformanceCounter(&qpc_start_);
@@ -213,25 +215,65 @@ void ISA_CGA::on_cycle(Fiber) {
     stamp_scanline();
 
     // Tick vertical counters per the 6845 datasheet.
+    //
+    // RA increments each scanline.  When RA == R9 (coincidence), RA
+    // resets to 0 and either VCC increments or the frame ends.
+    //
+    // Frame end logic (per MartyPC/datasheet): at the start of each
+    // character row (RA==0), if VCC == R4, an internal "last row" flag
+    // is set.  When RA reaches R9 at the end of that row, if "last row"
+    // is set, VCC resets to 0, MA reloads from start_addr, and R5
+    // adjust scanlines are counted.  Otherwise VCC increments normally.
     uint8_t max_sl = crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F;
     uint8_t h_disp = crtc_reg_[CRTC_HDISPLAYED];
+    uint8_t vtotal = crtc_reg_[CRTC_VTOTAL] & 0x7F;
     if (h_disp == 0) h_disp = 80;
 
     if (ra_ >= max_sl) {
+        // End of character row.
         ra_ = 0;
-        vcc_++;
-        ma_ += h_disp;
+        if (in_vtadj_) {
+            // Counting R5 adjust scanlines after vtotal.
+            vtadj_counter_++;
+            uint8_t vtotal_adj = crtc_reg_[CRTC_VTOTAL_ADJ] & 0x1F;
+            if (vtadj_counter_ >= vtotal_adj) {
+                // 6845 frame complete: VCC/RA reset, MA reloads.
+                // scanline_ does NOT reset -- it tracks the physical
+                // beam position on the monitor.  The beam only returns
+                // to the top when the monitor sees VSYNC (scanline 262).
+                in_vtadj_ = false;
+                vtadj_counter_ = 0;
+                vcc_ = 0;
+                ra_ = 0;
+                ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) |
+                       crtc_reg_[CRTC_START_ADDR_L];
+            }
+        } else if (vcc_ == vtotal) {
+            uint8_t vtotal_adj = crtc_reg_[CRTC_VTOTAL_ADJ] & 0x1F;
+            if (vtotal_adj == 0) {
+                // No adjust -- frame ends immediately.
+                vcc_ = 0;
+                ra_ = 0;
+                ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) |
+                       crtc_reg_[CRTC_START_ADDR_L];
+            } else {
+                in_vtadj_ = true;
+                vtadj_counter_ = 0;
+                vcc_++;
+                ma_ += h_disp;
+            }
+        } else {
+            vcc_++;
+            ma_ += h_disp;
+        }
     } else {
         ra_++;
     }
 
-    // Frame wrap: keep scanline_ within 262-line buffer.
-    if (++scanline_ >= FRAME_LINES) {
+    // scanline_ tracks the physical beam on the monitor (0-261).
+    // It wraps independently of VCC -- the monitor resets at VSYNC.
+    if (++scanline_ >= FRAME_LINES)
         scanline_ = 0;
-        vcc_ = 0;
-        ra_ = 0;
-        ma_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
-    }
 }
 
 void ISA_CGA::stamp_scanline() {

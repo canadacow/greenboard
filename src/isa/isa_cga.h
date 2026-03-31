@@ -235,6 +235,8 @@ private:
     uint32_t vcc_ = 0;           // vertical character counter
     uint32_t ra_ = 0;            // raster address (scanline within char row)
     uint32_t ma_ = 0;            // memory address (linear address for this row)
+    uint32_t vtadj_counter_ = 0; // counts R5 adjust scanlines at frame end
+    bool     in_vtadj_ = false;  // true while counting adjust scanlines
     void stamp_scanline();       // write current state into scanline_regs_[scanline_]
 };
 
