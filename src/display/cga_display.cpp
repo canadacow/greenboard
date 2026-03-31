@@ -141,6 +141,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     uint sl_v_displayed   = scanline_buf[sl_base + 6];
     uint sl_hsync_pos     = scanline_buf[sl_base + 7];
     uint sl_hsync_width   = scanline_buf[sl_base + 8];
+    uint h_total          = scanline_buf[sl_base + 9];
 
     float4 border = pal_color(sl_color & 0xF);
 
@@ -149,118 +150,120 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
                                            : (sl_mode & MODE_HIRES_TEXT) != 0;
     uint char_w = hires ? 8 : 16;
 
-    // Horizontal beam position in character clocks.
-    uint char_col = px / char_w;
-
-    // Vertical position from the 6845 counters, simulated per-scanline.
-    // VCC = character row, RA = scanline within character row.
+    // 6845 counters from the per-scanline buffer.
     uint char_row = sl_vcc;
     uint scanline = sl_ra;
 
-    // --- Horizontal blanking ---
-    // The beam is blanked beyond the active+overscan area.
-    // Active display: char_col 0..h_disp-1
-    // Right overscan: char_col h_disp..hsync_pos-1
-    // Hsync (blanked): char_col hsync_pos..hsync_pos+width-1
-    // Left overscan: char_col hsync_pos+width..h_total
-    // We blank during hsync. The rest of the non-active area is overscan (border).
-    bool in_hsync = (sl_hsync_pos > 0) &&
-                    (char_col >= sl_hsync_pos) &&
-                    (char_col < sl_hsync_pos + sl_hsync_width);
+    // --- Horizontal beam position ---
+    // The beam scans in this order after HSYNC end (px=0 in our buffer):
+    //   left overscan:  (R0+1 - R2 - R3) char clocks  -> border
+    //   active display: R1 char clocks (HCC 0..R1-1)   -> VRAM content
+    //   right overscan: (R2 - R1) char clocks          -> border
+    //   HSYNC:          R3 char clocks                  -> black
+    //
+    // All in character clock units, converted to dots via char_w.
+    uint h_total_chars = (h_total > 0) ? h_total + 1 : 114;
+    uint left_porch = h_total_chars - sl_hsync_pos - sl_hsync_width;
+    uint left_porch_dots = left_porch * char_w;
 
-    if (in_hsync) {
-        output_tex[dtid.xy] = float4(0, 0, 0, 1);
+    uint h_disp = (sl_h_displayed > 0) ? sl_h_displayed : (hires ? 80 : 40);
+    uint active_dots = h_disp * char_w;
+    uint right_porch = sl_hsync_pos - h_disp;
+    uint right_porch_dots = right_porch * char_w;
+    uint hsync_dots = sl_hsync_width * char_w;
+
+    // Classify this pixel.
+    uint region_px = px;
+    float4 out_color;
+
+    if (region_px < left_porch_dots) {
+        // Left overscan (back porch) -- border color.
+        output_tex[dtid.xy] = border;
+        return;
+    }
+    region_px -= left_porch_dots;
+
+    if (region_px < active_dots) {
+        // Active display region.  region_px is the dot within active area.
+        uint active_px = region_px;
+        uint char_col = active_px / char_w;
+
+        // Vertical display enable: VCC < R6.
+        uint v_disp = (sl_v_displayed > 0) ? sl_v_displayed : 25;
+        if (char_row >= v_disp || !(sl_mode & MODE_ENABLE)) {
+            output_tex[dtid.xy] = border;
+            return;
+        }
+
+        if (sl_mode & MODE_GRAPHICS) {
+            if (sl_mode & MODE_HIRES_GFX) {
+                uint byte_val = sl_vram_byte(sl_base, active_px / 8);
+                uint lit = (byte_val >> (7 - (active_px & 7))) & 1;
+                uint fg = sl_color & 0xF;
+                if (fg == 0) fg = 15;
+                out_color = pal_color(lit ? fg : 0);
+            } else {
+                uint src_x = active_px / 2;
+                uint byte_val = sl_vram_byte(sl_base, src_x / 4);
+                uint pixel = (byte_val >> (6 - (src_x & 3) * 2)) & 3;
+
+                uint color_idx;
+                if (pixel == 0) {
+                    color_idx = sl_color & 0xF;
+                } else {
+                    uint base = (sl_color & 0x10) ? 8 : 0;
+                    if (sl_mode & MODE_BW)
+                        color_idx = gfx_pal[4 + (base ? 1 : 0)][pixel];
+                    else if (sl_color & 0x20)
+                        color_idx = gfx_pal[2 + (base ? 1 : 0)][pixel];
+                    else
+                        color_idx = gfx_pal[0 + (base ? 1 : 0)][pixel];
+                }
+                out_color = pal_color(color_idx);
+            }
+        } else {
+            uint cell = (sl_ma + char_col) & 0x1FFF;
+            uint ch   = sl_vram_byte(sl_base, char_col * 2);
+            uint attr  = sl_vram_byte(sl_base, char_col * 2 + 1);
+
+            uint fg = attr & 0x0F;
+            uint bg = (attr >> 4) & 0x0F;
+
+            if (sl_mode & MODE_BLINK) {
+                bg &= 0x07;
+                if ((attr & 0x80) && !attr_blink)
+                    fg = bg;
+            }
+
+            uint font_sl = scanline < 8 ? scanline : (scanline & 7);
+            uint glyph = font_byte(ch * 8 + font_sl);
+
+            uint dot_in_cell = active_px % char_w;
+            uint font_col = dot_in_cell * 8 / char_w;
+            uint bit = (glyph >> (7 - font_col)) & 1;
+
+            if (cursor_enabled && cursor_blink &&
+                cell == cursor_addr &&
+                scanline >= cursor_start && scanline <= cursor_end) {
+                out_color = pal_color(fg);
+            } else {
+                out_color = pal_color(bit ? fg : bg);
+            }
+        }
+
+        output_tex[dtid.xy] = out_color;
+        return;
+    }
+    region_px -= active_dots;
+
+    if (region_px < right_porch_dots) {
+        // Right overscan (front porch) -- border color.
+        output_tex[dtid.xy] = border;
         return;
     }
 
-    // DEBUG: border checks disabled to see what's underneath.
-    // Display disabled (MODE_ENABLE=0): entire frame is border color.
-    //if (!(sl_mode & MODE_ENABLE)) {
-    //    output_tex[dtid.xy] = border;
-    //    return;
-    //}
-
-    // Outside active display area: overscan border.
-    uint h_disp = (sl_h_displayed > 0) ? sl_h_displayed : (hires ? 80 : 40);
-    uint v_disp = (sl_v_displayed > 0) ? sl_v_displayed : 25;
-
-    //if (char_col >= h_disp || char_row >= v_disp) {
-    //    output_tex[dtid.xy] = border;
-    //    return;
-    //}
-
-    // === Active display: fetch from VRAM and render ===
-
-    float4 out_color;
-
-    if (sl_mode & MODE_GRAPHICS) {
-        // Graphics modes.  The scanline's vram_row was captured from
-        // the correct interleaved bank at stamp time.  Index by pixel
-        // position within the row.
-        if (sl_mode & MODE_HIRES_GFX) {
-            // 640x200 1bpp -- 8 pixels per byte, 1 dot per pixel.
-            uint byte_val = sl_vram_byte(sl_base, px / 8);
-            uint lit = (byte_val >> (7 - (px & 7))) & 1;
-            uint fg = sl_color & 0xF;
-            if (fg == 0) fg = 15;
-            out_color = pal_color(lit ? fg : 0);
-        } else {
-            // 320x200 2bpp -- 4 pixels per byte, doubled to 640 dots.
-            uint src_x = px / 2;
-            uint byte_val = sl_vram_byte(sl_base, src_x / 4);
-            uint pixel = (byte_val >> (6 - (src_x & 3) * 2)) & 3;
-
-            uint color_idx;
-            if (pixel == 0) {
-                color_idx = sl_color & 0xF;
-            } else {
-                uint base = (sl_color & 0x10) ? 8 : 0;
-                if (sl_mode & MODE_BW)
-                    color_idx = gfx_pal[4 + (base ? 1 : 0)][pixel];
-                else if (sl_color & 0x20)
-                    color_idx = gfx_pal[2 + (base ? 1 : 0)][pixel];
-                else
-                    color_idx = gfx_pal[0 + (base ? 1 : 0)][pixel];
-            }
-            out_color = pal_color(color_idx);
-        }
-    } else {
-        // Text modes.  The scanline's vram_row was captured from MA
-        // at stamp time.  char_col indexes into it (2 bytes per char).
-        uint cell = (sl_ma + char_col) & 0x1FFF;  // for cursor comparison
-        uint ch   = sl_vram_byte(sl_base, char_col * 2);
-        uint attr  = sl_vram_byte(sl_base, char_col * 2 + 1);
-
-        uint fg = attr & 0x0F;
-        uint bg = (attr >> 4) & 0x0F;
-
-        if (sl_mode & MODE_BLINK) {
-            bg &= 0x07;
-            if ((attr & 0x80) && !attr_blink)
-                fg = bg;
-        }
-
-        // Font glyph lookup -- 8 bytes per character, 8 pixels wide.
-        uint font_sl = scanline < 8 ? scanline : (scanline & 7);
-        uint glyph = font_byte(ch * 8 + font_sl);
-
-        // Map dot position within cell to font column.
-        // char_w=8: 1:1.  char_w=16: each font pixel spans 2 dots.
-        uint dot_in_cell = px % char_w;
-        uint font_col = dot_in_cell * 8 / char_w;
-        uint bit = (glyph >> (7 - font_col)) & 1;
-
-        // Cursor overlay.
-        if (cursor_enabled && cursor_blink &&
-            cell == cursor_addr &&
-            scanline >= cursor_start && scanline <= cursor_end) {
-            out_color = pal_color(fg);
-        } else {
-            out_color = pal_color(bit ? fg : bg);
-        }
-    }
-
-    output_tex[dtid.xy] = out_color;
+    // HSYNC -- blanked (black).
+    output_tex[dtid.xy] = float4(0, 0, 0, 1);
 }
 )HLSL";
 

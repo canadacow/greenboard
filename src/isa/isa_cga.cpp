@@ -308,7 +308,8 @@ void ISA_CGA::stamp_scanline() {
     sr.v_displayed = crtc_reg_[CRTC_VDISPLAYED];
     sr.hsync_pos   = crtc_reg_[CRTC_HSYNC_POS];
     sr.hsync_width = crtc_reg_[CRTC_SYNC_WIDTH] & 0x0F;
-    sr._pad[0] = sr._pad[1] = sr._pad[2] = 0;
+    sr.h_total     = crtc_reg_[CRTC_HTOTAL];
+    sr._pad[0] = sr._pad[1] = 0;
 
     // Capture the VRAM row the beam reads at this scanline.
     // The 6845 outputs MA (14-bit).  CGA maps MA to VRAM bytes:

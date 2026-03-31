@@ -114,7 +114,8 @@ public:
         uint32_t v_displayed;   // R6
         uint32_t hsync_pos;     // R2
         uint32_t hsync_width;   // R3 low nibble
-        uint32_t _pad[3];
+        uint32_t h_total;       // R0
+        uint32_t _pad[2];
         // VRAM row captured by the beam (40 uint32s = 160 bytes)
         uint32_t vram_row[SCANLINE_ROW_U32S];
     };
