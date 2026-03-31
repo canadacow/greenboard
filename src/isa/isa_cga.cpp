@@ -28,6 +28,7 @@ void ISA_CGA::on_power_on() {
     color_ = 0;
     composite_ = false;
     last_frame_num_ = UINT64_MAX;
+    latched_start_addr_ = 0;
     snapshot_from_scanline(0);
     QueryPerformanceFrequency(&qpc_freq_);
     QueryPerformanceCounter(&qpc_start_);
@@ -239,7 +240,12 @@ void ISA_CGA::snapshot_from_scanline(uint32_t from) {
     // the CRTC address counter advancement for remaining scanlines.
     // Programs that switch modes mid-frame also reprogram R9, R1, R6
     // alongside the mode register, so we capture all of them.
-    uint16_t sa = (crtc_reg_[CRTC_START_ADDR_H] << 8) | crtc_reg_[CRTC_START_ADDR_L];
+    //
+    // start_addr uses the latched value (set at frame boundary), not the
+    // live R12/R13 registers.  The real 6845 latches start_addr from
+    // R12/R13 only when VCC resets (frame start).  Mid-frame writes to
+    // R12/R13 don't affect the current frame.
+    uint16_t sa = latched_start_addr_;
     uint8_t h_disp = crtc_reg_[CRTC_HDISPLAYED];
     uint8_t char_h = (crtc_reg_[CRTC_MAX_SCANLINE] & 0x1F) + 1;
     uint8_t v_disp = crtc_reg_[CRTC_VDISPLAYED];
@@ -263,6 +269,10 @@ void ISA_CGA::snapshot_from_scanline(uint32_t from) {
         sr.v_displayed  = v_disp;
         sr.row_scanline = ra;
         sr.char_row     = row;
+        sr.h_total      = crtc_reg_[CRTC_HTOTAL];
+        sr.hsync_pos    = crtc_reg_[CRTC_HSYNC_POS];
+        sr.hsync_width  = crtc_reg_[CRTC_SYNC_WIDTH] & 0x0F;
+        sr.vsync_pos    = crtc_reg_[CRTC_VSYNC_POS] & 0x7F;
         scanline_regs_[i] = sr;
     }
 }
@@ -272,6 +282,9 @@ void ISA_CGA::check_frame_boundary() {
     uint64_t frame = *clk_cycles_ / CLK_PER_FRAME;
     if (frame != last_frame_num_) {
         last_frame_num_ = frame;
+        // Latch start_addr from R12/R13, just as the real 6845 does at VCC reset.
+        latched_start_addr_ = (crtc_reg_[CRTC_START_ADDR_H] << 8) |
+                               crtc_reg_[CRTC_START_ADDR_L];
         snapshot_from_scanline(0);
     }
 }

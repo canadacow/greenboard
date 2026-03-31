@@ -90,7 +90,7 @@ public:
     // card captures these changes as they happen during simulation.  The shader
     // reads per-scanline values from a buffer instead of global constants.
     static constexpr uint32_t FRAME_LINES = 262;
-    struct alignas(16) ScanlineRegs {
+    struct ScanlineRegs {
         uint32_t mode;          // 0x3D8 mode control register
         uint32_t color;         // 0x3D9 color select register
         uint32_t start_addr;    // effective CRTC address (with row advancement)
@@ -99,6 +99,10 @@ public:
         uint32_t v_displayed;   // CRTC R6: rows displayed
         uint32_t row_scanline;  // RA: scanline within current character row (0..R9)
         uint32_t char_row;      // character row counter relative to this region
+        uint32_t h_total;       // CRTC R0: horizontal total (char clocks - 1)
+        uint32_t hsync_pos;     // CRTC R2: horizontal sync position
+        uint32_t hsync_width;   // CRTC R3 low nibble
+        uint32_t vsync_pos;     // CRTC R7: vertical sync position
     };
     const ScanlineRegs* scanline_regs() const { return scanline_regs_; }
 
@@ -210,6 +214,10 @@ private:
     static constexpr uint32_t CLK_PER_FRAME = 304 * 262;  // 79648 CLK/frame
     ScanlineRegs scanline_regs_[FRAME_LINES] = {};
     uint64_t last_frame_num_ = UINT64_MAX;
+    // The 6845 latches start_addr from R12/R13 at frame start (VCC reset).
+    // Mid-frame writes to R12/R13 do NOT affect the current frame's MA counter.
+    // We mirror this by latching at frame boundary only.
+    uint16_t latched_start_addr_ = 0;
     uint32_t current_scanline() const;
     void snapshot_from_scanline(uint32_t from);
     void check_frame_boundary();

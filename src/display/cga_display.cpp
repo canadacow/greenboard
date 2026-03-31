@@ -118,7 +118,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     // Per-scanline register state (beam-racing support).
     // Programs that switch modes mid-frame also reprogram R9, R1, R6,
     // so ALL rendering-critical registers are captured per-scanline.
-    uint sl_base = py * 8;  // 8 uint32s per scanline (32 bytes)
+    uint sl_base = py * 12;  // 12 uint32s per scanline
     uint sl_mode          = scanline_buf[sl_base + 0];
     uint sl_color         = scanline_buf[sl_base + 1];
     uint sl_start_addr    = scanline_buf[sl_base + 2];
@@ -127,6 +127,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     uint sl_v_displayed   = scanline_buf[sl_base + 5];
     uint sl_row_scanline  = scanline_buf[sl_base + 6];  // RA: scanline within char row
     uint sl_char_row      = scanline_buf[sl_base + 7];  // character row counter
+    uint sl_h_total       = scanline_buf[sl_base + 8];
+    uint sl_hsync_pos     = scanline_buf[sl_base + 9];
+    uint sl_hsync_width   = scanline_buf[sl_base + 10];
+    uint sl_vsync_pos     = scanline_buf[sl_base + 11];
 
     float4 border = pal_color(sl_color & 0xF);
 
@@ -148,18 +152,18 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     uint char_row = sl_char_row;
     uint scanline = sl_row_scanline;
 
-    // --- Horizontal blanking/sync ---
-    // hsync region: char_col in [hsync_pos, hsync_pos + hsync_width)
-    uint h_sync_end = hsync_pos + hsync_width;
-    bool in_hsync = (hsync_pos > 0) && (char_col >= hsync_pos) && (char_col < h_sync_end);
+    // --- Horizontal blanking ---
+    // The beam is blanked beyond the active+overscan area.
+    // Active display: char_col 0..h_disp-1
+    // Right overscan: char_col h_disp..hsync_pos-1
+    // Hsync (blanked): char_col hsync_pos..hsync_pos+width-1
+    // Left overscan: char_col hsync_pos+width..h_total
+    // We blank during hsync. The rest of the non-active area is overscan (border).
+    bool in_hsync = (sl_hsync_pos > 0) &&
+                    (char_col >= sl_hsync_pos) &&
+                    (char_col < sl_hsync_pos + sl_hsync_width);
 
-    // --- Vertical blanking/sync ---
-    // vsync: 16 scanlines starting at vsync_pos row boundary.
-    uint vsync_sl_start = vsync_pos * char_h;
-    bool in_vsync = (vsync_pos > 0) && (py >= vsync_sl_start) && (py < vsync_sl_start + 16);
-
-    // During sync pulses: beam is blanked (black).
-    if (in_hsync || in_vsync) {
+    if (in_hsync) {
         output_tex[dtid.xy] = float4(0, 0, 0, 1);
         return;
     }
@@ -345,7 +349,7 @@ bool CgaRasterizer::init(const RenderContext& rc) {
         device->CreateShaderResourceView(palette_buf_.Get(), &srv, &palette_srv_);
     }
 
-    // Per-scanline register buffer (262 scanlines x 8 uint32s = 32 bytes each)
+    // Per-scanline register buffer (262 scanlines x 12 uint32s = 48 bytes each)
     {
         D3D11_BUFFER_DESC bd = {};
         bd.ByteWidth = ISA_CGA::FRAME_LINES * sizeof(ISA_CGA::ScanlineRegs);
