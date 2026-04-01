@@ -162,15 +162,20 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     //   HSYNC:          R3 char clocks                  -> black
     //
     // All in character clock units, converted to dots via char_w.
+    // Dots per character = 912 / (R0+1).  This is always correct
+    // regardless of mode: 80-col text = 8, everything else = 16.
     uint h_total_chars = (h_total > 0) ? h_total + 1 : 114;
-    uint left_porch = h_total_chars - sl_hsync_pos - sl_hsync_width;
-    uint left_porch_dots = left_porch * char_w;
+    uint dots_per_char = 912 / h_total_chars;
+    if (dots_per_char == 0) dots_per_char = 8;
 
-    uint h_disp = (sl_h_displayed > 0) ? sl_h_displayed : (hires ? 80 : 40);
-    uint active_dots = h_disp * char_w;
+    uint left_porch = h_total_chars - sl_hsync_pos - sl_hsync_width;
+    uint left_porch_dots = left_porch * dots_per_char;
+
+    uint h_disp = (sl_h_displayed > 0) ? sl_h_displayed : 40;
+    uint active_dots = h_disp * dots_per_char;
     uint right_porch = sl_hsync_pos - h_disp;
-    uint right_porch_dots = right_porch * char_w;
-    uint hsync_dots = sl_hsync_width * char_w;
+    uint right_porch_dots = right_porch * dots_per_char;
+    uint hsync_dots = sl_hsync_width * dots_per_char;
 
     // Classify this pixel.
     uint region_px = px;
@@ -276,13 +281,11 @@ Rasterizer::UVRect CgaRasterizer::output_uv_rect() const {
     // Vertically: starts at active_start_ (first VCC=0 after VSYNC).
     // Horizontally: starts after left overscan (back porch).
     const uint8_t* r = cga_card_->crtc_regs();
-    bool hires = (cga_card_->mode_register() & ISA_CGA::MODE_HIRES_TEXT) ||
-                 (cga_card_->mode_register() & ISA_CGA::MODE_HIRES_GFX);
-    uint32_t char_w = hires ? 8 : 16;
     uint32_t h_total_chars = r[ISA_CGA::CRTC_HTOTAL] + 1;
+    uint32_t dots_per_char = (h_total_chars > 0) ? (912 / h_total_chars) : 8;
     uint32_t hsync_pos = r[ISA_CGA::CRTC_HSYNC_POS];
     uint32_t hsync_width = r[ISA_CGA::CRTC_SYNC_WIDTH] & 0x0F;
-    uint32_t left_porch_dots = (h_total_chars - hsync_pos - hsync_width) * char_w;
+    uint32_t left_porch_dots = (h_total_chars - hsync_pos - hsync_width) * dots_per_char;
 
     uint32_t top = cga_card_->active_start_scanline();
     if (top >= (uint32_t)OUT_H) top = 0;
