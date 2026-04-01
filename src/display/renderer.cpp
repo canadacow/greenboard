@@ -126,8 +126,12 @@ struct DxState {
     IC_8284A* clk_gen = nullptr;
     SystemInfo sys_info;
 
-    // Molly guard state for power off / reset
-    bool confirm_power_off = false;
+    // CGA debug window
+    bool cga_debug_open = false;
+    ImVec2 cga_pan = ImVec2(0, 0);
+    float cga_zoom = 2.0f;
+
+    // Molly guard state for reset
     bool confirm_reset = false;
 
     // Breakpoint
@@ -142,6 +146,7 @@ struct DxState {
     void render_memory_viewer();
     void render_bus_analyzer();
     void render_system_window();
+    void render_cga_debug();
     void present();
 };
 
@@ -326,6 +331,7 @@ void DxState::render_overlay() {
         if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
         if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
         if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
+        if (cga && ImGui::MenuItem("CGA"))   cga_debug_open = !cga_debug_open;
         ImGui::EndPopup();
     }
 
@@ -392,6 +398,10 @@ void DxState::render_overlay() {
     // --- System window ---
     if (system_open)
         render_system_window();
+
+    // --- CGA debug window ---
+    if (cga_debug_open && cga)
+        render_cga_debug();
 
     // --- PCB board view (F2 toggle) ---
     if (ImGui::IsKeyPressed(ImGuiKey_F2, false))
@@ -953,36 +963,11 @@ void DxState::render_system_window() {
         }
     }
 
-    // --- Power Off / Reset ---
+    // --- Reset ---
     ImGui::Separator();
     if (clk_gen) {
-        if (ImGui::Button("Power Off"))
-            confirm_power_off = true;
-        ImGui::SameLine();
         if (ImGui::Button("Reset"))
             confirm_reset = true;
-
-        // Molly guard: Power Off confirmation
-        if (confirm_power_off)
-            ImGui::OpenPopup("Confirm Power Off");
-        if (ImGui::BeginPopupModal("Confirm Power Off", nullptr,
-                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
-            ImGui::TextColored(red, "Are you sure you want to power off?");
-            ImGui::Text("All unsaved state will be lost.");
-            ImGui::Separator();
-            if (ImGui::Button("Yes, Power Off", ImVec2(140, 0))) {
-                spdlog::info("[System] Power off requested by user");
-                clk_gen->psu_power_off();
-                confirm_power_off = false;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(140, 0))) {
-                confirm_power_off = false;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
 
         // Molly guard: Reset confirmation
         if (confirm_reset)
@@ -990,10 +975,11 @@ void DxState::render_system_window() {
         if (ImGui::BeginPopupModal("Confirm Reset", nullptr,
                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
             ImGui::TextColored(red, "Are you sure you want to reset?");
-            ImGui::Text("This pulses the RESET line (like the real switch).");
+            ImGui::Text("This pulses the RESET line.");
             ImGui::Separator();
             if (ImGui::Button("Yes, Reset", ImVec2(140, 0))) {
                 spdlog::info("[System] Reset requested by user");
+                if (scheduler) scheduler->resume();
                 clk_gen->psu_reset();
                 confirm_reset = false;
                 ImGui::CloseCurrentPopup();
@@ -1092,6 +1078,167 @@ void DxState::render_system_window() {
 
     ImGui::Separator();
     ImGui::TextColored(dim, "Drop .img files onto drive labels to mount.");
+
+    ImGui::End();
+}
+
+void DxState::render_cga_debug() {
+    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("CGA Debug", &cga_debug_open, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+
+    ImVec4 grn = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+    ImVec4 cyn = ImVec4(0.4f, 1.0f, 1.0f, 1.0f);
+    ImVec4 yel = ImVec4(1.0f, 1.0f, 0.4f, 1.0f);
+    ImVec4 dim = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+
+    // --- CRTC Register State ---
+    const uint8_t* r = cga->crtc_regs();
+    uint8_t mode = cga->mode_register();
+    uint8_t color = cga->color_register();
+
+    if (ImGui::CollapsingHeader("CRTC Registers", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Columns(4, "crtc_regs", true);
+        ImGui::TextColored(grn, "R0  H Total");     ImGui::NextColumn();
+        ImGui::Text("%3d", r[0]);                     ImGui::NextColumn();
+        ImGui::TextColored(grn, "R1  H Displayed");  ImGui::NextColumn();
+        ImGui::Text("%3d", r[1]);                     ImGui::NextColumn();
+
+        ImGui::TextColored(grn, "R2  H Sync Pos");  ImGui::NextColumn();
+        ImGui::Text("%3d", r[2]);                     ImGui::NextColumn();
+        ImGui::TextColored(grn, "R3  Sync Width");   ImGui::NextColumn();
+        ImGui::Text("%3d (H:%d)", r[3], r[3] & 0xF); ImGui::NextColumn();
+
+        ImGui::TextColored(grn, "R4  V Total");      ImGui::NextColumn();
+        ImGui::Text("%3d", r[4] & 0x7F);             ImGui::NextColumn();
+        ImGui::TextColored(grn, "R5  V Adjust");     ImGui::NextColumn();
+        ImGui::Text("%3d", r[5] & 0x1F);             ImGui::NextColumn();
+
+        ImGui::TextColored(grn, "R6  V Displayed");  ImGui::NextColumn();
+        ImGui::Text("%3d", r[6] & 0x7F);             ImGui::NextColumn();
+        ImGui::TextColored(grn, "R7  V Sync Pos");   ImGui::NextColumn();
+        ImGui::Text("%3d", r[7] & 0x7F);             ImGui::NextColumn();
+
+        ImGui::TextColored(grn, "R8  Interlace");    ImGui::NextColumn();
+        ImGui::Text("%3d", r[8]);                     ImGui::NextColumn();
+        ImGui::TextColored(grn, "R9  Max Scanline"); ImGui::NextColumn();
+        ImGui::Text("%3d", r[9] & 0x1F);             ImGui::NextColumn();
+
+        ImGui::TextColored(grn, "R12:13 Start Addr");ImGui::NextColumn();
+        ImGui::Text("0x%04X", (r[12] << 8) | r[13]); ImGui::NextColumn();
+        ImGui::TextColored(grn, "R14:15 Cursor");    ImGui::NextColumn();
+        ImGui::Text("0x%04X", (r[14] << 8) | r[15]); ImGui::NextColumn();
+        ImGui::Columns(1);
+    }
+
+    // --- Mode & Color ---
+    if (ImGui::CollapsingHeader("Mode / Color", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextColored(cyn, "Mode 0x%02X:", mode);
+        ImGui::SameLine();
+        if (mode & 0x01) ImGui::TextColored(yel, "+HRES "); else ImGui::TextColored(dim, "-hres ");
+        ImGui::SameLine();
+        if (mode & 0x02) ImGui::TextColored(yel, "+GFX ");  else ImGui::TextColored(dim, "-gfx ");
+        ImGui::SameLine();
+        if (mode & 0x04) ImGui::TextColored(yel, "+BW ");   else ImGui::TextColored(dim, "-bw ");
+        ImGui::SameLine();
+        if (mode & 0x08) ImGui::TextColored(yel, "+EN ");   else ImGui::TextColored(dim, "-en ");
+        ImGui::SameLine();
+        if (mode & 0x10) ImGui::TextColored(yel, "+1BPP "); else ImGui::TextColored(dim, "-1bpp ");
+        ImGui::SameLine();
+        if (mode & 0x20) ImGui::TextColored(yel, "+BLINK"); else ImGui::TextColored(dim, "-blink");
+
+        ImGui::TextColored(cyn, "Color 0x%02X:", color);
+        ImGui::SameLine();
+        ImGui::Text("Border=%d  Palette=%d  Bright=%d",
+                     color & 0xF, (color >> 5) & 1, (color >> 4) & 1);
+    }
+
+    // Per-scanline state (used by frame buffer hover below).
+    const auto* sl = cga->scanline_regs();
+
+    ImGui::TextColored(dim, "Active start: scanline %d", cga->active_start_scanline());
+
+    // --- Full Frame Texture ---
+    if (ImGui::CollapsingHeader("Frame Buffer (912x262)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Zoom controls
+        ImGui::SliderFloat("Zoom", &cga_zoom, 0.5f, 8.0f, "%.1fx");
+
+        // Get the output texture SRV from the rasterizer
+        auto* srv = rasterizer ? rasterizer->output_srv() : nullptr;
+        if (srv) {
+            // CGA pixel aspect ratio: the CRT displays 912x262 dots in 4:3.
+            // PAR = (912/262) / (4/3) = 2.614.  Each dot is ~2.6x taller than wide.
+            static constexpr float PAR = (912.0f / 262.0f) / (4.0f / 3.0f);
+            float tex_w = CgaRasterizer::OUT_W * cga_zoom;
+            float tex_h = CgaRasterizer::OUT_H * cga_zoom * PAR;
+
+            // Scrollable child region for panning
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            ImGui::BeginChild("CGA_Frame", ImVec2(avail.x, avail.y - 80), true,
+                              ImGuiWindowFlags_HorizontalScrollbar);
+
+            ImVec2 cursor = ImGui::GetCursorScreenPos();
+            ImGui::Image((ImTextureID)srv, ImVec2(tex_w, tex_h));
+
+            // Hover info: show scanline data at mouse position
+            if (ImGui::IsItemHovered()) {
+                ImVec2 mouse = ImGui::GetMousePos();
+                int mx = (int)((mouse.x - cursor.x) / cga_zoom);
+                int my = (int)((mouse.y - cursor.y) / (cga_zoom * PAR));
+                if (mx >= 0 && mx < CgaRasterizer::OUT_W &&
+                    my >= 0 && my < CgaRasterizer::OUT_H) {
+                    const auto& s = sl[my];
+
+                    // Compute beam position info
+                    bool hires = (s.mode & 0x01) || (s.mode & 0x10);
+                    uint32_t char_w = hires ? 8 : 16;
+                    uint32_t h_total_chars = (s.h_displayed > 0) ? r[0] + 1 : 114;
+                    uint32_t left_porch = h_total_chars - s.hsync_pos - s.hsync_width;
+                    uint32_t left_dots = left_porch * char_w;
+
+                    int active_x = mx - (int)left_dots;
+                    int char_col = (active_x >= 0) ? active_x / (int)char_w : -1;
+
+                    ImGui::BeginTooltip();
+                    ImGui::Text("Dot: %d  Scanline: %d", mx, my);
+                    ImGui::Separator();
+                    ImGui::TextColored(grn, "VCC=%d  RA=%d  MA=0x%04X", s.vcc, s.ra, s.ma);
+                    ImGui::TextColored(cyn, "Mode=0x%02X  Color=0x%02X", s.mode, s.color);
+                    ImGui::TextColored(yel, "H_Disp=%d  V_Disp=%d", s.h_displayed, s.v_displayed);
+                    ImGui::TextColored(dim, "HSync=%d+%d  HTotal=%d",
+                                       s.hsync_pos, s.hsync_width, r[0]);
+                    if (char_col >= 0 && char_col < (int)s.h_displayed) {
+                        // Read from the VRAM row captured in the scanline buffer
+                        const uint8_t* row = reinterpret_cast<const uint8_t*>(s.vram_row);
+                        if (s.mode & 0x02) {
+                            // Graphics mode
+                            ImGui::TextColored(grn, "Active px=%d  byte[%d]=0x%02X",
+                                               active_x, active_x / 8,
+                                               row[active_x / 8]);
+                        } else {
+                            // Text mode
+                            uint8_t ch = row[char_col * 2];
+                            uint8_t attr = row[char_col * 2 + 1];
+                            ImGui::TextColored(grn, "Col=%d  Char=0x%02X '%c'  Attr=0x%02X",
+                                               char_col, ch,
+                                               (ch >= 32 && ch < 127) ? ch : '.',
+                                               attr);
+                            ImGui::TextColored(dim, "  FG=%d  BG=%d", attr & 0xF, (attr >> 4) & 0xF);
+                        }
+                    } else {
+                        ImGui::TextColored(dim, "Overscan/Blank (col=%d)", char_col);
+                    }
+                    ImGui::EndTooltip();
+                }
+            }
+
+            ImGui::EndChild();
+        } else {
+            ImGui::TextColored(dim, "(no CGA output texture available)");
+        }
+    }
 
     ImGui::End();
 }

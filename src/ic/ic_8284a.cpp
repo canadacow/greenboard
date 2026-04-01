@@ -98,7 +98,7 @@ void IC_8284A::run(std::stop_token stop) {
             psu_cmd_ = PsuCmd::None;
             psu_res_.drive(Level::Low);      // RES Low -> RESET High (active)
             pin_reset_.drive(Level::High);
-            reset_hold_ = 4;                 // hold reset for 4 CLK cycles
+            reset_hold_ = 8;                 // hold reset for 8 CLK cycles
             spdlog::info("[8284A] Reset pulse started at CLK cycle {}", clk_cycles_);
         }
         if (reset_hold_ > 0) {

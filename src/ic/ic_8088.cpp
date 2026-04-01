@@ -236,6 +236,24 @@ BIUTask IC_8088::biu_run() {
 
     for (;;) {
         if (pin_vcc_.level() != Level::High) break;
+
+        // Mid-execution RESET: abort EU, reset CPU, wait for deassert, restart
+        if (pin_reset_.level() == Level::High) {
+            spdlog::info("[8088] RESET asserted mid-execution at instr {}", instr_count_);
+            eu.handle_.destroy();
+            drive_status_passive();
+            release_data();
+            cpu_reset();
+            while (pin_reset_.level() == Level::High)
+                co_await std::suspend_always{};
+            spdlog::info("[8088] RESET deasserted -- restarting at {:04X}:{:04X}", start_cs_, start_ip_);
+            drive_status_passive();
+            eu = eu_run();
+            eu_resume_ = eu.handle_;
+            eu_done_ = false;
+            continue;
+        }
+
         check_nmi();
         if (breakpoint_) {
             co_await std::suspend_always{};
