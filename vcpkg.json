@@ -10,6 +10,7 @@
       "features": ["docking-experimental", "dx11-binding", "win32-binding"]
     },
     "zydis",
-    "nlohmann-json"
+    "nlohmann-json",
+    "miniaudio"
   ]
 }

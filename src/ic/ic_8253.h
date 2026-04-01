@@ -29,8 +29,12 @@ public:
 
     void install(Socket& socket);
 
-    // Speaker support: PIT channel 2 reload value -> frequency.
+    // Speaker support: PIT channel 2 state read by the audio thread.
+    // No synchronization -- same lockless pattern as CGA scanline_regs.
     uint32_t channel2_reload() const { return channels_[2].reload; }
+    uint8_t  channel2_mode()   const { return channels_[2].mode; }
+    bool     channel2_out()    const { return channels_[2].out; }
+    bool     channel2_gate()   const { return channels_[2].gate; }
 
 protected:
     void on_power_on() override;

@@ -9,6 +9,7 @@ find_package(fmt CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(zydis CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_path(MINIAUDIO_INCLUDE_DIRS "miniaudio.h")
 
 # Performance: AVX2, aggressive inlining, whole program optimization
 if(MSVC)
@@ -76,6 +77,7 @@ add_executable(bench
     src/isa/isa_fdc.cpp
     src/isa/isa_mda.cpp
     src/isa/isa_cga.cpp
+    src/audio/pc_speaker.cpp
     src/display/renderer.cpp
     src/display/mda_display.cpp
     src/display/cga_display.cpp
@@ -85,6 +87,7 @@ add_executable(bench
 )
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bench PRIVATE ${MINIAUDIO_INCLUDE_DIRS})
 target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis nlohmann_json::nlohmann_json nfd d3d11 d2d1 dwrite dxgi d3dcompiler windowscodecs)
 target_compile_definitions(bench PRIVATE
     PROJECT_ROOT="${CMAKE_SOURCE_DIR}"

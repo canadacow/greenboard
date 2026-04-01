@@ -1,16 +1,6 @@
 #include "ic/ic_8255a.h"
-#include "ic/ic_8253.h"
+#include "audio/pc_speaker.h"
 #include <spdlog/spdlog.h>
-#include <thread>
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
 
 namespace bench {
 
@@ -146,30 +136,14 @@ void IC_8255A::on_bus_write() {
             break;
 
         case 1: { // Port B
-            uint8_t old_b = latch_b_;
             latch_b_ = data;
             if (!pb_input_) {
                 write_port_b(data);
-                // Speaker: PB0 gates timer 2, PB1 is speaker data.
-                // Log when speaker is turned on or off.
-                bool spk_now = (data & 0x03) == 0x03;
-                bool spk_was = (old_b & 0x03) == 0x03;
-                if (spk_now && !spk_was) {
-                    spdlog::info("[BEEP] speaker on");
-                    if (clk_cycles_) speaker_on_clk_ = *clk_cycles_;
-                }
-                else if (!spk_now && spk_was) {
-                    spdlog::info("[BEEP] speaker off");
-#ifdef _WIN32
-                    if (pit_ && clk_cycles_) {
-                        uint32_t reload = pit_->channel2_reload();
-                        if (!reload) reload = 65536;
-                        int freq = 1193182 / reload;
-                        int ms = static_cast<int>((*clk_cycles_ - speaker_on_clk_) / 4770);
-                        if (freq >= 37 && freq <= 32767 && ms > 0 && ms < 5000)
-                            std::thread([=]{ Beep(freq, ms); }).detach();
-                    }
-#endif
+                // PB0 gates PIT channel 2, PB1 enables speaker output.
+                // Push state into PCSpeaker's shared params (lockless).
+                if (speaker_) {
+                    speaker_->params().pit_gate           = (data & 0x01) != 0;
+                    speaker_->params().pit_output_enabled = (data & 0x02) != 0;
                 }
             }
         }

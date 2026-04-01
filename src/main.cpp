@@ -14,6 +14,7 @@
 #include "display/renderer.h"
 #include "debug/memory_view.h"
 #include "test/test_keyboard.h"
+#include "audio/pc_speaker.h"
 #include "core/signal.h"
 #include "core/scheduler.h"
 #include <spdlog/spdlog.h>
@@ -124,8 +125,11 @@ int main() {
 
     scheduler.resolve();
 
-    // --- Speaker (Beep() on PPI port B speaker off transition) ---
-    board.ppi_ic->set_speaker_source(board.pit_ic, &board.clk_gen->clk_cycles_ref());
+    // --- PC Speaker (real-time audio via miniaudio) ---
+    PCSpeaker pc_speaker;
+    pc_speaker.set_pit(board.pit_ic);
+    pc_speaker.init();
+    board.ppi_ic->set_speaker(&pc_speaker);
 
     spdlog::set_level(spdlog::level::info);
 
@@ -265,6 +269,7 @@ int main() {
     scheduler.resume();  // unblock pause_gate so the clock thread can exit
     board.clk_gen->psu_power_off();
     board.clk_gen->power_off();
+    pc_speaker.shutdown();
     renderer.stop();
 
     spdlog::info("CLK cycles: {}", board.clk_gen->clk_cycles());

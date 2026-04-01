@@ -59,9 +59,19 @@ Source: `assets/pcb/64_256KB_SYSTEM_BOARD_rev1_2a.brd` (194 components, 320 nets
 
 The 8237A (U35) and its supporting glue logic (U67, U98, U19, U50, U52, U62, U79, U49, U81, TD1) implement full 4-channel DMA. Channel 0 handles DRAM refresh (auto-init, single transfer from PIT CH1). Channels 1-3 are available for ISA peripherals.
 
+## ISA Expansion Cards (5 implementations)
+
+| Slot | Card | Ports | MMIO | DMA | IRQ | Description |
+|---|---|---|---|---|---|---|
+| J1 (slot 0) | ISA_TestCard | 0x80-0xFF | -- | CH1,CH3 | 2-7 | Test/debug card. HostFS (0xE0-0xEF), test control (0xF0-0xFD), kbd interface |
+| J2 (slot 1) | ISA_FloppyController | 0x3F2-0x3F5 | -- | CH2 | 6 | NEC uPD765 FDC. DOR/MSR/FIFO. 2 drives, hot-swappable images |
+| J3 (slot 2) | ISA_CGA | 0x3D0-0x3DF | B8000-BFFFF | -- | -- | CGA. 6845 CRTC + 16KB VRAM. GPU compute shader rendering, scanline stamping |
+| J4 (slot 3) | ISA_RAM | -- | 40000-9FFFF | -- | -- | 384KB SRAM expansion (256KB motherboard -> 640KB total) |
+| -- | ISA_MDA | 0x3B0-0x3BB | B0000-B0FFF | -- | -- | MDA. 80x25 text only. Swappable with CGA in slot 2 |
+
 ## Non-IC Components (all implemented)
 
-- J1-J5: ISA slots (62p each, wired via IsaSlot + ISA_Bus). J1: ISA_TestCard, J3: ISA_MDA, J4: ISA_FloppyController
+- J1-J5: ISA slots (62p each, wired via IsaSlot + ISA_Bus)
 - J7: Keyboard port (TestKeyboard)
 - J6: Cassette port (not modeled -- unused by DOS)
 - J8: +RUN jumper (not modeled)

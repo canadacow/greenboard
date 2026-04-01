@@ -4,7 +4,7 @@
 
 namespace bench {
 
-class IC_8253;  // forward decl for speaker support
+class PCSpeaker;  // forward decl for speaker support
 
 // Intel 8255A-5 Programmable Peripheral Interface.
 //
@@ -44,10 +44,8 @@ public:
 
     void install(Socket& socket);
 
-    // Speaker support: set PIT and CLK counter so we can Beep() on speaker off.
-    void set_speaker_source(const IC_8253* pit, const uint64_t* clk_cycles) {
-        pit_ = pit; clk_cycles_ = clk_cycles;
-    }
+    // Speaker support: PCSpeaker's shared params are updated on PB0/PB1 changes.
+    void set_speaker(PCSpeaker* spk) { speaker_ = spk; }
 
 protected:
     void on_cycle(Fiber caller) override;
@@ -108,9 +106,7 @@ private:
     bool write_pending_ = false;   // deferred write: data settles one cycle after ~WR falls
 
     // Speaker support
-    const IC_8253* pit_ = nullptr;
-    const uint64_t* clk_cycles_ = nullptr;
-    uint64_t speaker_on_clk_ = 0;
+    PCSpeaker* speaker_ = nullptr;
 };
 
 } // namespace bench
