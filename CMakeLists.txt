@@ -78,6 +78,7 @@ add_executable(bench
     src/isa/isa_mda.cpp
     src/isa/isa_cga.cpp
     src/audio/pc_speaker.cpp
+    src/audio/speaker_driver.cpp
     src/display/renderer.cpp
     src/display/mda_display.cpp
     src/display/cga_display.cpp

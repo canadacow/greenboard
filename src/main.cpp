@@ -15,6 +15,7 @@
 #include "debug/memory_view.h"
 #include "test/test_keyboard.h"
 #include "audio/pc_speaker.h"
+#include "audio/speaker_driver.h"
 #include "core/signal.h"
 #include "core/scheduler.h"
 #include <spdlog/spdlog.h>
@@ -123,15 +124,17 @@ int main() {
     }
     scheduler.register_callback(&keyboard);
 
-    scheduler.resolve();
-
     // --- PC Speaker (real-time audio via miniaudio) ---
-    // PIT samples channel 2 OUT at tick rate, decimates, pushes to ring buffer.
-    // PPI writes pit_output_enabled (PB1) into shared params.
+    // SpeakerDriver reads U63 gate 4 output (NAND of SPKR_DATA and T/C_2_OUT)
+    // from the signal pool, models MC1741 slew rate + 75477 saturation,
+    // decimates to ~47.7 kHz, and pushes to PCSpeaker's SPSC ring buffer.
     PCSpeaker pc_speaker;
     pc_speaker.init();
-    board.pit_ic->set_speaker(&pc_speaker);
-    board.ppi_ic->set_speaker(&pc_speaker);
+    SpeakerDriver speaker_driver;
+    speaker_driver.connect(board.spkr_mix, &pc_speaker);
+    scheduler.register_callback(&speaker_driver);
+
+    scheduler.resolve();
 
     spdlog::set_level(spdlog::level::info);
 

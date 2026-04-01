@@ -4,8 +4,6 @@
 
 namespace bench {
 
-class PCSpeaker;  // forward decl for speaker support
-
 // Intel 8255A-5 Programmable Peripheral Interface.
 //
 // 40-pin DIP. Three 8-bit I/O ports (A, B, C) with programmable
@@ -43,9 +41,6 @@ public:
     IC_8255A();
 
     void install(Socket& socket);
-
-    // Speaker support: PCSpeaker's shared params are updated on PB0/PB1 changes.
-    void set_speaker(PCSpeaker* spk) { speaker_ = spk; }
 
 protected:
     void on_cycle(Fiber caller) override;
@@ -105,8 +100,6 @@ private:
     Level rd_prev_ = Level::HiZ;
     bool write_pending_ = false;   // deferred write: data settles one cycle after ~WR falls
 
-    // Speaker support
-    PCSpeaker* speaker_ = nullptr;
 };
 
 } // namespace bench

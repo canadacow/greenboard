@@ -4,8 +4,6 @@
 
 namespace bench {
 
-class PCSpeaker;
-
 // Intel 8253-5 Programmable Interval Timer.
 //
 // 24-pin DIP. Three independent 16-bit down-counters, each with CLK,
@@ -31,9 +29,6 @@ public:
 
     void install(Socket& socket);
 
-    // Speaker support: PIT samples channel 2 OUT at tick rate, decimates
-    // every 25 ticks (~47.7 kHz), and pushes to the PCSpeaker ring buffer.
-    void set_speaker(PCSpeaker* spk) { speaker_ = spk; }
 
 protected:
     void on_power_on() override;
@@ -90,11 +85,6 @@ private:
     bool rd_prev_ = false;  // ~RD was low last cycle
 
     uint64_t pit_timer_ = 0;
-
-    // Speaker decimation state (PIT tick domain).
-    PCSpeaker* speaker_     = nullptr;
-    float      spk_accum_   = 0.0f;
-    uint32_t   spk_count_   = 0;
 };
 
 } // namespace bench

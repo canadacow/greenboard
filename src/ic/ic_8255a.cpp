@@ -1,5 +1,4 @@
 #include "ic/ic_8255a.h"
-#include "audio/pc_speaker.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -135,17 +134,9 @@ void IC_8255A::on_bus_write() {
             if (!pa_input_) write_port_a(data);
             break;
 
-        case 1: { // Port B
+        case 1:  // Port B
             latch_b_ = data;
-            if (!pb_input_) {
-                write_port_b(data);
-                // PB1 enables speaker output.  PB0 (PIT gate) is wired
-                // directly to the 8253 GATE2 pin, no need to relay it.
-                if (speaker_) {
-                    speaker_->params().pit_output_enabled = (data & 0x02) != 0;
-                }
-            }
-        }
+            if (!pb_input_) write_port_b(data);
             break;
 
         case 2:  // Port C
