@@ -366,12 +366,22 @@ void DxState::render_overlay() {
                 if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
                 if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
                 if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
+                if (cga && ImGui::MenuItem("CGA"))   cga_debug_open = !cga_debug_open;
                 ImGui::EndPopup();
             }
         }
 
-        // Status: PAUSED or MHz (clickable to toggle)
+        // Status: PAUSED or MHz (clickable to toggle, centered)
         bool paused = scheduler && scheduler->is_paused();
+        {
+            const char* label = paused ? "PAUSED" : nullptr;
+            char mhz_buf[32];
+            if (!paused) snprintf(mhz_buf, sizeof(mhz_buf), "%.2f MHz", effective_mhz);
+            const char* text = paused ? "PAUSED" : mhz_buf;
+            float tw = ImGui::CalcTextSize(text).x;
+            float av = ImGui::GetContentRegionAvail().x;
+            if (av > tw) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (av - tw) * 0.5f);
+        }
         if (paused)
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "PAUSED");
         else
@@ -1192,9 +1202,9 @@ void DxState::render_cga_debug() {
                     const auto& s = sl[my];
 
                     // Compute beam position info
-                    bool hires = (s.mode & 0x01) || (s.mode & 0x10);
-                    uint32_t char_w = hires ? 8 : 16;
-                    uint32_t h_total_chars = (s.h_displayed > 0) ? r[0] + 1 : 114;
+                    uint32_t h_total_chars = (r[0] > 0) ? r[0] + 1 : 114;
+                    uint32_t char_w = 912 / h_total_chars;
+                    if (char_w == 0) char_w = 8;
                     uint32_t left_porch = h_total_chars - s.hsync_pos - s.hsync_width;
                     uint32_t left_dots = left_porch * char_w;
 
