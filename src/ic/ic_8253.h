@@ -4,6 +4,8 @@
 
 namespace bench {
 
+class PCSpeaker;
+
 // Intel 8253-5 Programmable Interval Timer.
 //
 // 24-pin DIP. Three independent 16-bit down-counters, each with CLK,
@@ -29,12 +31,9 @@ public:
 
     void install(Socket& socket);
 
-    // Speaker support: PIT channel 2 state read by the audio thread.
-    // No synchronization -- same lockless pattern as CGA scanline_regs.
-    uint32_t channel2_reload() const { return channels_[2].reload; }
-    uint8_t  channel2_mode()   const { return channels_[2].mode; }
-    bool     channel2_out()    const { return channels_[2].out; }
-    bool     channel2_gate()   const { return channels_[2].gate; }
+    // Speaker support: PIT samples channel 2 OUT at tick rate, decimates
+    // every 25 ticks (~47.7 kHz), and pushes to the PCSpeaker ring buffer.
+    void set_speaker(PCSpeaker* spk) { speaker_ = spk; }
 
 protected:
     void on_power_on() override;
@@ -91,6 +90,11 @@ private:
     bool rd_prev_ = false;  // ~RD was low last cycle
 
     uint64_t pit_timer_ = 0;
+
+    // Speaker decimation state (PIT tick domain).
+    PCSpeaker* speaker_     = nullptr;
+    float      spk_accum_   = 0.0f;
+    uint32_t   spk_count_   = 0;
 };
 
 } // namespace bench

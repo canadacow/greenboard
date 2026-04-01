@@ -1,4 +1,5 @@
 #include "ic/ic_8253.h"
+#include "audio/pc_speaker.h"
 #include <spdlog/spdlog.h>
 
 namespace bench {
@@ -122,6 +123,18 @@ void IC_8253::on_cycle(Fiber /*caller*/) {
 
         for (int i = 0; i < 3; ++i)
             tick(i);
+
+        // Speaker: sample channel 2 OUT at PIT tick rate (~1.193 MHz),
+        // box-average every 25 ticks, push one sample at ~47.7 kHz.
+        if (speaker_) {
+            bool out = channels_[2].out && speaker_->params().pit_output_enabled;
+            spk_accum_ += out ? 1.0f : 0.0f;
+            if (++spk_count_ >= SPEAKER_SAMPLE_RATIO) {
+                speaker_->push_sample(spk_accum_ / SPEAKER_SAMPLE_RATIO);
+                spk_accum_ = 0.0f;
+                spk_count_ = 0;
+            }
+        }
     }
 
     ++pit_timer_;

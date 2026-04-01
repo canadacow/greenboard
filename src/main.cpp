@@ -126,9 +126,11 @@ int main() {
     scheduler.resolve();
 
     // --- PC Speaker (real-time audio via miniaudio) ---
+    // PIT samples channel 2 OUT at tick rate, decimates, pushes to ring buffer.
+    // PPI writes pit_output_enabled (PB1) into shared params.
     PCSpeaker pc_speaker;
-    pc_speaker.set_pit(board.pit_ic);
     pc_speaker.init();
+    board.pit_ic->set_speaker(&pc_speaker);
     board.ppi_ic->set_speaker(&pc_speaker);
 
     spdlog::set_level(spdlog::level::info);
