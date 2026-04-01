@@ -43,6 +43,7 @@ public:
     Level dma_memr_prev() const { return dma_memr_prev_; }
     bool mem_write_pending() const { return mem_write_pending_; }
     bool data_driven() const { return data_driven_; }
+    ISA_Card* card(int slot) const { return (slot >= 0 && slot < MAX_SLOTS) ? cards_[slot] : nullptr; }
 
 private:
     // Slot cards

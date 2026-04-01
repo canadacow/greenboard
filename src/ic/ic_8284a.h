@@ -42,6 +42,7 @@ public:
     // --- Mock PSU (driven from main thread, acted on by clock thread) ---
     void psu_power_on()  { psu_cmd_ = PsuCmd::PowerOn; }
     void psu_power_off() { psu_cmd_ = PsuCmd::PowerOff; }
+    void psu_reset()     { psu_cmd_ = PsuCmd::Reset; }
     void psu_nmi_raise() { psu_nmi_ = true; }
     void psu_nmi_lower() { psu_nmi_ = false; }
 
@@ -75,8 +76,9 @@ private:
     uint64_t clk_cycles_ = 0;
 
     // --- PSU state ---
-    enum class PsuCmd : int { None, PowerOn, PowerOff };
+    enum class PsuCmd : int { None, PowerOn, PowerOff, Reset };
     PsuCmd psu_cmd_ = PsuCmd::None;
+    int reset_hold_ = 0;   // cycles remaining in reset pulse
     bool psu_nmi_ = false;
     Pin psu_vcc_, psu_gnd_, psu_res_, psu_nmi_pin_;
     Pin psu_s0_, psu_s1_, psu_s2_, psu_aen_;

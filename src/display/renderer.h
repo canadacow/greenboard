@@ -24,11 +24,22 @@ namespace bench {
 class Scheduler;
 class IC_8088;
 class IC_8237A;
+class IC_8284A;
 class ISA_MDA;
 class ISA_CGA;
 class ISA_FloppyController;
 class MemoryView;
 class TestKeyboard;
+
+// Snapshot of ISA slot and RAM info for System window display.
+struct SystemInfo {
+    struct SlotInfo {
+        std::string ref;    // "J1".."J5"
+        std::string card;   // empty if unoccupied
+    };
+    SlotInfo slots[5] = {};
+    int expansion_kb = 0;
+};
 
 // Pool indices for bus analyzer display.
 struct BusProbe {
@@ -62,7 +73,9 @@ public:
                const BusProbe* bus = nullptr,
                TestKeyboard* kbd = nullptr,
                ISA_FloppyController* fdc = nullptr,
-               const ISA_CGA* cga = nullptr);
+               const ISA_CGA* cga = nullptr,
+               IC_8284A* clk_gen = nullptr,
+               const SystemInfo& sys_info = {});
 
     // Bind BRD net names to live signals for board view.
     // Call after start() returns (board_view is initialized by then).
@@ -91,6 +104,8 @@ private:
     const ISA_CGA* cga_ = nullptr;
     TestKeyboard* kbd_ = nullptr;
     ISA_FloppyController* fdc_ = nullptr;
+    IC_8284A* clk_gen_ = nullptr;
+    SystemInfo sys_info_;
     std::string disk_a_path_;
     bool dbg_visible_ = true;
 

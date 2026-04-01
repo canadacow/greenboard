@@ -217,17 +217,26 @@ int main() {
 
     renderer.set_disk_a_path(dos_disk);
 
+    // Build system info snapshot for the System window.
+    bench::SystemInfo sys_info;
+    sys_info.expansion_kb = board.expansion_kb_;
+    for (int i = 0; i < 5; i++) {
+        sys_info.slots[i].ref = board.isa_slots[i].ref();
+        if (auto* c = isa_bus.card(i))
+            sys_info.slots[i].card = c->card_name();
+    }
+
     if (cga)
     {
         renderer.start(nullptr, &board.clk_gen->clk_cycles_ref(),
             &scheduler, board.cpu, &memview, board.dma_ic, nullptr,
-            &bus_probe, &keyboard, &fdc, cga.get());
+            &bus_probe, &keyboard, &fdc, cga.get(), board.clk_gen, sys_info);
     }
     else if (mda)
     {
         renderer.start(mda->framebuffer(), &board.clk_gen->clk_cycles_ref(),
             &scheduler, board.cpu, &memview, board.dma_ic, mda.get(),
-            &bus_probe, &keyboard, &fdc, nullptr);
+            &bus_probe, &keyboard, &fdc, nullptr, board.clk_gen, sys_info);
     }
 
     // Bind board traces to live simulation signals.

@@ -4,13 +4,13 @@
 
 Emulate the motherboard at the **interconnect level**. ICs are behaviorally emulated (black boxes), but every wire, trace, bus line, and signal between them is explicitly modeled. This includes passive components (resistors, capacitors, DIP switches, jumpers) and power rails.
 
-## Execution Model: Fibers + One Thread
+## Execution Model: Coroutines + Callbacks + One Thread
 
-The simulation runs on a single OS thread. The 8284A clock generator owns that thread (via `std::jthread`) and acts as the crystal oscillator -- its spin loop IS the clock. All other ICs are evaluated on the 8284A's thread, cooperatively scheduled by the `Scheduler`. Most ICs are **CallbackComponents** (direct function calls). The 8088 CPU is the sole **FiberComponent** (resumed via context switch each cycle).
+The simulation runs on a single OS thread. The 8284A clock generator owns that thread (via `std::jthread`) and acts as the crystal oscillator -- its spin loop IS the clock. All other ICs are evaluated on the 8284A's thread, cooperatively scheduled by the `Scheduler`. Most ICs are **CallbackComponents** (direct function calls). The 8088 CPU is a **CoroComponent** (C++20 coroutines resumed each cycle).
 
-- The 8284A drives PCLK/READY/RESET each cycle, then calls `scheduler->evaluate(self)`.
-- `evaluate()` resolves the current DAG permutation (based on bidirectional pin state), then calls `on_signal_change()` on each component in topological wave order.
-- Both FiberComponents and CallbackComponents participate in the same DAG wave plan. CallbackComponents are invoked via direct function call; FiberComponents (8088) are resumed via fiber context switch. Both go through `on_signal_change()` in wave order.
+- The 8284A drives PCLK/READY each cycle, then calls `scheduler->evaluate(self)`.
+- `evaluate()` resolves the current DAG permutation (based on bidirectional pin state), then calls `on_cycle()` on each component in topological wave order.
+- CallbackComponents, CoroComponents, and FiberComponents all participate in the same DAG wave plan. CallbackComponents are invoked via direct function call; CoroComponents via `coroutine_handle.resume()`; FiberComponents via fiber context switch. All go through `on_cycle()` in wave order.
 - Completely deterministic, single-threaded, zero synchronization overhead.
 
 ### Fiber Abstraction (`src/host_platform/fiber.h`)
@@ -31,19 +31,24 @@ void  fiber_switch(Fiber target);       // switch to target fiber
 Component (abstract base)
   +-- ThreadedComponent    -- 8284A only (owns an OS thread)
   +-- CallbackComponent    -- all non-yielding ICs (8288, 74S373, 74S138, 74S245, 8259A, 8253, etc.)
-  +-- FiberComponent       -- ICs that suspend mid-operation (8088)
+  +-- CoroComponent        -- ICs using C++20 coroutines (8088)
+  +-- FiberComponent       -- ICs that suspend mid-operation via fiber context switch (currently unused)
 ```
 
-Two evaluation modes:
+Three evaluation modes:
 
-1. **CallbackComponent** (`src/core/callback_component.h`): ICs that complete all work in a single `on_signal_change()` call. Invoked via direct function call -- no fiber overhead. Used for all non-CPU ICs: bus controller (8288), glue logic (74S373, 74S138, 74S245, 74S20, 74S175), peripherals (8259A, 8253, 8255A, 8237A), ROM, DRAM.
+1. **CallbackComponent** (`src/core/callback_component.h`): ICs that complete all work in a single `on_cycle()` call. Invoked via direct function call -- no fiber overhead. Used for all non-CPU ICs: bus controller (8288), glue logic (74S373, 74S138, 74S245, 74S20, 74S175), peripherals (8259A, 8253, 8255A, 8237A), ROM, DRAM, ISA bus.
 
-2. **FiberComponent** (`src/core/fiber_component.h`): ICs that need to suspend mid-operation via `yield()`. Context switch on every `evaluate()`. Reserved for the 8088 CPU, which yields at each T-state boundary.
+2. **CoroComponent** (`src/core/coro_component.h`): ICs using C++20 coroutines that suspend/resume each cycle. The 8088 CPU uses two cooperating coroutines (BIU + EU) with symmetric transfer. The scheduler calls `coroutine_handle.resume()` each cycle; the coroutine runs until it `co_yield`s back.
+   - `power_on()`: Creates the BIU coroutine (which lazily spawns the EU).
+   - `power_off()`: Destroys the coroutine handle.
+   - `on_cycle()`: Resumes the BIU coroutine for one T-state.
+
+3. **FiberComponent** (`src/core/fiber_component.h`): ICs that suspend mid-operation via OS fiber context switch. Retained for future use but currently no ICs use this mode (the 8088 was migrated to CoroComponent).
    - `power_on()`: Creates a fiber. First `resume()` enters `run()`.
    - `power_off()`: Calls `on_power_off()`, deletes the fiber.
-   - `resume(caller)`: Switches to the fiber. The fiber runs until it calls `yield()`.
-   - Default `run()`: Calls `on_power_on()`, then loops `yield(); on_signal_change();`.
-   - Active ICs (8088) override `run()` with their own execution loop.
+   - `on_cycle(caller)`: Switches to the fiber, which runs until it calls `yield()`.
+   - Default `run()`: Calls `on_power_on()`, then loops `yield(); on_cycle();`.
 
 ### Scheduler (`src/core/scheduler.h`)
 
@@ -51,15 +56,16 @@ Lightweight, non-owning. Called by the 8284A at each CLK cycle.
 
 ```
 evaluate(Fiber caller):
-  1. Evaluate bidir lambdas to determine current pin directions
-  2. Compute DAG permutation key from bidir state
-  3. Look up (or solve on cache miss) the topological wave plan
-  4. For each wave: call on_signal_change() on every component in that wave
+  1. Pre-compute bus address from LA0-LA19 (AVX2 movemask, 20 bytes in one shot)
+  2. Evaluate bidir lambdas to determine current pin directions
+  3. Compute DAG permutation key (base-3 digit per bidir block: HiZ=0, Input=1, Output=2)
+  4. Look up (or solve on cache miss) the topological wave plan
+  5. Execute flattened plan: single contiguous Component* array, plain index loop
 ```
 
 **Signal Enum** -1 is Low, 0 is HiZ and 1 is High. DO NOT FORGET THIS.
 
-**One evaluate() = one full clock cycle.** Each component's `on_signal_change()` is called exactly once per cycle. There is no edge detection at the scheduler level -- components track their own `_prev_` state internally to detect rising/falling edges.
+**One evaluate() = one full clock cycle.** Each component's `on_cycle()` is called exactly once per cycle. There is no edge detection at the scheduler level -- components track their own `_prev_` state internally to detect rising/falling edges.
 
 The scheduler builds a dependency DAG from pin declarations:
 - `declare_input(pin)` -- permanent input edge (component depends on whoever drives this signal)
@@ -69,7 +75,18 @@ The scheduler builds a dependency DAG from pin declarations:
 
 Bidirectional pins (e.g. 74S245 data bus, DMA address pins) create multiple DAG permutations -- one per combination of directions. The bidir lambda runs at the start of each evaluate to determine the current direction (Input, Output, or HiZ). HiZ removes all DAG edges for those pins, effectively making the component invisible on that bus for that cycle. A bidir returning HiZ overrides any `declare_output` on the same pin.
 
-Permutations are solved on demand (topological sort) and cached in an `unordered_map<uint64_t, WavePlan>`. On a DAG cycle, the scheduler dumps a Graphviz SVG (`wave_output/cycle_debug.svg`) showing the stuck components and conflicting edges in red.
+Permutations are solved on demand (topological sort) and cached in an `unordered_map<uint64_t, WavePlan>`. Solved plans are flattened into a single contiguous `Component*` array for cache-friendly iteration (no double indirection through `vector<vector<Component*>>`). On a DAG cycle, the scheduler dumps a Graphviz SVG (`wave_output/cycle_debug.svg`) showing the stuck components and conflicting edges in red.
+
+### Debugger Integration
+
+The scheduler has a built-in debugger gate with zero cost when not paused (single relaxed atomic load + predicted-not-taken branch). When paused, the clock thread sleeps via `umwait` (WAITPKG), waking only when the UI thread writes a control word.
+
+- **Pause/Resume**: UI thread sets `paused_` atomic. Clock thread spins on `_umwait` until woken.
+- **Step cycle**: Decrement-and-run via atomic counter.
+- **Step instruction**: Run cycles until `instr_count()` changes.
+- **Step over**: Run until IP == target and SP >= saved SP (skips into CALLs/INTs).
+- **Address breakpoint**: Pause when CPU reaches a specific CS:IP (one-shot).
+- **Auto-pause on debugger resume**: If wall time between two cycles exceeds ~50ms of TSC ticks (checked via `__rdtsc()`), a VS debugger must have frozen the thread -- auto-pause to prevent runaway.
 
 ### Bus Ownership and Transceiver Control
 
@@ -177,10 +194,12 @@ A virtual test instrument for verifying board wiring:
 18-pin DIP, generates the master clock. The only ThreadedComponent.
 
 - **PCLK** (pin 2): CLK / 2 = 2.38 MHz, 50% duty cycle.
-- **RESET** (pin 10): Inverted RES input.
-- **READY** (pin 5): RDY1 gated by ~AEN1.
+- **RESET** (pin 10): Inverted RES input. Driven Low once at startup (mock PSU drives RES straight to High, no RC ramp).
+- **READY** (pin 5): `READY = Low if (bus_hold OR RDY1=Low OR ~AEN1=Low), else High`. Computed after each `evaluate()` call. Each condition independently forces a wait state: bus recovery (8288), DMA active, or ISA I/O wait.
 
 Contains a mock PSU device (driven from the main thread). On its thread, drives GND, VCC, RES, S0-S2, AEN, NMI. Sets thread priority to TIME_CRITICAL and pins to P-cores (Intel hybrid) before converting to a fiber (`fiber_convert_thread()`) for cooperative scheduling during `evaluate()`. Reverts back to a plain thread before returning.
+
+The spin loop skips the real 8284A's divide-by-3 (14.318 MHz crystal -> 4.77 MHz CLK) since nothing on the board observes OSC directly. One iteration = one full CLK cycle (PCLK toggle + evaluate + READY computation).
 
 ## Performance
 
@@ -201,15 +220,47 @@ Note: the last row is measured on a different benchmark configuration (with DMA 
 Design principles:
 - **No per-signal overhead**: `drive()` is a single store. No dirty flags, no subscriber notification, no atomic ops.
 - **No double buffering**: DAG-based wave ordering guarantees producers run before consumers, eliminating the need for pending/current arrays and commit passes.
-- **Minimize context switches**: Only the 8088 needs fibers. Everything else is a direct function call.
-- **On-demand DAG solving**: Bidirectional pin permutations are solved on first encounter and cached, avoiding upfront enumeration of all 3^N combinations.
-- **`class final` + LTCG**: All IC classes are marked `final`, enabling MSVC's whole-program optimizer to devirtualize `on_signal_change()` calls at link time.
+- **Minimize context switches**: The 8088 uses C++20 coroutines (zero-overhead suspend/resume). Everything else is a direct function call. No OS fibers in the hot path.
+- **On-demand DAG solving**: Bidirectional pin permutations are solved on first encounter and cached, avoiding upfront enumeration of all 3^N combinations. Solved plans are flattened into a single contiguous array for cache-friendly iteration.
+- **`class final` + LTCG**: All IC classes are marked `final`, enabling MSVC's whole-program optimizer to devirtualize `on_cycle()` calls at link time.
+- **AVX2 bus address**: The 20-bit address bus (LA0-LA19) is read in one `_mm256_movemask_epi8` operation per cycle, cached in `SignalPool::bus_address` for all components to use.
 
 ## DMA Subsystem
 
 The 8237A DMA controller (U35) and its supporting glue logic (U50, U52, U67, U98, U19, U62, U79, U49, U81, TD1) implement full 4-channel DMA with single/block/demand transfer modes. Channel 0 handles DRAM refresh via auto-init single transfers triggered by PIT channel 1. Channels 1-3 serve ISA peripherals.
 
 DMA outputs (address, DACKs, HRQ, ~EOP, ~MEMR/~MEMW) feed back through the address decode chain to the 8237A's own inputs (~DMA_CS, CEN), creating DAG cycles. These are resolved with bidir blocks that return HiZ for signals stable during a given DMA phase. The 8237A uses deferred register writes (pending flag pattern) since bus data arrives one evaluation after ~IOW/~CS assert.
+
+## ISA Expansion Bus (`src/isa/isa_bus.h`)
+
+The ISA bus is a CallbackComponent that bridges the 62-pin ISA slot signals to pluggable `ISA_Card` objects. It participates in the DAG with bidir blocks for SD0-SD7 (data) and SA0-SA3 (low address, HiZ during DMA).
+
+**Card dispatch**: Cards register via `insert_card()` with port/MMIO/DMA/IRQ claims. O(1) lookup tables (`port_map_[65536]`, `mmio_map_[256]` pages) route I/O and memory accesses to the correct card. Cards that are also `Component` subclasses get `on_cycle()` dispatched each cycle for clocked behavior (e.g. CGA beam simulation).
+
+**Bus protocol**: Edge-detected strobes (~IOR, ~IOW, ~MEMR, ~MEMW) trigger deferred reads/writes (one-cycle pending pattern). DMA transfers are routed through `on_dma_read()`/`on_dma_write()`/`on_dma_complete()` callbacks. IRQ and DRQ lines are directly driven on the shared signals.
+
+**MMIO routing**: Both CPU and DMA memory accesses are routed to cards. CPU MMIO writes use level-based detection (active while ~MEMW Low and AEN Low) because 8288 bus recovery re-asserts ~MEMW after DMA releases.
+
+### CGA Card (`src/isa/isa_cga.h`)
+
+ISA_Card implementing the IBM Color/Graphics Adapter. 16KB VRAM at B8000-BBFFF (mirrored across 32KB window). Ports 3D0-3DF for 6845 CRTC registers and mode/color control.
+
+**6845 beam simulation**: Runs every CLK cycle via the ISA bus's `on_cycle()` dispatch. Accumulates 3 dots per system CLK (14.318/3 = 4.77 MHz). Character clock ticks at 8 dots (80-col/hi-res) or 16 dots (40-col). Full CRTC counters: HCC (horizontal character counter), VCC (vertical character counter), RA (raster address), MA (memory address). VSYNC/VTOTAL_ADJ/display-enable all derived from running counters.
+
+**Scanline stamping**: Each completed scanline is stamped into a ring buffer (`scanline_regs_[FRAME_LINES]`) with CRTC state + VRAM row snapshot. The GPU shader reads this buffer to render cycle-accurate raster effects (split-screen, mid-frame register changes).
+
+**Status register** (port 3DA): Bits derived from live beam state -- bit 0 (~display enable) and bit 3 (VSYNC) reflect actual counter positions, not timers.
+
+## 8088 CPU (`src/ic/ic_8088.h`)
+
+40-pin DIP (U3). CoroComponent using two cooperating C++20 coroutines:
+
+- **BIU (Bus Interface Unit)** coroutine: Owns all external pins. Runs the T-state bus protocol (T1: address, T2: setup, T3+Tw: wait for READY, T4: complete). Yields to the scheduler at each T-state boundary. Top-level `BIUTask` coroutine resumed by `on_cycle()`.
+- **EU (Execution Unit)** coroutine: Decode/ALU/flags. `co_await`s bus operations (`EUTask<T>`) which suspend it back to the BIU via symmetric transfer. `execute()` is inlined into `eu_run()` -- single coroutine frame.
+
+Bus operations are described by `BusOp` structs (kind + address + data). The EU fills a BusOp and suspends; the BIU picks it up, runs the T-state protocol, fills the result, and resumes the EU.
+
+AD0-AD7 are bidirectional (output during T1/T2_Write, input during T2_Read). S0-S2 use a bidir block that goes HiZ during T2_Read to break the 8088->8288->...->8088 DAG cycle.
 
 ## Future
 

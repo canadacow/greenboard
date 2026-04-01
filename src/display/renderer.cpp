@@ -36,6 +36,7 @@
 #include <fstream>
 #include <memory>
 #include "ic/ic_8237a.h"
+#include "ic/ic_8284a.h"
 #include <d3dcompiler.h>
 #include <Zydis/Zydis.h>
 #include <spdlog/spdlog.h>
@@ -122,6 +123,12 @@ struct DxState {
     float drive_b_screen_y = 0;  // screen Y of drive B row
     ISA_FloppyController* fdc = nullptr;
     const ISA_CGA* cga = nullptr;
+    IC_8284A* clk_gen = nullptr;
+    SystemInfo sys_info;
+
+    // Molly guard state for power off / reset
+    bool confirm_power_off = false;
+    bool confirm_reset = false;
 
     // Breakpoint
     char brk_addr_buf[16] = "";
@@ -919,12 +926,86 @@ void DxState::render_system_window() {
 
     ImVec4 grn = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
     ImVec4 dim = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+    ImVec4 red = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
 
     // --- Machine info ---
     ImGui::TextColored(grn, "IBM PC 5150");
+    ImGui::TextColored(dim, "Model B (64KB-256KB System Board)");
     ImGui::TextColored(dim, "CPU: Intel 8088 @ %.2f MHz", effective_mhz);
-    ImGui::TextColored(dim, "RAM: 256 KB");
-    ImGui::TextColored(dim, "Display: MDA 80x25");
+    int total_kb = 256 + sys_info.expansion_kb;
+    if (sys_info.expansion_kb > 0)
+        ImGui::TextColored(dim, "RAM: %d KB (256 KB planar + %d KB expansion)", total_kb, sys_info.expansion_kb);
+    else
+        ImGui::TextColored(dim, "RAM: 256 KB planar DRAM");
+    ImGui::TextColored(dim, "Display: %s", cga ? "CGA" : "MDA");
+    ImGui::TextColored(dim, "ROM: GLABIOS 0.4.1");
+
+    // --- ISA Expansion Slots ---
+    ImGui::Separator();
+    ImGui::TextColored(grn, "ISA Slots");
+    for (int i = 0; i < 5; i++) {
+        const auto& slot = sys_info.slots[i];
+        if (!slot.ref.empty()) {
+            if (!slot.card.empty())
+                ImGui::TextColored(dim, "  %s: %s", slot.ref.c_str(), slot.card.c_str());
+            else
+                ImGui::TextColored(dim, "  %s: (empty)", slot.ref.c_str());
+        }
+    }
+
+    // --- Power Off / Reset ---
+    ImGui::Separator();
+    if (clk_gen) {
+        if (ImGui::Button("Power Off"))
+            confirm_power_off = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Reset"))
+            confirm_reset = true;
+
+        // Molly guard: Power Off confirmation
+        if (confirm_power_off)
+            ImGui::OpenPopup("Confirm Power Off");
+        if (ImGui::BeginPopupModal("Confirm Power Off", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::TextColored(red, "Are you sure you want to power off?");
+            ImGui::Text("All unsaved state will be lost.");
+            ImGui::Separator();
+            if (ImGui::Button("Yes, Power Off", ImVec2(140, 0))) {
+                spdlog::info("[System] Power off requested by user");
+                clk_gen->psu_power_off();
+                confirm_power_off = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(140, 0))) {
+                confirm_power_off = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // Molly guard: Reset confirmation
+        if (confirm_reset)
+            ImGui::OpenPopup("Confirm Reset");
+        if (ImGui::BeginPopupModal("Confirm Reset", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::TextColored(red, "Are you sure you want to reset?");
+            ImGui::Text("This pulses the RESET line (like the real switch).");
+            ImGui::Separator();
+            if (ImGui::Button("Yes, Reset", ImVec2(140, 0))) {
+                spdlog::info("[System] Reset requested by user");
+                clk_gen->psu_reset();
+                confirm_reset = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(140, 0))) {
+                confirm_reset = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
 
     ImGui::Separator();
     ImGui::TextColored(grn, "Floppy Drives");
@@ -1177,6 +1258,8 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.drive_a_loaded = disk_a_path_;
     dx.fdc = fdc_;
     dx.cga = cga_;
+    dx.clk_gen = clk_gen_;
+    dx.sys_info = sys_info_;
     // Create rasterizer based on installed display card
     if (cga_)
         dx.rasterizer = std::make_unique<CgaRasterizer>(cga_);
@@ -1229,7 +1312,9 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      const BusProbe* bus,
                      TestKeyboard* kbd,
                      ISA_FloppyController* fdc,
-                     const ISA_CGA* cga) {
+                     const ISA_CGA* cga,
+                     IC_8284A* clk_gen,
+                     const SystemInfo& sys_info) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -1241,6 +1326,8 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
     cga_ = cga;
     kbd_ = kbd;
     fdc_ = fdc;
+    clk_gen_ = clk_gen;
+    sys_info_ = sys_info;
     thread_ = std::jthread([this](std::stop_token stop) {
         render_loop(stop);
     });

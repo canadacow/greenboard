@@ -94,6 +94,20 @@ void IC_8284A::run(std::stop_token stop) {
             spdlog::debug("[8284A] PSU power-off, oscillator stopped after {} CLK cycles", clk_cycles_);
             break;
         }
+        if (psu_cmd_ == PsuCmd::Reset) {
+            psu_cmd_ = PsuCmd::None;
+            psu_res_.drive(Level::Low);      // RES Low -> RESET High (active)
+            pin_reset_.drive(Level::High);
+            reset_hold_ = 4;                 // hold reset for 4 CLK cycles
+            spdlog::info("[8284A] Reset pulse started at CLK cycle {}", clk_cycles_);
+        }
+        if (reset_hold_ > 0) {
+            if (--reset_hold_ == 0) {
+                psu_res_.drive(Level::High);   // RES High -> RESET Low (inactive)
+                pin_reset_.drive(Level::Low);
+                spdlog::info("[8284A] Reset pulse ended at CLK cycle {}", clk_cycles_);
+            }
+        }
 
         // NMI: only drive on change.
         if (psu_nmi_ != nmi_state) {
