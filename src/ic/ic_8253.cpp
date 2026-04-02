@@ -216,6 +216,17 @@ void IC_8253::write_counter(int ch, uint8_t value) {
     Channel& c = channels_[ch];
     if (!c.programmed) return;
 
+    // Mode 0, 8253 datasheet:
+    //   "Write 1st byte stops the current counting."
+    //   "Write 2nd byte starts the new count."
+    //   OUT is set LOW on any data write (creates the edge for next TC).
+    bool first_byte = (c.rw_mode != 3) || !c.load_lsb_pending;
+    if (c.mode == 0 && first_byte) {
+        c.out = false;
+        update_out(ch);
+        c.counting = false;
+    }
+
     switch (c.rw_mode) {
         case 1:
             c.reload = value ? value : 256;

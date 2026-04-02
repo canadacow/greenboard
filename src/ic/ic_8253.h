@@ -29,6 +29,16 @@ public:
 
     void install(Socket& socket);
 
+    // Debug accessors for channel state
+    struct ChannelInfo {
+        uint8_t mode; uint8_t rw_mode; uint32_t count; uint32_t reload;
+        bool out; bool gate; bool counting; bool loaded; bool null_count;
+    };
+    ChannelInfo channel_info(int ch) const {
+        auto& c = channels_[ch];
+        return {c.mode, c.rw_mode, c.count, c.reload,
+                c.out, c.gate, c.counting, c.loaded, c.null_count};
+    }
 
 protected:
     void on_power_on() override;

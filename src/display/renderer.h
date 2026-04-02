@@ -24,6 +24,7 @@ namespace bench {
 class Scheduler;
 class IC_8088;
 class IC_8237A;
+class IC_8253;
 class IC_8259A;
 class IC_8284A;
 class ISA_MDA;
@@ -77,7 +78,8 @@ public:
                const ISA_CGA* cga = nullptr,
                IC_8284A* clk_gen = nullptr,
                const SystemInfo& sys_info = {},
-               const IC_8259A* pic = nullptr);
+               const IC_8259A* pic = nullptr,
+               const IC_8253* pit = nullptr);
 
     // Bind BRD net names to live signals for board view.
     // Call after start() returns (board_view is initialized by then).
@@ -102,6 +104,7 @@ private:
     const MemoryView* mem_ = nullptr;
     IC_8237A* dma_ = nullptr;
     const IC_8259A* pic_ = nullptr;
+    const IC_8253* pit_ = nullptr;
     const ISA_MDA* mda_card_ = nullptr;
     const BusProbe* bus_probe_ = nullptr;
     const ISA_CGA* cga_ = nullptr;

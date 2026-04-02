@@ -36,6 +36,7 @@
 #include <fstream>
 #include <memory>
 #include "ic/ic_8237a.h"
+#include "ic/ic_8253.h"
 #include "ic/ic_8259a.h"
 #include "ic/ic_8284a.h"
 #include <d3dcompiler.h>
@@ -97,6 +98,7 @@ struct DxState {
     const MemoryView* mem = nullptr;
     IC_8237A* dma = nullptr;
     const IC_8259A* pic = nullptr;
+    const IC_8253* pit = nullptr;
     bool* dbg_visible = nullptr;  // points to Renderer::dbg_visible_
 
     // Zydis disassembler (8086 real mode)
@@ -433,11 +435,11 @@ void DxState::render_debugger() {
     static constexpr int DISASM_LINES = 21;  // total visible lines
     static constexpr int MID_LINE = DISASM_LINES / 2;  // IP target row
 
-    // Layout:  1 toolbar (buttons) + 1 toolbar (break/t-state/dma)
-    //        + 1 separator + 1 CLK line + 3 register lines + 1 flags/PIC
-    //        + 1 separator + 1 view addr + DISASM_LINES disasm = DISASM_LINES + 10
+    // Layout:  1 toolbar (buttons) + 1 toolbar (break/t-state/dma/dump)
+    //        + 1 separator + 1 CLK + 3 regs + 1 flags/PIC + 1 PIT
+    //        + 1 separator + 1 view addr + DISASM_LINES = DISASM_LINES + 11
     // Plus title bar + frame padding.
-    static constexpr int CONTENT_LINES = DISASM_LINES + 10;
+    static constexpr int CONTENT_LINES = DISASM_LINES + 11;
     // "F000:FFFF  FF FF FF FF FF FF  mov word [bp+si+0x1234], 0x5678"
     // = ~60 chars.  Consolas at 14px base: char width ~ 8.4px * dpi_scale.
     static constexpr int LINE_CHARS = 62;
@@ -514,7 +516,7 @@ void DxState::render_debugger() {
     // --- Second toolbar row: breakpoint, T-state, DMA, dumps ---
     ImGui::Text("Break:");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
+    ImGui::SetNextItemWidth(char_w * 11);
     if (ImGui::InputText("##brk", brk_addr_buf, sizeof(brk_addr_buf),
                          ImGuiInputTextFlags_EnterReturnsTrue)) {
         unsigned seg = 0, off = 0;
@@ -620,6 +622,13 @@ void DxState::render_debugger() {
             "  IRR=%02X ISR=%02X IMR=%02X", pic->irr(), pic->isr(), pic->imr());
     }
     ImGui::PopStyleColor();
+    if (pit) {
+        auto ch = pit->channel_info(0);
+        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
+            "PIT0: M%d cnt=%04X rl=%04X OUT=%d gate=%d %s%s",
+            ch.mode, ch.count, ch.reload, ch.out, ch.gate,
+            ch.counting ? "run" : "stop", ch.null_count ? " null" : "");
+    }
 
     // --- Disassembly (DOSBox-style persistent view) ---
     if (!mem || !paused) { ImGui::End(); return; }
@@ -641,7 +650,7 @@ void DxState::render_debugger() {
     // View address bar: [View: ____:____] [CS:IP]
     ImGui::Text("View:");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
+    ImGui::SetNextItemWidth(char_w * 11);
     if (ImGui::InputText("##view", view_addr_buf, sizeof(view_addr_buf),
                          ImGuiInputTextFlags_EnterReturnsTrue)) {
         unsigned vseg = 0, voff = 0;
@@ -683,7 +692,7 @@ void DxState::render_debugger() {
     struct DisLine { uint16_t addr; uint8_t len; char hex[32]; char text[128]; };
     DisLine lines[DISASM_LINES];
     int ip_line = -1;
-    bool ip_in_view_seg = view_follow && (view_cs == cs);
+    bool ip_in_view_seg = (view_cs == cs);
 
     auto disassemble_view = [&]() {
         uint16_t cur = view_ip;
@@ -847,29 +856,27 @@ void DxState::render_debugger() {
         ImVec2 pos = ImGui::GetCursorScreenPos();
         float w = ImGui::GetContentRegionAvail().x;
 
+        // Background: IP gets yellow fill, cursor gets cyan outline (can overlap)
         if (is_ip) {
-            // Yellow highlight: current IP
             dl->AddRectFilled(
                 ImVec2(pos.x - 4, pos.y),
                 ImVec2(pos.x + w + 4, pos.y + line_h),
                 IM_COL32(60, 60, 20, 220));
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.3f, 1.0f),
-                "%04X:%04X  %-18s %s", view_cs, lines[i].addr,
-                lines[i].hex, lines[i].text);
-        } else if (is_cursor) {
-            // Cyan outline: free-roam cursor
+        }
+        if (is_cursor) {
             dl->AddRect(
                 ImVec2(pos.x - 4, pos.y),
                 ImVec2(pos.x + w + 4, pos.y + line_h),
                 IM_COL32(80, 180, 220, 200));
-            ImGui::TextColored(ImVec4(0.7f, 0.85f, 0.7f, 1.0f),
-                "%04X:%04X  %-18s %s", view_cs, lines[i].addr,
-                lines[i].hex, lines[i].text);
-        } else {
-            ImGui::TextColored(ImVec4(0.50f, 0.65f, 0.50f, 1.0f),
-                "%04X:%04X  %-18s %s", view_cs, lines[i].addr,
-                lines[i].hex, lines[i].text);
         }
+
+        // Text color: IP = bright yellow, cursor = bright, default = dim
+        ImVec4 col = is_ip     ? ImVec4(1.0f, 1.0f, 0.3f, 1.0f)
+                   : is_cursor ? ImVec4(0.7f, 0.85f, 0.7f, 1.0f)
+                   :             ImVec4(0.50f, 0.65f, 0.50f, 1.0f);
+        ImGui::TextColored(col,
+            "%04X:%04X  %-18s %s", view_cs, lines[i].addr,
+            lines[i].hex, lines[i].text);
     }
 
     ImGui::End();
@@ -1580,6 +1587,7 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.mem = mem_;
     dx.dma = dma_;
     dx.pic = pic_;
+    dx.pit = pit_;
     dx.bus_probe = bus_probe_;
     dx.dbg_visible = &dbg_visible_;
     dx.drive_a_path = disk_a_path_;
@@ -1643,7 +1651,8 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      const ISA_CGA* cga,
                      IC_8284A* clk_gen,
                      const SystemInfo& sys_info,
-                     const IC_8259A* pic) {
+                     const IC_8259A* pic,
+                     const IC_8253* pit) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -1651,6 +1660,7 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
     mem_ = mem;
     dma_ = dma;
     pic_ = pic;
+    pit_ = pit;
     mda_card_ = mda_card;
     bus_probe_ = bus;
     cga_ = cga;
