@@ -36,6 +36,7 @@
 #include <fstream>
 #include <memory>
 #include "ic/ic_8237a.h"
+#include "ic/ic_8259a.h"
 #include "ic/ic_8284a.h"
 #include <d3dcompiler.h>
 #include <Zydis/Zydis.h>
@@ -95,6 +96,7 @@ struct DxState {
     IC_8088* cpu = nullptr;
     const MemoryView* mem = nullptr;
     IC_8237A* dma = nullptr;
+    const IC_8259A* pic = nullptr;
     bool* dbg_visible = nullptr;  // points to Renderer::dbg_visible_
 
     // Zydis disassembler (8086 real mode)
@@ -106,6 +108,9 @@ struct DxState {
     uint16_t view_cs = 0;
     uint16_t view_ip = 0;
     bool view_init = false;
+    bool view_follow = true;   // true = auto-track CS:IP, false = free roam
+    int cursor_line = 0;       // free-roam cursor position (disasm line index)
+    char view_addr_buf[16] = "0000:0000";
 
     // Memory viewer
     bool mem_view_open = false;
@@ -428,10 +433,11 @@ void DxState::render_debugger() {
     static constexpr int DISASM_LINES = 21;  // total visible lines
     static constexpr int MID_LINE = DISASM_LINES / 2;  // IP target row
 
-    // Layout:  2 toolbar rows + 1 separator + 1 CLK line + 3 register lines +
-    //          1 flags + 1 separator + DISASM_LINES disasm = DISASM_LINES + 8 content lines
+    // Layout:  1 toolbar (buttons) + 1 toolbar (break/t-state/dma)
+    //        + 1 separator + 1 CLK line + 3 register lines + 1 flags/PIC
+    //        + 1 separator + 1 view addr + DISASM_LINES disasm = DISASM_LINES + 10
     // Plus title bar + frame padding.
-    static constexpr int CONTENT_LINES = DISASM_LINES + 8;
+    static constexpr int CONTENT_LINES = DISASM_LINES + 10;
     // "F000:FFFF  FF FF FF FF FF FF  mov word [bp+si+0x1234], 0x5678"
     // = ~60 chars.  Consolas at 14px base: char width ~ 8.4px * dpi_scale.
     static constexpr int LINE_CHARS = 62;
@@ -505,22 +511,7 @@ void DxState::render_debugger() {
         scheduler->step_cycle();
     ImGui::EndDisabled();
 
-    // Dump CGA VRAM to disk
-    if (cga) {
-        ImGui::SameLine();
-        if (ImGui::Button("Dump VRAM")) {
-            FILE* f = fopen("cga_vram.bin", "wb");
-            if (f) {
-                fwrite(cga->vram(), 1, ISA_CGA::FB_SIZE, f);
-                fclose(f);
-                spdlog::info("[CGA] VRAM dumped to cga_vram.bin ({} bytes)", ISA_CGA::FB_SIZE);
-            }
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Write 16KB CGA VRAM (0xB8000) to cga_vram.bin");
-    }
-
-    // --- Second toolbar row: breakpoint, T-state, DMA ---
+    // --- Second toolbar row: breakpoint, T-state, DMA, dumps ---
     ImGui::Text("Break:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(90);
@@ -558,6 +549,45 @@ void DxState::render_debugger() {
         else
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "DMA:%s", ds);
     }
+    // Dump buttons (same row, right side)
+    if (paused) {
+        if (cga) {
+            ImGui::SameLine();
+            if (ImGui::Button("Dump VRAM")) {
+                FILE* f = fopen("cga_vram.bin", "wb");
+                if (f) {
+                    fwrite(cga->vram(), 1, ISA_CGA::FB_SIZE, f);
+                    fclose(f);
+                    spdlog::info("[CGA] VRAM dumped to cga_vram.bin ({} bytes)", ISA_CGA::FB_SIZE);
+                }
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Write 16KB CGA VRAM (0xB8000) to cga_vram.bin");
+        }
+        if (cpu && mem) {
+            ImGui::SameLine();
+            if (ImGui::Button("Dump Seg")) {
+                uint16_t dump_cs = view_follow ? cpu->regs16_ro()[IC_8088::CS] : view_cs;
+                uint32_t base = (uint32_t)dump_cs << 4;
+                uint8_t seg_buf[0x10000];
+                mem->read(base & 0xFFFFF, seg_buf, 0x10000);
+                char fname[64];
+                snprintf(fname, sizeof(fname), "seg_%04X.bin", dump_cs);
+                FILE* f = fopen(fname, "wb");
+                if (f) {
+                    fwrite(seg_buf, 1, 0x10000, f);
+                    fclose(f);
+                    spdlog::info("[DBG] Segment {:04X} dumped to {} (64KB from {:05X}h)",
+                                 dump_cs, fname, base);
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                uint16_t dump_cs = view_follow ? cpu->regs16_ro()[IC_8088::CS] : view_cs;
+                ImGui::SetTooltip("Dump %04X (64KB from %05Xh) to seg_%04X.bin",
+                                  dump_cs, (uint32_t)dump_cs << 4, dump_cs);
+            }
+        }
+    }
 
     ImGui::Separator();
     if (clk_cycles)
@@ -584,6 +614,11 @@ void DxState::render_debugger() {
     if (r8[F::AF]) fl[6] = 'A'; if (r8[F::PF]) fl[7] = 'P';
     if (r8[F::CF]) fl[8] = 'C';
     ImGui::Text("%s", fl);
+    if (pic) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
+            "  IRR=%02X ISR=%02X IMR=%02X", pic->irr(), pic->isr(), pic->imr());
+    }
     ImGui::PopStyleColor();
 
     // --- Disassembly (DOSBox-style persistent view) ---
@@ -593,69 +628,69 @@ void DxState::render_debugger() {
 
     uint16_t cs = r[R::CS];
     uint16_t ip = cpu->ip();
-    uint32_t cs_base = (uint32_t)cs << 4;
 
-    // Initialize or re-sync view when CS changes or IP jumps out of view.
-    if (!view_init || view_cs != cs) {
+    // Initialize view to CS:IP on first frame.
+    if (!view_init) {
         view_cs = cs;
         view_ip = ip;
+        view_follow = true;
         view_init = true;
+        snprintf(view_addr_buf, sizeof(view_addr_buf), "%04X:%04X", cs, ip);
     }
 
-    // Disassemble DISASM_LINES from view_ip, find which line IP falls on.
+    // View address bar: [View: ____:____] [CS:IP]
+    ImGui::Text("View:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90);
+    if (ImGui::InputText("##view", view_addr_buf, sizeof(view_addr_buf),
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+        unsigned vseg = 0, voff = 0;
+        if (sscanf(view_addr_buf, "%x:%x", &vseg, &voff) == 2) {
+            view_cs = (uint16_t)vseg;
+            view_ip = (uint16_t)voff;
+            view_follow = false;
+            cursor_line = 0;
+        } else if (sscanf(view_addr_buf, "%x", &voff) == 1) {
+            view_cs = (uint16_t)(voff >> 4);
+            view_ip = (uint16_t)(voff & 0xF);
+            view_follow = false;
+            cursor_line = 0;
+        }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("seg:off or linear. Enter to jump.");
+    ImGui::SameLine();
+    if (ImGui::Button("CS:IP")) {
+        view_cs = cs;
+        view_ip = ip;
+        view_follow = true;
+        snprintf(view_addr_buf, sizeof(view_addr_buf), "%04X:%04X", cs, ip);
+    }
+    if (!view_follow) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "(free)");
+    }
+
+    // In follow mode, re-sync view when CS changes or IP jumps out of view.
+    if (view_follow && view_cs != cs) {
+        view_cs = cs;
+        view_ip = ip;
+    }
+
+    uint32_t cs_base = (uint32_t)view_cs << 4;
+
+    // --- Disassemble helper lambda ---
     struct DisLine { uint16_t addr; uint8_t len; char hex[32]; char text[128]; };
     DisLine lines[DISASM_LINES];
     int ip_line = -1;
+    bool ip_in_view_seg = view_follow && (view_cs == cs);
 
-    uint16_t cur = view_ip;
-    for (int i = 0; i < DISASM_LINES; ++i) {
-        lines[i].addr = cur;
-        if (cur == ip) ip_line = i;
-
-        uint8_t buf[15];
-        mem->read((cs_base + cur) & 0xFFFFF, buf, 15);
-
-        ZydisDecodedInstruction instr;
-        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
-        if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, buf, 15, &instr, operands))) {
-            ZydisFormatterFormatInstruction(&formatter, &instr, operands,
-                instr.operand_count, lines[i].text, sizeof(lines[i].text),
-                (uint64_t)cs_base + cur, ZYAN_NULL);
-            lines[i].len = (uint8_t)instr.length;
-            int hpos = 0;
-            for (int b = 0; b < (int)instr.length && hpos < 28; ++b)
-                hpos += snprintf(lines[i].hex + hpos, 32 - hpos, "%02X ", buf[b]);
-        } else {
-            snprintf(lines[i].hex, 32, "%02X", buf[0]);
-            snprintf(lines[i].text, 128, "db 0x%02X", buf[0]);
-            lines[i].len = 1;
-        }
-        cur += lines[i].len;
-    }
-
-    // Scroll the view so IP stays near the middle.
-    // If IP is below the window, advance view_ip until IP is at MID_LINE.
-    // If IP is above the window, snap view_ip to IP.
-    if (ip_line < 0) {
-        // IP not in view -- snap to IP centered.
-        view_ip = ip;
-    } else if (ip_line > MID_LINE) {
-        // IP drifted below midpoint -- scroll forward.
-        // Advance view_ip by the sizes of the lines we're scrolling past.
-        int scroll = ip_line - MID_LINE;
-        for (int i = 0; i < scroll; ++i)
-            view_ip += lines[i].len;
-    }
-    // If we adjusted, re-disassemble so this frame is correct.
-    if (ip_line != MID_LINE && ip_line >= 0 && ip_line <= MID_LINE) {
-        // IP is above midpoint but still in view -- leave it, natural scroll.
-    } else if (ip_line < 0 || ip_line > MID_LINE) {
-        // Re-disassemble with updated view_ip.
-        cur = view_ip;
+    auto disassemble_view = [&]() {
+        uint16_t cur = view_ip;
         ip_line = -1;
         for (int i = 0; i < DISASM_LINES; ++i) {
             lines[i].addr = cur;
-            if (cur == ip) ip_line = i;
+            if (ip_in_view_seg && cur == ip) ip_line = i;
 
             uint8_t buf[15];
             mem->read((cs_base + cur) & 0xFFFFF, buf, 15);
@@ -677,27 +712,162 @@ void DxState::render_debugger() {
             }
             cur += lines[i].len;
         }
+    };
+
+    disassemble_view();
+
+    // In follow mode, scroll the view so IP stays near the middle.
+    if (view_follow && ip_in_view_seg) {
+        bool need_redisasm = false;
+        if (ip_line < 0) {
+            view_ip = ip;
+            need_redisasm = true;
+        } else if (ip_line > MID_LINE) {
+            int scroll = ip_line - MID_LINE;
+            for (int i = 0; i < scroll; ++i)
+                view_ip += lines[i].len;
+            need_redisasm = true;
+        }
+        if (need_redisasm)
+            disassemble_view();
+    }
+
+    // --- Keyboard / mouse navigation ---
+    int scroll_lines = 0;
+    bool arrow_down = false, arrow_up = false;
+
+    if (ImGui::IsWindowFocused()) {
+        arrow_down = ImGui::IsKeyPressed(ImGuiKey_DownArrow, true);
+        arrow_up   = ImGui::IsKeyPressed(ImGuiKey_UpArrow, true);
+
+        if (ImGui::IsKeyPressed(ImGuiKey_PageDown, true)) {
+            if (view_follow) { view_follow = false; cursor_line = MID_LINE; }
+            scroll_lines += DISASM_LINES - 2;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_PageUp, true)) {
+            if (view_follow) { view_follow = false; cursor_line = MID_LINE; }
+            scroll_lines -= DISASM_LINES - 2;
+        }
+    }
+    if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0.0f) {
+        scroll_lines += -(int)ImGui::GetIO().MouseWheel;
+        if (view_follow) { view_follow = false; cursor_line = MID_LINE; }
+    }
+
+    // Arrow keys: move cursor, scroll at edges
+    if (arrow_down) {
+        if (view_follow) { view_follow = false; cursor_line = ip_line >= 0 ? ip_line : MID_LINE; }
+        cursor_line++;
+        if (cursor_line >= DISASM_LINES) { cursor_line = DISASM_LINES - 1; scroll_lines += 1; }
+    }
+    if (arrow_up) {
+        if (view_follow) { view_follow = false; cursor_line = ip_line >= 0 ? ip_line : MID_LINE; }
+        cursor_line--;
+        if (cursor_line < 0) { cursor_line = 0; scroll_lines -= 1; }
+    }
+
+    if (scroll_lines != 0) {
+        view_follow = false;
+        int wheel = scroll_lines;
+        if (wheel > 0) {
+            // Scroll forward: advance view_ip by 'wheel' instruction lengths.
+            uint16_t scan = view_ip;
+            for (int i = 0; i < wheel; ++i) {
+                uint8_t sb[15];
+                mem->read((cs_base + scan) & 0xFFFFF, sb, 15);
+                ZydisDecodedInstruction si;
+                ZydisDecodedOperand so[ZYDIS_MAX_OPERAND_COUNT];
+                if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, sb, 15, &si, so)))
+                    scan += si.length;
+                else
+                    scan += 1;
+            }
+            view_ip = scan;
+        } else {
+            // Scroll backward: try disassembling from (view_ip - N) for several
+            // candidate offsets and pick the stream that naturally lands on view_ip.
+            int rows = -wheel;
+            // Scan back far enough that we can find 'rows' instructions before view_ip.
+            // Max x86 instruction = 15 bytes, so back up by rows*15 + some margin.
+            int backtrack = rows * 15 + 30;
+            if (backtrack > (int)view_ip) backtrack = (int)view_ip;
+            uint16_t best_start = view_ip;  // fallback: don't move
+            int best_lines = 0;
+            // Try each possible start offset and see which one reaches view_ip exactly.
+            for (int off = backtrack; off >= 1; --off) {
+                uint16_t scan = view_ip - (uint16_t)off;
+                int count = 0;
+                bool hit = false;
+                while (scan < view_ip && count < 256) {
+                    uint8_t sb[15];
+                    mem->read((cs_base + scan) & 0xFFFFF, sb, 15);
+                    ZydisDecodedInstruction si;
+                    ZydisDecodedOperand so[ZYDIS_MAX_OPERAND_COUNT];
+                    uint16_t step = 1;
+                    if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, sb, 15, &si, so)))
+                        step = si.length;
+                    scan += step;
+                    ++count;
+                }
+                if (scan == view_ip && count >= rows) {
+                    // Walk this stream again to find the address 'rows' instructions before view_ip.
+                    scan = view_ip - (uint16_t)off;
+                    int total = count;
+                    int skip = total - rows;
+                    for (int s = 0; s < skip; ++s) {
+                        uint8_t sb[15];
+                        mem->read((cs_base + scan) & 0xFFFFF, sb, 15);
+                        ZydisDecodedInstruction si;
+                        ZydisDecodedOperand so[ZYDIS_MAX_OPERAND_COUNT];
+                        if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, sb, 15, &si, so)))
+                            scan += si.length;
+                        else
+                            scan += 1;
+                    }
+                    if (count > best_lines) {
+                        best_lines = count;
+                        best_start = scan;
+                    }
+                }
+            }
+            view_ip = best_start;
+        }
+        disassemble_view();
     }
 
     // --- Render ---
+    // Clamp cursor
+    if (cursor_line < 0) cursor_line = 0;
+    if (cursor_line >= DISASM_LINES) cursor_line = DISASM_LINES - 1;
+
     ImDrawList* dl = ImGui::GetWindowDrawList();
     for (int i = 0; i < DISASM_LINES; ++i) {
-        bool is_ip = (lines[i].addr == ip);
+        bool is_ip = ip_in_view_seg && (lines[i].addr == ip);
+        bool is_cursor = !view_follow && (i == cursor_line);
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+        float w = ImGui::GetContentRegionAvail().x;
 
         if (is_ip) {
-            // Highlight bar behind current instruction
-            ImVec2 pos = ImGui::GetCursorScreenPos();
-            float w = ImGui::GetContentRegionAvail().x;
+            // Yellow highlight: current IP
             dl->AddRectFilled(
                 ImVec2(pos.x - 4, pos.y),
                 ImVec2(pos.x + w + 4, pos.y + line_h),
                 IM_COL32(60, 60, 20, 220));
             ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.3f, 1.0f),
-                "%04X:%04X  %-18s %s", cs, lines[i].addr,
+                "%04X:%04X  %-18s %s", view_cs, lines[i].addr,
+                lines[i].hex, lines[i].text);
+        } else if (is_cursor) {
+            // Cyan outline: free-roam cursor
+            dl->AddRect(
+                ImVec2(pos.x - 4, pos.y),
+                ImVec2(pos.x + w + 4, pos.y + line_h),
+                IM_COL32(80, 180, 220, 200));
+            ImGui::TextColored(ImVec4(0.7f, 0.85f, 0.7f, 1.0f),
+                "%04X:%04X  %-18s %s", view_cs, lines[i].addr,
                 lines[i].hex, lines[i].text);
         } else {
             ImGui::TextColored(ImVec4(0.50f, 0.65f, 0.50f, 1.0f),
-                "%04X:%04X  %-18s %s", cs, lines[i].addr,
+                "%04X:%04X  %-18s %s", view_cs, lines[i].addr,
                 lines[i].hex, lines[i].text);
         }
     }
@@ -1409,6 +1579,7 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.cpu = cpu_;
     dx.mem = mem_;
     dx.dma = dma_;
+    dx.pic = pic_;
     dx.bus_probe = bus_probe_;
     dx.dbg_visible = &dbg_visible_;
     dx.drive_a_path = disk_a_path_;
@@ -1471,13 +1642,15 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      ISA_FloppyController* fdc,
                      const ISA_CGA* cga,
                      IC_8284A* clk_gen,
-                     const SystemInfo& sys_info) {
+                     const SystemInfo& sys_info,
+                     const IC_8259A* pic) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
     cpu_ = cpu;
     mem_ = mem;
     dma_ = dma;
+    pic_ = pic;
     mda_card_ = mda_card;
     bus_probe_ = bus;
     cga_ = cga;

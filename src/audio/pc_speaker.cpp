@@ -1,12 +1,15 @@
-// PC speaker audio -- ring buffer consumer on a miniaudio thread.
+// PC speaker audio -- consumes raw digital samples, applies analog modeling.
 //
-// SpeakerDriver pushes samples at ~47.7 kHz into an SPSC ring buffer.
-// The audio callback pops and plays at the same rate.
+// The ring buffer contains one 0/1 per system CLK cycle (~4.77 MHz).
+// Each audio output sample (47,727 Hz) consumes 100 ring entries.
+// The speaker coil L/R lowpass is applied here, not in the DAG.
 //
-// The sim runs faster than real-time, so the ring tends to fill.
-// The audio callback is the pacing clock -- it drains at 47727 Hz and
-// the ring absorbs the sim's burst-ahead.  On underrun (debugger pause,
-// sim stall) the callback outputs silence.
+// Speaker analog model (BRD-verified):
+//   75477 Darlington driver -> C9 (.01uF) -> R10 (33 ohm) -> 8 ohm speaker
+//   Speaker inductance ~1 mH, total R = 41 ohm.
+//   tau = L/R = 1e-3 / 41 = 24.39 us.
+//   At system CLK rate (dt = 0.2095 us):
+//     alpha = dt / (tau + dt) = 0.2095 / 24.60 = 0.00852.
 
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
@@ -17,8 +20,10 @@
 
 namespace bench {
 
-// Output amplitude.
 static constexpr float SPKR_VOLUME = 0.45f;
+
+// Speaker coil lowpass: L/R filter applied per CLK-rate sample.
+static constexpr float LP_ALPHA = 0.00852f;
 
 struct PCSpeaker::Impl {
     ma_device   device;
@@ -27,12 +32,12 @@ struct PCSpeaker::Impl {
 
     SpeakerRing* ring = nullptr;
 
-    // Audio-thread-local state.
-    float last_sample = 0.0f;
+    float coil_state  = 0.0f;   // lowpass filter state (speaker coil current)
+    float last_output = 0.0f;   // last produced audio sample (for underrun hold)
 };
 
 // -----------------------------------------------------------------------
-// Audio callback
+// Audio callback -- analog modeling happens here
 // -----------------------------------------------------------------------
 
 static void audio_callback(ma_device* device, void* output, const void* /*input*/,
@@ -42,14 +47,22 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
     auto* out  = static_cast<float*>(output);
 
     for (ma_uint32 i = 0; i < frame_count; ++i) {
-        float sample;
-        if (impl->ring->pop(sample)) {
-            impl->last_sample = sample;
-        } else {
-            // Underrun (debugger pause, sim stall): hold last value.
-            sample = impl->last_sample;
+        // Consume CLK_PER_AUDIO_SAMPLE (100) digital samples from the ring.
+        // Apply the speaker coil lowpass to each one.
+        uint8_t val;
+        uint32_t consumed = 0;
+        while (consumed < CLK_PER_AUDIO_SAMPLE && impl->ring->pop(val)) {
+            float target = val ? 1.0f : 0.0f;
+            impl->coil_state += LP_ALPHA * (target - impl->coil_state);
+            ++consumed;
         }
-        out[i] = sample * SPKR_VOLUME;
+
+        // If we got samples, use the final filtered value.
+        // If ring was empty (debugger pause), hold last output.
+        if (consumed > 0)
+            impl->last_output = impl->coil_state * SPKR_VOLUME;
+
+        out[i] = impl->last_output;
     }
 }
 
@@ -91,7 +104,8 @@ bool PCSpeaker::init(uint32_t sample_rate) {
         return false;
     }
 
-    std::printf("[PCSpeaker] audio initialized (%u Hz, mono, period=1024x3)\n", sample_rate);
+    std::printf("[PCSpeaker] audio initialized (%u Hz, ring=%uK raw CLK samples)\n",
+                sample_rate, SpeakerRing::SIZE / 1024);
     return true;
 }
 

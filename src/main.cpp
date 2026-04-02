@@ -239,13 +239,15 @@ int main() {
     {
         renderer.start(nullptr, &board.clk_gen->clk_cycles_ref(),
             &scheduler, board.cpu, &memview, board.dma_ic, nullptr,
-            &bus_probe, &keyboard, &fdc, cga.get(), board.clk_gen, sys_info);
+            &bus_probe, &keyboard, &fdc, cga.get(), board.clk_gen, sys_info,
+            board.pic);
     }
     else if (mda)
     {
         renderer.start(mda->framebuffer(), &board.clk_gen->clk_cycles_ref(),
             &scheduler, board.cpu, &memview, board.dma_ic, mda.get(),
-            &bus_probe, &keyboard, &fdc, nullptr, board.clk_gen, sys_info);
+            &bus_probe, &keyboard, &fdc, nullptr, board.clk_gen, sys_info,
+            board.pic);
     }
 
     // Bind board traces to live simulation signals.

@@ -34,6 +34,11 @@ public:
 
     void install(Socket& socket);
 
+    // Debug accessors
+    uint8_t irr() const { return irr_; }
+    uint8_t isr() const { return isr_; }
+    uint8_t imr() const { return imr_; }
+
 protected:
     void on_power_on() override;
     void on_cycle(Fiber caller) override;
