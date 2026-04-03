@@ -1169,11 +1169,21 @@ EUTask<void> IC_8088::eu_run() {
         op_result_ = val;
         break;
     }
-    case 38: // INT 3 (breakpoint)
+    case 38: { // INT 3 (breakpoint)
         ++reg_ip_;
-        breakpoint_ = true;
+        // Check IVT vector 3 (address 0x000C). If null, this is our test
+        // breakpoint hook. If populated, treat as a real software interrupt.
+        {
+            uint8_t v0 = co_await eu_bus_read_byte(0x0C);
+            uint8_t v1 = co_await eu_bus_read_byte(0x0D);
+            uint8_t v2 = co_await eu_bus_read_byte(0x0E);
+            uint8_t v3 = co_await eu_bus_read_byte(0x0F);
+            if (v0 == 0 && v1 == 0 && v2 == 0 && v3 == 0)
+                breakpoint_ = true;
+        }
         PC_INTERRUPT_(3);
         break;
+    }
     case 39: { // INT imm8
         reg_ip_ += 2;
         uint8_t _intnum = co_await fetch_byte(1);
