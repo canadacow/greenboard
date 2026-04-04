@@ -860,7 +860,7 @@ EUTask<void> IC_8088::eu_run() {
         uint32_t val; RMEM_(rm_addr_, val);
         scratch2_uint_ = sign_of(val);
         scratch_uint_ = extra_ ? (++reg_ip_, (int8_t)(i_data1_ & 0xFF))
-                               : i_d_ ? (31 & regs8()[REG_CL])
+                               : i_d_ ? regs8()[REG_CL]  // 8088: no 5-bit mask (186+ masks to 31)
                                        : 1;
         if (scratch_uint_) {
             if (i_reg_ < 4) {
@@ -1259,7 +1259,18 @@ EUTask<void> IC_8088::eu_run() {
         break;
 
     case 3: // PUSH regs16
-        PUSH16_(regs16()[i_reg4bit_]);
+        // 8088 PUSH SP bug: pushes SP-2 (the already-decremented value),
+        // not the original SP.  Detection software (e.g. Cosmo, CheckIt)
+        // relies on this to distinguish 8086/88 from 286+.
+        if (i_reg4bit_ == REG_SP) {
+            regs16()[REG_SP] -= 2;
+            uint32_t _pa = 16u * regs16()[REG_SS] + regs16()[REG_SP];
+            uint16_t _pv = regs16()[REG_SP];  // already decremented
+            co_await eu_bus_write_byte(_pa, _pv & 0xFF);
+            co_await eu_bus_write_byte(_pa + 1, (_pv >> 8) & 0xFF);
+        } else {
+            PUSH16_(regs16()[i_reg4bit_]);
+        }
         break;
     case 4: // POP regs16
         POP16_(regs16()[i_reg4bit_]);
