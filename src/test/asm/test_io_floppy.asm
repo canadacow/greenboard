@@ -147,9 +147,10 @@ cli
 ; =====================================================================
 ; Test 8: I/O doesn't corrupt memory
 ; =====================================================================
+mov byte [0x0090], 0xBB   ; plant sentinel in DRAM
 mov al, 0x77
 out 0x90, al
-cmp byte [0x0090], 0xF4
+cmp byte [0x0090], 0xBB   ; memory should still have sentinel
 jne .io_mem_fail
 mov word [0x050E], 0x0001
 .io_mem_fail:

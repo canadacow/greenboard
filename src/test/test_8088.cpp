@@ -300,7 +300,7 @@ int main() {
 
         // Reset I/O space, DRAM, and expansion RAM (IC state resets in on_power_on)
         std::memset(testcard.io_data(), 0xFF, 1 << 16);
-        std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
+        std::memset(dram.data(), 0x00, IC_DRAM_256K::size());
         std::memset(const_cast<uint8_t*>(isa_ram.data()), 0x00, isa_ram.size());
 
         // Preload DMA buffer for the DMA test.
@@ -390,7 +390,7 @@ int main() {
     {
         board.dma_enabled = true;
         std::memset(testcard.io_data(), 0xFF, 1 << 16);
-        std::memset(dram.data(), 0xF4, IC_DRAM_256K::size());
+        std::memset(dram.data(), 0x00, IC_DRAM_256K::size());
 
         std::string path = std::string(ASM_TEST_DIR) + "/test_bench64.bin";
         if (!load_bin(path, dram.data(), 0x1100, IC_DRAM_256K::size())) {
