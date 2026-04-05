@@ -97,7 +97,7 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
     switch (port) {
         case 0x3F4: {  // MSR
             uint8_t msr = read_msr();
-            spdlog::info("[{}] MSR=0x{:02X} phase={}", name_, msr, (int)phase_);
+            spdlog::trace("[{}] MSR=0x{:02X} phase={}", name_, msr, (int)phase_);
             return msr;
         }
 
@@ -120,14 +120,14 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
             // Result phase: return status bytes.
             if (phase_ == Phase::Result && result_pos_ < result_len_) {
                 if (result_pos_ == 0) {
-                    spdlog::info("[{}] lowering IRQ6 (first result byte read)", name_);
+                    spdlog::trace("[{}] lowering IRQ6 (first result byte read)", name_);
                     bus_->lower_irq(6);
                 }
                 uint8_t val = result_buf_[result_pos_];
-                spdlog::info("[{}] result read [{}]={:02X}", name_, result_pos_, val);
+                spdlog::trace("[{}] result read [{}]={:02X}", name_, result_pos_, val);
                 result_pos_++;
                 if (result_pos_ >= result_len_) {
-                    spdlog::info("[{}] all result bytes read, phase -> Idle", name_);
+                    spdlog::trace("[{}] all result bytes read, phase -> Idle", name_);
                     phase_ = Phase::Idle;
                 }
                 return val;
@@ -147,7 +147,7 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
         case 0x3F2: {  // DOR
             uint8_t old = dor_;
             dor_ = val;
-            spdlog::info("[{}] DOR write: 0x{:02X} (was 0x{:02X}) phase={}",
+            spdlog::trace("[{}] DOR write: 0x{:02X} (was 0x{:02X}) phase={}",
                          name_, val, old, (int)phase_);
             active_drive_ = val & 0x03;
             bool was_reset = !(old & 0x04);
@@ -190,7 +190,7 @@ void ISA_FloppyController::on_io_write(uint16_t port, uint8_t val) {
             // This happens when the BIOS skips unread result bytes
             // (e.g. only reads 1 of 4 post-reset SENSEs then sends SPECIFY).
             if (phase_ == Phase::Result) {
-                spdlog::info("[{}] command byte 0x{:02X} during Result phase, resetting to accept",
+                spdlog::trace("[{}] command byte 0x{:02X} during Result phase, resetting to accept",
                              name_, val);
                 phase_ = Phase::Idle;
                 result_len_ = 0;
