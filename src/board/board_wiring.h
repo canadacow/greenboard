@@ -36,6 +36,11 @@
 #include "board/sw1_mux.h"
 #include "board/sw2_mux.h"
 #include "board/isa_slot.h"
+#include "core/save_state.h"
+#include <cereal/archives/binary.hpp>
+#include <cereal/types/vector.hpp>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -44,6 +49,14 @@ using namespace bench;
 
 struct Board {
     bool dma_enabled = true;
+    bool loaded_from_archive = false;
+    bench::SignalPoolState saved_signal_pool;  // for re-applying after power_on
+
+    void restore_signal_pool() {
+        int n = (std::min)(saved_signal_pool.count, bench::SignalPool::count);
+        for (int i = 0; i < n; ++i)
+            bench::SignalPool::levels[i] = static_cast<bench::Level>(saved_signal_pool.levels[i]);
+    }
 
     // --- Signals (copper traces) ---
     // Pre-allocate contiguous blocks for IC outputs.
@@ -463,7 +476,17 @@ struct Board {
               const std::string& basic_u29 = "",
               const std::string& basic_u30 = "",
               const std::string& basic_u31 = "",
-              const std::string& basic_u32 = "") {
+              const std::string& basic_u32 = "",
+              cereal::BinaryInputArchive* ar = nullptr) {
+        // If loading from archive, consume header + signal pool.
+        // The 8088 state will be consumed by its archive constructor below.
+        bench::SaveFileHeader load_hdr;
+        if (ar) {
+            loaded_from_archive = true;
+            (*ar)(load_hdr);
+            (*ar)(saved_signal_pool);
+        }
+
         // Power rails never create dependency edges.
         vcc.set_power_rail();
         gnd.set_power_rail();
@@ -541,7 +564,8 @@ struct Board {
         cpu_socket.wire(29, cpu_lock); cpu_socket.wire(30, rqgt0);
         cpu_socket.wire(24, qs1); cpu_socket.wire(25, qs0);
         cpu_socket.wire(26, s0); cpu_socket.wire(27, s1); cpu_socket.wire(28, s2);
-        cpu = cpu_socket.emplace<IC_8088>(0xF000, 0xFFF0);
+        cpu = ar ? cpu_socket.emplace<IC_8088>(*ar)
+                 : cpu_socket.emplace<IC_8088>(0xF000, 0xFFF0);
 
         // U6: 8288 Bus Controller
         bc_socket.wire(1, gnd);
@@ -1743,7 +1767,15 @@ struct Board {
         }
 
         // SW1 + SW2 values set by compute_switches() after cards are announced.
+
+        // Restore signal pool from save-state.
+        if (ar) {
+            int n = (std::min)(saved_signal_pool.count, bench::SignalPool::count);
+            for (int i = 0; i < n; ++i)
+                bench::SignalPool::levels[i] = static_cast<bench::Level>(saved_signal_pool.levels[i]);
+        }
     }
+
 
     void register_all(Scheduler& scheduler) {
         scheduler.set_bus_address_base(la_block_);

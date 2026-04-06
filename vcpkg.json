@@ -11,6 +11,7 @@
     },
     "zydis",
     "nlohmann-json",
-    "miniaudio"
+    "miniaudio",
+    "cereal"
   ]
 }

@@ -29,6 +29,20 @@ public:
 
     void install(Socket& socket);
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        for (int i = 0; i < 3; ++i)
+            ar(channels_[i].mode, channels_[i].bcd, channels_[i].rw_mode,
+               channels_[i].programmed, channels_[i].count, channels_[i].reload,
+               channels_[i].latch, channels_[i].latched,
+               channels_[i].load_lsb_pending, channels_[i].load_lsb_value,
+               channels_[i].read_msb_next, channels_[i].out, channels_[i].gate,
+               channels_[i].counting, channels_[i].loaded, channels_[i].null_count);
+        ar(data_bus_driven_, write_pending_, read_pending_, wr_prev_, rd_prev_,
+           pit_timer_);
+    }
+
     // Debug accessors for channel state
     struct ChannelInfo {
         uint8_t mode; uint8_t rw_mode; uint32_t count; uint32_t reload;

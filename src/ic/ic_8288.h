@@ -84,6 +84,12 @@ public:
     bool cpu_bus_busy() const { return commanding_; }
     int cycle_type() const { return (int)cycle_; }
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(cycle_, prev_active_, commanding_, inhibited_, bus_hold_);
+    }
+
 protected:
     void on_power_on() override;
     void on_cycle(Fiber caller) override;

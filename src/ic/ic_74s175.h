@@ -76,6 +76,12 @@ public:
     // Override a specific D pin from async to sync (adds DAG edge).
     void set_d_sync(int index) { declare_input(pin_d_[index]); }
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(clr_prev_);
+    }
+
 protected:
     void on_power_on() override {
         clr_prev_ = Level::HiZ;

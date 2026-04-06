@@ -67,6 +67,15 @@ public:
         for (auto* cc : callbacks_) cc->power_off();
     }
 
+    // Iterate all registered components (callbacks, fibers, coros, visuals).
+    template <typename Fn>
+    void for_each_component(Fn&& fn) {
+        for (auto* cc : callbacks_) fn(static_cast<Component*>(cc));
+        for (auto* fc : fibers_)    fn(static_cast<Component*>(fc));
+        for (auto* co : coros_)     fn(static_cast<Component*>(co));
+        for (auto* v  : visuals_)   fn(v);
+    }
+
     // Initialize the per-perm DAG infrastructure. Static callback ordering
     // was removed -- the per-perm DAG handles all dependency ordering at runtime.
     void resolve() { dump_unified_waves(); }

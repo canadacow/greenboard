@@ -2,6 +2,10 @@
 #include "isa/isa_card.h"
 #include "isa/isa_bus.h"
 #include "test/test_keyboard.h"
+#include <cereal/cereal.hpp>
+#include <cereal/types/vector.hpp>
+#include <cereal/types/map.hpp>
+#include <cereal/types/string.hpp>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -117,6 +121,64 @@ private:
     void hfs_cmd_rename();
 
 public:
+    void card_save(cereal::BinaryOutputArchive& ar) override {
+        ar(cereal::binary_data(io_.get(), 1 << 16));
+        ar(cereal::binary_data(dma_buf_, sizeof(dma_buf_)));
+        ar(dma_ptr_, dma_irq_);
+        std::string root_str = hostfs_root_.string();
+        ar(root_str);
+        ar(hfs_param_, hfs_result_, hfs_result_ptr_, hfs_status_, hfs_next_handle_);
+        // Save open file handles
+        uint16_t count = static_cast<uint16_t>(hfs_files_.size());
+        ar(count);
+        for (auto& [handle, hf] : hfs_files_) {
+            std::string path_str = hf.path.string();
+            std::streampos pos = hf.stream.tellg();
+            ar(handle, path_str, static_cast<uint64_t>(pos));
+        }
+        // Save dir entries
+        uint32_t dir_count = static_cast<uint32_t>(hfs_dir_entries_.size());
+        ar(dir_count);
+        for (auto& entry : hfs_dir_entries_) {
+            std::string p = entry.path().string();
+            ar(p);
+        }
+        ar(hfs_dir_idx_);
+    }
+    void card_load(cereal::BinaryInputArchive& ar) override {
+        ar(cereal::binary_data(io_.get(), 1 << 16));
+        ar(cereal::binary_data(dma_buf_, sizeof(dma_buf_)));
+        ar(dma_ptr_, dma_irq_);
+        std::string root_str;
+        ar(root_str);
+        hostfs_root_ = root_str;
+        ar(hfs_param_, hfs_result_, hfs_result_ptr_, hfs_status_, hfs_next_handle_);
+        // Load open file handles
+        hfs_files_.clear();
+        uint16_t count;
+        ar(count);
+        for (uint16_t i = 0; i < count; ++i) {
+            uint16_t handle;
+            std::string path_str;
+            uint64_t pos;
+            ar(handle, path_str, pos);
+            auto& hf = hfs_files_[handle];
+            hf.path = path_str;
+            hf.stream.open(path_str, std::ios::in | std::ios::out | std::ios::binary);
+            if (hf.stream) hf.stream.seekg(static_cast<std::streamoff>(pos));
+        }
+        // Load dir entries
+        hfs_dir_entries_.clear();
+        uint32_t dir_count;
+        ar(dir_count);
+        for (uint32_t i = 0; i < dir_count; ++i) {
+            std::string p;
+            ar(p);
+            hfs_dir_entries_.emplace_back(std::filesystem::path(p));
+        }
+        ar(hfs_dir_idx_);
+    }
+
     void set_hostfs_root(const std::filesystem::path& root) { hostfs_root_ = root; }
 };
 

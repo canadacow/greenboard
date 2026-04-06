@@ -9,6 +9,7 @@ find_package(fmt CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(zydis CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(cereal CONFIG REQUIRED)
 find_path(MINIAUDIO_INCLUDE_DIRS "miniaudio.h")
 
 # Performance: AVX2, aggressive inlining, whole program optimization
@@ -37,6 +38,7 @@ add_executable(bench
     src/core/threaded_component.cpp
     src/core/fiber_component.cpp
     src/core/callback_component.cpp
+    src/core/save_state.cpp
     src/host_platform/fiber_minicoro.cpp
     src/host_platform/thread_util_win32.cpp
     src/board/socket.cpp
@@ -89,7 +91,7 @@ add_executable(bench
 
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(bench PRIVATE ${MINIAUDIO_INCLUDE_DIRS})
-target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis nlohmann_json::nlohmann_json nfd d3d11 d2d1 dwrite dxgi d3dcompiler windowscodecs)
+target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis nlohmann_json::nlohmann_json cereal::cereal nfd d3d11 d2d1 dwrite dxgi d3dcompiler windowscodecs)
 target_compile_definitions(bench PRIVATE
     PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
 )
@@ -153,7 +155,7 @@ add_executable(test_8088
     ${BENCH_HEADERS}
 )
 target_include_directories(test_8088 PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_8088 PRIVATE spdlog::spdlog fmt::fmt)
+target_link_libraries(test_8088 PRIVATE spdlog::spdlog fmt::fmt cereal::cereal)
 
 # ---------- NASM assembler for test binaries ----------
 find_program(NASM_EXECUTABLE nasm REQUIRED)

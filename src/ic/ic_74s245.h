@@ -68,6 +68,12 @@ private:
 public:
     Driving driving() const { return driving_; }
     Driving pending() const { return pending_driving_; }
+
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(driving_, pending_driving_);
+    }
 private:
 
     Pin g_;    // Pin  1: ~G (enable)

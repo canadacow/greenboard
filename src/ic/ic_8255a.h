@@ -42,6 +42,14 @@ public:
 
     void install(Socket& socket);
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(control_, latch_a_, latch_b_, latch_c_,
+           pa_input_, pb_input_, pc_upper_input_, pc_lower_input_,
+           reset_prev_, wr_prev_, cs_prev_, rd_prev_, write_pending_);
+    }
+
 protected:
     void on_cycle(Fiber caller) override;
 

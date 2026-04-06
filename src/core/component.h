@@ -2,6 +2,7 @@
 #include "core/types.h"
 #include "core/signal.h"
 #include "host_platform/fiber.h"
+#include <cereal/archives/binary.hpp>
 #include <functional>
 #include <string>
 #include <vector>
@@ -35,6 +36,10 @@ public:
     virtual void power_on() = 0;
     virtual void power_off() = 0;
     virtual bool is_powered() const = 0;
+
+    // Save/load state for save-states. Default no-op (combinational ICs).
+    virtual void save(cereal::BinaryOutputArchive&) {}
+    virtual void load(cereal::BinaryInputArchive&) {}
 
     // Pin direction declarations for wiring visualization and dependency graph.
     static constexpr int SLOT_WORDS = (SignalPool::MAX_SIGNALS + 63) / 64;

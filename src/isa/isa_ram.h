@@ -1,5 +1,6 @@
 #pragma once
 #include "isa/isa_card.h"
+#include <cereal/cereal.hpp>
 #include <spdlog/spdlog.h>
 #include <cstdint>
 #include <cstring>
@@ -38,6 +39,18 @@ public:
     }
     void on_mmio_write(uint32_t addr, uint8_t val) override {
         ram_[addr - base_] = val;
+    }
+
+    void card_save(cereal::BinaryOutputArchive& ar) override {
+        ar(base_, size_);
+        ar(cereal::binary_data(ram_, size_));
+    }
+    void card_load(cereal::BinaryInputArchive& ar) override {
+        uint32_t b, s;
+        ar(b, s);
+        if (s != size_) { delete[] ram_; size_ = s; ram_ = new uint8_t[size_]; }
+        base_ = b;
+        ar(cereal::binary_data(ram_, size_));
     }
 
     // Direct access for debugger memory view.

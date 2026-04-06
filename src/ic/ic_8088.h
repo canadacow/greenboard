@@ -132,6 +132,7 @@ public:
     enum class BusT : uint8_t { T1, T2_Read, T2_Write };
 
     IC_8088(uint16_t start_cs = 0xF000, uint16_t start_ip = 0x0100);
+    explicit IC_8088(cereal::BinaryInputArchive& ar);  // construct from save-state
     ~IC_8088() override;
 
     void install(Socket& socket);
@@ -285,6 +286,23 @@ public:
         uint8_t type = 7;  // BUS_PASSIVE
     };
     const BusTx& last_bus_tx() const { return last_bus_tx_; }
+
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    // load: not used -- Board reconstructs via IC_8088(archive) constructor
+
+    template <class Archive> void serialize(Archive& ar) {
+        ar(regs_, reg_ip_, i_rm_, i_w_, i_reg_, i_mod_, i_mod_size_, i_d_,
+           i_reg4bit_, raw_opcode_id_, xlat_opcode_id_, extra_,
+           rep_mode_, seg_override_en_, rep_override_en_, trap_flag_,
+           div_error_, seg_override_, op_source_, op_dest_, rm_addr_,
+           op_to_addr_, op_from_addr_, i_data0_, i_data1_, i_data2_,
+           i_imm_offset_, scratch_uint_, scratch2_uint_, op_result_,
+           scratch_int_, scratch_uchar_, set_flags_type_,
+           bus_t_, t_state_, nmi_pending_, nmi_prev_, halted_, breakpoint_,
+           int13_pending_, int13_ret_cs_, int13_ret_ip_, int13_ret_sp_,
+           last_bus_tx_.addr, last_bus_tx_.data, last_bus_tx_.type,
+           instr_count_, start_cs_, start_ip_, prefetch_base_);
+    }
 
 protected:
     void on_cycle(Fiber caller) override;

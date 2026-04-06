@@ -34,6 +34,15 @@ public:
 
     void install(Socket& socket);
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(irr_, isr_, imr_, vector_base_, icw1_, icw4_needed_, single_mode_,
+           edge_triggered_, auto_eoi_, mode_8086_, ir_prev_, read_isr_,
+           inta_count_, inta_level_, init_state_, initialized_,
+           wr_prev_, cs_prev_, rd_prev_, inta_prev_, write_latched_);
+    }
+
     // Debug accessors
     uint8_t irr() const { return irr_; }
     uint8_t isr() const { return isr_; }

@@ -39,6 +39,13 @@ public:
 
     void install(Socket& socket);
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        for (int i = 0; i < 2; ++i)
+            ar(ff_[i].q_state, ff_[i].clk_prev);
+    }
+
 protected:
     void on_power_on() override;
     void on_power_off() override;

@@ -93,6 +93,10 @@ public:
     // Set initial disk image path for drive A (before start()).
     void set_disk_a_path(const std::string& path);
 
+    // Poll for pending load request (set by Load State button).
+    // Returns empty string if no request. Clears the request.
+    std::string take_pending_load();
+
 private:
     std::jthread thread_;
     std::atomic<bool> running_{false};
@@ -114,6 +118,12 @@ private:
     SystemInfo sys_info_;
     std::string disk_a_path_;
     bool dbg_visible_ = true;
+
+public:
+    // Load request (render thread -> main thread)
+    std::atomic<bool> load_requested_{false};
+    std::string load_path_;
+private:
 
     // Pending board signal binding (set from main thread, consumed by render thread).
     std::unordered_map<std::string, int> pending_brd_map_;

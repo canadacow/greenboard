@@ -54,6 +54,12 @@ public:
         psu_s0_ = s0; psu_s1_ = s1; psu_s2_ = s2; psu_aen_ = aen;
     }
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(clk_cycles_, reset_hold_, psu_nmi_);
+    }
+
 protected:
     void run(std::stop_token stop) override;
 

@@ -34,6 +34,24 @@ public:
     void on_cycle(Fiber caller) override;
     void on_power_on() override;
 
+    void save(cereal::BinaryOutputArchive& ar) override {
+        do_serialize(ar);
+        for (int i = 0; i < MAX_SLOTS; ++i)
+            if (cards_[i]) cards_[i]->card_save(ar);
+    }
+    void load(cereal::BinaryInputArchive& ar) override {
+        do_serialize(ar);
+        for (int i = 0; i < MAX_SLOTS; ++i)
+            if (cards_[i]) cards_[i]->card_load(ar);
+    }
+    template <class Archive> void do_serialize(Archive& ar) {
+        ar(dack_prev_, tc_prev_, dma_dack_pending_, dma_ior_count_,
+           dma_active_ch_, dma_write_mode_, ior_prev_, iow_prev_,
+           dma_memr_prev_, dma_memw_prev_, cpu_memr_prev_, cpu_memw_prev_,
+           mem_write_pending_, aen_prev_high_, data_driven_, read_byte_,
+           write_pending_, read_pending_);
+    }
+
     // Debug: pin levels as the ISA bus sees them
     Level memr_level() const { return memr_.level(); }
     Level memw_level() const { return memw_.level(); }

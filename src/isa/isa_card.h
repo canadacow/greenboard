@@ -1,4 +1,5 @@
 #pragma once
+#include <cereal/archives/binary.hpp>
 #include <string>
 #include <cstdint>
 
@@ -42,6 +43,10 @@ public:
 
     // DMA: terminal count fired for this channel.
     virtual void on_dma_complete(int /*channel*/) {}
+
+    // Save/load card state for save-states. Default no-op.
+    virtual void card_save(cereal::BinaryOutputArchive&) {}
+    virtual void card_load(cereal::BinaryInputArchive&) {}
 
     // Lifecycle.
     virtual void on_power_on() {}

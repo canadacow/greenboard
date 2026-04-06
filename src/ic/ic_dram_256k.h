@@ -2,6 +2,7 @@
 #include "core/callback_component.h"
 #include "core/signal.h"
 #include "board/socket.h"
+#include <cereal/types/array.hpp>
 #include <array>
 #include <vector>
 
@@ -33,6 +34,16 @@ public:
     uint8_t* data() { return ram_.data(); }
     const uint8_t* data() const { return ram_.data(); }
     static constexpr size_t size() { return 256 * 1024; }
+
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(ram_, parity_);
+        for (int i = 0; i < 4; ++i)
+            ar(banks_[i].row_addr, banks_[i].row_latched, banks_[i].driving,
+               banks_[i].ras_prev, banks_[i].cas_prev);
+        ar(active_bank_);
+    }
 
 protected:
     void on_power_on() override;

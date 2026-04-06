@@ -65,6 +65,20 @@ public:
     void set_addr_latches(IC_74S373* u18, IC_74LS670* u19);
     void set_bus_ctrl(class IC_8288* bc) { bus_ctrl_ = bc; }
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        for (int i = 0; i < 4; ++i)
+            ar(ch_[i].base_address, ch_[i].base_count,
+               ch_[i].current_address, ch_[i].current_count,
+               ch_[i].mode, ch_[i].masked, ch_[i].request, ch_[i].tc_reached);
+        ar(command_, status_, temp_, flip_flop_, state_, active_ch_,
+           disabled_, db_driving_, hrq_driven_, a_driving_,
+           write_pending_, read_pending_, eop_pending_, mem2mem_write_,
+           prev_upper_addr_, reset_prev_, iow_prev_, cs_prev_, ior_prev_,
+           clk_prev_, hlda_prev_);
+    }
+
     enum class State { SI, BusRequested, S1, S2, S3, S4, M2M_S1, M2M_S2, M2M_S3, M2M_S4, V_S1, V_S2, V_S3, V_S4 };
     State state() const { return state_; }
     int active_channel() const { return active_ch_; }

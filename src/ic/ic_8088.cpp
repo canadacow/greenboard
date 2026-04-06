@@ -66,8 +66,13 @@ static constexpr uint8_t kind_to_bus[] = {
 IC_8088::IC_8088(uint16_t start_cs, uint16_t start_ip)
     : CoroComponent("8088"), start_cs_(start_cs), start_ip_(start_ip) {
     set_description("CPU");
-    regs16()[REG_CS] = start_cs_;
-    reg_ip_ = start_ip_;
+    cpu_reset();
+}
+
+IC_8088::IC_8088(cereal::BinaryInputArchive& ar)
+    : CoroComponent("8088") {
+    set_description("CPU");
+    serialize(ar);  // all flat state from archive, no cpu_reset()
 }
 
 IC_8088::~IC_8088() {
@@ -214,18 +219,17 @@ BIUTask IC_8088::biu_run() {
     while (pin_vcc_.level() != Level::High)
         co_await std::suspend_always{};
 
-    spdlog::info("[8088] VCC detected, waiting for RESET");
-    cpu_reset();
-
+    // Wait for RESET to deassert. Register state was set by the constructor
+    // (cpu_reset() for cold boot, or serialize(ar) for save-state load).
     if (pin_reset_.level() == Level::High) {
-        spdlog::info("[8088] RESET asserted -- CS:IP = {:04X}:{:04X}", start_cs_, start_ip_);
+        spdlog::info("[8088] RESET asserted -- CS:IP = {:04X}:{:04X}",
+                     regs16()[REG_CS], reg_ip_);
         while (pin_reset_.level() == Level::High)
             co_await std::suspend_always{};
-    } else {
-        spdlog::info("[8088] RESET complete -- CS:IP = {:04X}:{:04X}", start_cs_, start_ip_);
     }
 
-    spdlog::info("[8088] starting execution");
+    spdlog::info("[8088] starting execution at {:04X}:{:04X}",
+                 regs16()[REG_CS], reg_ip_);
 
     drive_status_passive();
 

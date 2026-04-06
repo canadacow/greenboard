@@ -1,6 +1,7 @@
 #pragma once
 #include "isa/isa_card.h"
 #include "core/component.h"
+#include <cereal/cereal.hpp>
 #include <cstdint>
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -188,6 +189,19 @@ public:
 
     // Bind to the 8284A's CLK cycle counter for status register timing.
     void set_clk_counter(const uint64_t* clk) { clk_cycles_ = clk; }
+
+    void card_save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void card_load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(cereal::binary_data(vram_, sizeof(vram_)),
+           crtc_index_,
+           cereal::binary_data(crtc_reg_, sizeof(crtc_reg_)),
+           mode_, color_, composite_,
+           dot_counter_, hcc_, scanline_, vcc_, ra_, ma_,
+           vtadj_counter_, in_vtadj_, in_vsync_, vsync_counter_,
+           active_start_, active_start_set_,
+           cereal::binary_data(scanline_regs_, sizeof(scanline_regs_)));
+    }
 
     // --- ISA_Card overrides ---
     void on_power_on() override;

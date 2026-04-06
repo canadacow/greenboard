@@ -1,6 +1,8 @@
 #pragma once
 #include "isa/isa_card.h"
 #include "isa/isa_bus.h"
+#include <cereal/cereal.hpp>
+#include <cereal/types/vector.hpp>
 #include <vector>
 #include <cstdint>
 
@@ -30,6 +32,25 @@ public:
     // Load a disk image into a drive (0=A, 1=B). Hot-swappable.
     void load_image(std::vector<uint8_t> img, int spt, int hds, int drive = 0);
     int num_drives() const;  // number of drives with media inserted
+
+    void card_save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void card_load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        for (int i = 0; i < MAX_DRIVES; ++i)
+            ar(drives_[i].image, drives_[i].spt, drives_[i].heads);
+        ar(active_drive_, dor_, phase_,
+           cereal::binary_data(cmd_buf_, sizeof(cmd_buf_)),
+           cmd_len_, cmd_expected_,
+           cereal::binary_data(result_buf_, sizeof(result_buf_)),
+           result_len_, result_pos_, sector_offset_, sector_size_,
+           xfer_ptr_, pio_mode_, cur_sector_, eot_,
+           format_mode_, format_fill_, format_spt_, format_n_,
+           format_fields_received_,
+           cereal::binary_data(pcn_, sizeof(pcn_)),
+           irq_pending_, dma_bytes_transferred_,
+           reset_sense_, reset_sense_drive_,
+           seek_complete_pending_, seek_complete_st0_, seek_complete_drive_);
+    }
 
     // ISA_Card overrides
     void on_power_on() override;

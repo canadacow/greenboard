@@ -18,11 +18,14 @@
 #include "audio/speaker_driver.h"
 #include "core/signal.h"
 #include "core/scheduler.h"
+#include "core/save_state.h"
+#include <cereal/archives/binary.hpp>
 #include <spdlog/spdlog.h>
 #include <fstream>
 #include <vector>
 #include <thread>
 #include <chrono>
+#include <memory>
 
 using namespace bench;
 
@@ -30,256 +33,333 @@ using namespace bench;
 //#define DISPLAY_MDA   // MDA 80x25 monochrome
 #define DISPLAY_CGA   // CGA color
 
-int main() {
-    spdlog::set_level(spdlog::level::info);
-    spdlog::info("bench -- IBM PC 5150 motherboard simulator");
+// ========================================================================
+// System -- owns the entire simulation, can be rebuilt from a save file.
+// ========================================================================
 
-    // --- Wire the motherboard ---
-    //std::string bios_path  = "assets/BIOS_IBM5150_27OCT82_1501476_U33.BIN";
-    //std::string bios_path = "docs/Troubleshooting/SuperSoft Landmark Diagnostic BIOS/5150 or 5160 _ 2764 _ 8KB.BIN";
+struct SystemConfig {
     std::string bios_path = "assets/GLABIOS_0.4.1_8P.ROM";
-    //std::string bios_path = "docs/Anonymous BIOS/pcxtbios25/PCXTBIOS.BIN";
-    std::string basic_u29  = ""; //"assets/IBM 5150 - Cassette BASIC version C1.10 - U29 - 5000019.bin";
-    std::string basic_u30  = ""; // "assets/IBM 5150 - Cassette BASIC version C1.10 - U30 - 5000021.bin";
-    std::string basic_u31  = ""; // "assets/IBM 5150 - Cassette BASIC version C1.10 - U31 - 5000022.bin";
-    std::string basic_u32  = ""; // "assets/IBM 5150 - Cassette BASIC version C1.10 - U32 - 5000023.bin";
+    std::string basic_u29;
+    std::string basic_u30;
+    std::string basic_u31;
+    std::string basic_u32;
+    std::string dos_disk = "assets/50boot.img";
+    std::string hostfs_root = "D:/dos";
+    bool use_cga = true;
+    uint32_t expansion_kb = 384;
+};
 
-    Board board;
-    board.wire(bios_path, basic_u29, basic_u30, basic_u31, basic_u32);
+struct System {
+    std::unique_ptr<Board> board;
+    std::unique_ptr<Scheduler> scheduler;
+    std::unique_ptr<ISA_Bus> isa_bus;
+    std::unique_ptr<ISA_TestCard> testcard;
+    std::unique_ptr<ISA_FloppyController> fdc;
+    std::unique_ptr<ISA_CGA> cga;
+    std::unique_ptr<ISA_MDA> mda;
+    std::unique_ptr<ISA_RAM> ram_exp;
+    std::unique_ptr<TestKeyboard> keyboard;
+    std::unique_ptr<PCSpeaker> pc_speaker;
+    std::unique_ptr<SpeakerDriver> speaker_driver;
+    MemoryView memview;
+    BusProbe bus_probe;
+    SystemConfig config;
+
+    void power_off() {
+        if (!board || !board->clk_gen) return;
+        scheduler->resume();
+        board->clk_gen->psu_power_off();
+        board->clk_gen->power_off();
+        if (pc_speaker) pc_speaker->shutdown();
+    }
+};
+
+static std::vector<uint8_t> load_floppy_image(const std::string& path) {
+    std::vector<uint8_t> img;
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (f) {
+        auto sz = f.tellg();
+        img.resize(static_cast<size_t>(sz));
+        f.seekg(0);
+        f.read(reinterpret_cast<char*>(img.data()), sz);
+        spdlog::info("[FDC] loaded {} bytes from {}", img.size(), path);
+    } else {
+        spdlog::warn("[FDC] disk image not found: {}", path);
+    }
+    return img;
+}
+
+static System build_system(const SystemConfig& cfg,
+                           cereal::BinaryInputArchive* ar = nullptr) {
+    System sys;
+    sys.config = cfg;
+
+    // --- Board ---
+    sys.board = std::make_unique<Board>();
+    sys.board->wire(cfg.bios_path, cfg.basic_u29, cfg.basic_u30,
+                    cfg.basic_u31, cfg.basic_u32, ar);
 
     // --- ISA bus + cards ---
-    ISA_Bus isa_bus;
-    isa_bus.install(board.isa_slots[0]);
+    sys.isa_bus = std::make_unique<ISA_Bus>();
+    sys.isa_bus->install(sys.board->isa_slots[0]);
 
-    // J1: Test card (I/O ports 0x80-0xFF, DMA channels 1+3)
-    ISA_TestCard testcard;
-    isa_bus.insert_card(0, &testcard, 0x0A, 0xBC);
+    // J1: Test card
+    sys.testcard = std::make_unique<ISA_TestCard>();
+    sys.isa_bus->insert_card(0, sys.testcard.get(), 0x0A, 0xBC);
 
-    // J2: Floppy disk controller (DMA channel 2, IRQ 6)
-    //std::string dos_disk = "assets/IBM DOS 3.30 360K Disks - Disk 01.img";
-    std::string dos_disk = "assets/50boot.img";
-    std::vector<uint8_t> floppy_img;
-    {
-        std::ifstream f(dos_disk, std::ios::binary | std::ios::ate);
-        if (f) {
-            auto sz = f.tellg();
-            floppy_img.resize(static_cast<size_t>(sz));
-            f.seekg(0);
-            f.read(reinterpret_cast<char*>(floppy_img.data()), sz);
-            spdlog::info("[FDC] loaded {} bytes from {}", floppy_img.size(), dos_disk);
-        } else {
-            spdlog::warn("[FDC] disk image not found: {}", dos_disk);
-        }
-    }
-    ISA_FloppyController fdc(std::move(floppy_img), 9, 2);
-    isa_bus.insert_card(1, &fdc, 0x04, 0x40);
-    board.add_floppy_drives(2);
-
-    std::unique_ptr<ISA_CGA> cga = nullptr;
-    std::unique_ptr<ISA_MDA> mda = nullptr;
+    // J2: Floppy disk controller
+    auto floppy_img = load_floppy_image(cfg.dos_disk);
+    sys.fdc = std::make_unique<ISA_FloppyController>(std::move(floppy_img), 9, 2);
+    sys.isa_bus->insert_card(1, sys.fdc.get(), 0x04, 0x40);
+    sys.board->add_floppy_drives(2);
 
     // J3: Display card
 #ifdef DISPLAY_CGA
-    cga = std::make_unique<ISA_CGA>();
-    cga->set_clk_counter(&board.clk_gen->clk_cycles_ref());
-    isa_bus.insert_card(2, cga.get());
-    board.set_video(Board::CGA_80);
-#else
-    mda = std::make_unique<ISA_MDA>();
-    isa_bus.insert_card(2, mda.get());
-    board.set_video(Board::MDA);
+    if (cfg.use_cga) {
+        sys.cga = std::make_unique<ISA_CGA>();
+        sys.cga->set_clk_counter(&sys.board->clk_gen->clk_cycles_ref());
+        sys.isa_bus->insert_card(2, sys.cga.get());
+        sys.board->set_video(Board::CGA_80);
+    } else
 #endif
+    {
+        sys.mda = std::make_unique<ISA_MDA>();
+        sys.isa_bus->insert_card(2, sys.mda.get());
+        sys.board->set_video(Board::MDA);
+    }
 
-    // J4: RAM expansion (256KB planar + expansion = total)
-    std::unique_ptr<ISA_RAM> ram_exp = nullptr;
-    
-#if 1
-    constexpr uint32_t ExpansionRamSize = 384;
+    // J4: RAM expansion
+    if (cfg.expansion_kb > 0) {
+        sys.ram_exp = std::make_unique<ISA_RAM>(0x40000, cfg.expansion_kb * 1024);
+        sys.isa_bus->insert_card(3, sys.ram_exp.get());
+        sys.board->add_expansion_kb(cfg.expansion_kb);
+    }
 
-    ram_exp = std::make_unique<ISA_RAM>(0x40000, ExpansionRamSize * 1024);
-    isa_bus.insert_card(3, ram_exp.get());
-    board.add_expansion_kb(ExpansionRamSize);
-#endif
-
-    // All cards announced -- compute DIP switches from hardware state.
-    board.compute_switches();
+    sys.board->compute_switches();
 
     // --- Scheduler ---
-    Scheduler scheduler;
-    Signal::set_scheduler(&scheduler);
-    board.register_all(scheduler);
-    scheduler.register_callback(&isa_bus);
+    sys.scheduler = std::make_unique<Scheduler>();
+    Signal::set_scheduler(sys.scheduler.get());
+    sys.board->register_all(*sys.scheduler);
+    sys.scheduler->register_callback(sys.isa_bus.get());
 
     // --- Keyboard ---
-    testcard.set_kbd_ready_signal(&board.kbd_ready);
-    testcard.set_kbd_ack_signal(&board.kbd_ack);
-    testcard.set_hostfs_root("D:/dos");
-    TestKeyboard keyboard;
-    testcard.set_keyboard(&keyboard);
+    sys.testcard->set_kbd_ready_signal(&sys.board->kbd_ready);
+    sys.testcard->set_kbd_ack_signal(&sys.board->kbd_ack);
+    sys.testcard->set_hostfs_root(cfg.hostfs_root);
+    sys.keyboard = std::make_unique<TestKeyboard>();
+    sys.testcard->set_keyboard(sys.keyboard.get());
     {
         Signal* pa_ptrs[8];
-        for (int i = 0; i < 8; ++i) pa_ptrs[i] = &board.ppi_pa[i];
-        keyboard.connect(pa_ptrs, board.irq1, board.ppi_pb[6],
-                         board.ppi_pb[7], board.kbd_ready, board.kbd_ack);
+        for (int i = 0; i < 8; ++i) pa_ptrs[i] = &sys.board->ppi_pa[i];
+        sys.keyboard->connect(pa_ptrs, sys.board->irq1, sys.board->ppi_pb[6],
+                              sys.board->ppi_pb[7], sys.board->kbd_ready,
+                              sys.board->kbd_ack);
     }
-    scheduler.register_callback(&keyboard);
+    sys.scheduler->register_callback(sys.keyboard.get());
 
-    // --- PC Speaker (real-time audio via miniaudio) ---
-    // SpeakerDriver reads U63 gate 4 output (NAND of SPKR_DATA and T/C_2_OUT)
-    // from the signal pool, models MC1741 slew rate + 75477 saturation,
-    // decimates to ~47.7 kHz, and pushes to PCSpeaker's SPSC ring buffer.
-    PCSpeaker pc_speaker;
-    pc_speaker.init();
-    SpeakerDriver speaker_driver;
-    speaker_driver.connect(board.spkr_mix, &pc_speaker);
-    scheduler.register_callback(&speaker_driver);
+    // --- PC Speaker ---
+    sys.pc_speaker = std::make_unique<PCSpeaker>();
+    sys.pc_speaker->init();
+    sys.speaker_driver = std::make_unique<SpeakerDriver>();
+    sys.speaker_driver->connect(sys.board->spkr_mix, sys.pc_speaker.get());
+    sys.scheduler->register_callback(sys.speaker_driver.get());
 
-    scheduler.resolve();
+    sys.scheduler->resolve();
 
-    spdlog::set_level(spdlog::level::info);
+    return sys;
+}
 
-    // --- Debugger memory view (unified 20-bit address space) ---
-    MemoryView memview;
-
-    // DRAM: 00000-3FFFF (256KB, through 74S158 address inversion)
-    memview.map(0x00000, 0x40000, [&](uint32_t addr) -> uint8_t {
+// Must be called AFTER sys is in its final memory location (no more moves).
+static void bind_debug(System& sys) {
+    sys.memview = MemoryView{};
+    sys.memview.map(0x00000, 0x40000, [&sys](uint32_t addr) -> uint8_t {
         uint8_t row = static_cast<uint8_t>(~(addr & 0xFF));
         uint8_t col = static_cast<uint8_t>(~((addr >> 8) & 0xFF));
         uint32_t bank = (addr >> 16) & 3;
         uint32_t xlat = (bank << 16) | (static_cast<uint32_t>(row) << 8) | col;
-        return board.dram.data()[xlat];
+        return sys.board->dram.data()[xlat];
     });
-
-    if (ram_exp)
-    {
-        // Expansion RAM: 40000-9FFFF (384KB ISA RAM card)
-        memview.map(ram_exp->base(), ram_exp->size(), [&](uint32_t addr) -> uint8_t {
-            return ram_exp->data()[addr - ram_exp->base()];
+    if (sys.ram_exp) {
+        sys.memview.map(sys.ram_exp->base(), sys.ram_exp->size(),
+            [&sys](uint32_t addr) -> uint8_t {
+                return sys.ram_exp->data()[addr - sys.ram_exp->base()];
             });
     }
-
-    // Display framebuffer
-    if (cga)
-    {
-        memview.map(ISA_CGA::FB_BASE, ISA_CGA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
-            return cga->vram()[addr - ISA_CGA::FB_BASE];
+    if (sys.cga) {
+        sys.memview.map(ISA_CGA::FB_BASE, ISA_CGA::FB_SIZE,
+            [&sys](uint32_t addr) -> uint8_t {
+                return sys.cga->vram()[addr - ISA_CGA::FB_BASE];
             });
     }
-
-    if (mda)
-    {
-        memview.map(ISA_MDA::FB_BASE, ISA_MDA::FB_SIZE, [&](uint32_t addr) -> uint8_t {
-            return mda->framebuffer()[addr - ISA_MDA::FB_BASE];
+    if (sys.mda) {
+        sys.memview.map(ISA_MDA::FB_BASE, ISA_MDA::FB_SIZE,
+            [&sys](uint32_t addr) -> uint8_t {
+                return sys.mda->framebuffer()[addr - ISA_MDA::FB_BASE];
             });
     }
-
-    // ROM: F6000-FFFFF (5 banks x 8KB)
-    memview.map(0xF6000, 5 * 8192, [&](uint32_t addr) -> uint8_t {
+    sys.memview.map(0xF6000, 5 * 8192, [&sys](uint32_t addr) -> uint8_t {
         uint32_t off = addr - 0xF6000;
-        return board.rom.bank_data(off / 8192)[off % 8192];
+        return sys.board->rom.bank_data(off / 8192)[off % 8192];
     });
 
-    // --- Bus probe (pool indices for bus analyzer) ---
     auto pidx = [](Signal& s) { return (int)s.pin().idx; };
-    BusProbe bus_probe;
-    bus_probe.ad = board.ad_block_;  bus_probe.d = board.d_block_;
-    bus_probe.xd = board.xd_block_; bus_probe.la = board.la_block_;
-    bus_probe.md = board.md_block_;
-    bus_probe.ale = pidx(board.ale);   bus_probe.den = pidx(board.den);
-    bus_probe.dtr = pidx(board.dtr);
-    bus_probe.memr = pidx(board.memr); bus_probe.memw = pidx(board.memw);
-    bus_probe.ior = pidx(board.ior_sig); bus_probe.iow = pidx(board.iow_sig);
-    bus_probe.ready = pidx(board.ready); bus_probe.clk = pidx(board.clk);
-    bus_probe.reset = pidx(board.reset);
-    bus_probe.hrq = pidx(board.hrq);   bus_probe.holda = pidx(board.holda);
-    bus_probe.aen_brd = pidx(board.aen_brd); bus_probe.aen_bar = pidx(board.aen_bar);
-    bus_probe.s0 = pidx(board.s0); bus_probe.s1 = pidx(board.s1); bus_probe.s2 = pidx(board.s2);
-    bus_probe.dack0 = pidx(board.dack0_brd); bus_probe.dack1 = pidx(board.dack1);
-    bus_probe.dack2 = pidx(board.dack2);     bus_probe.dack3 = pidx(board.dack3);
-    bus_probe.drq0 = pidx(board.drq0); bus_probe.drq1 = pidx(board.drq1);
-    bus_probe.drq2 = pidx(board.drq2); bus_probe.drq3 = pidx(board.drq3);
-    bus_probe.intr = pidx(board.intr); bus_probe.nmi = pidx(board.nmi);
+    auto& bp = sys.bus_probe;
+    auto& b = *sys.board;
+    bp.ad = b.ad_block_;  bp.d = b.d_block_;
+    bp.xd = b.xd_block_; bp.la = b.la_block_;
+    bp.md = b.md_block_;
+    bp.ale = pidx(b.ale);   bp.den = pidx(b.den);   bp.dtr = pidx(b.dtr);
+    bp.memr = pidx(b.memr); bp.memw = pidx(b.memw);
+    bp.ior = pidx(b.ior_sig); bp.iow = pidx(b.iow_sig);
+    bp.ready = pidx(b.ready); bp.clk = pidx(b.clk); bp.reset = pidx(b.reset);
+    bp.hrq = pidx(b.hrq);   bp.holda = pidx(b.holda);
+    bp.aen_brd = pidx(b.aen_brd); bp.aen_bar = pidx(b.aen_bar);
+    bp.s0 = pidx(b.s0); bp.s1 = pidx(b.s1); bp.s2 = pidx(b.s2);
+    bp.dack0 = pidx(b.dack0_brd); bp.dack1 = pidx(b.dack1);
+    bp.dack2 = pidx(b.dack2);     bp.dack3 = pidx(b.dack3);
+    bp.drq0 = pidx(b.drq0); bp.drq1 = pidx(b.drq1);
+    bp.drq2 = pidx(b.drq2); bp.drq3 = pidx(b.drq3);
+    bp.intr = pidx(b.intr); bp.nmi = pidx(b.nmi);
 
-    // --- Renderer (render thread, reads framebuffer directly) ---
-    Renderer renderer;
-    scheduler.set_cpu(board.cpu);
-    board.cpu->debug_peek_ = [&](uint32_t addr) -> uint8_t { return memview.read(addr); };
-    board.cpu->debug_bus_state_ = [&]() -> std::string {
-        auto d = [](IC_74S245::Driving v) { return v == IC_74S245::Driving::A ? 'A' : v == IC_74S245::Driving::B ? 'B' : '-'; };
-        auto rv = [](auto* arr) { uint8_t v=0; for(int i=0;i<8;i++) if(arr[i]->level()==bench::Level::High) v|=(1<<i); return v; };
-        auto rs = [&](auto& arr) { uint8_t v=0; for(int i=0;i<8;i++) if(arr[i].level()==bench::Level::High) v|=(1<<i); return v; };
-        return fmt::format("~MW={} ~MR={} AEN={} CEN={} HLDA={} inh={} bh={} cyc={} bus={:05X} AD={:02X} D={:02X} XD={:02X} MD={:02X} U8={}{} U13={}{} U12={}{} U14={}{} dma={} mwp={} cmwp={} dmwp={} cmrp={} dmrp={} P={}",
-            (int)board.memw.level(), (int)board.memr.level(), (int)board.isa_aen.level(),
-            (int)board.aen_brd.level(), (int)board.holda.level(),
-            board.bc->inhibited(), board.bc->bus_hold_count(), board.bc->cycle_type(),
-            SignalPool::bus_address,
-            rs(board.ad), rv(board.d_arr), rv(board.xd_arr), rv(board.md_arr),
-            d(board.xcvr->driving()), d(board.xcvr->pending()),
-            d(board.xcvr13_ic->driving()), d(board.xcvr13_ic->pending()),
-            d(board.mem_xcvr->driving()), d(board.mem_xcvr->pending()),
-            d(board.xcvr14_ic->driving()), d(board.xcvr14_ic->pending()),
-            (int)board.dma_ic->state(),
-            isa_bus.mem_write_pending(), (int)isa_bus.cpu_memw_prev(), (int)isa_bus.dma_memw_prev(),
-            (int)isa_bus.cpu_memr_prev(), (int)isa_bus.dma_memr_prev(),
-            scheduler.current_perm());
+    sys.scheduler->set_cpu(sys.board->cpu);
+    sys.board->cpu->debug_peek_ = [&sys](uint32_t addr) -> uint8_t {
+        return sys.memview.read(addr);
     };
+    sys.board->cpu->debug_bus_state_ = [&sys]() -> std::string {
+        auto& b = *sys.board;
+        auto d = [](IC_74S245::Driving v) {
+            return v == IC_74S245::Driving::A ? 'A' : v == IC_74S245::Driving::B ? 'B' : '-';
+        };
+        auto rv = [](auto* arr) { uint8_t v=0; for(int i=0;i<8;i++) if(arr[i]->level()==bench::Level::High) v|=(1<<i); return v; };
+        auto rs = [&b](auto& arr) { uint8_t v=0; for(int i=0;i<8;i++) if(arr[i].level()==bench::Level::High) v|=(1<<i); return v; };
+        return fmt::format("~MW={} ~MR={} AEN={} CEN={} HLDA={} inh={} bh={} cyc={} bus={:05X} AD={:02X} D={:02X} XD={:02X} MD={:02X} U8={}{} U13={}{} U12={}{} U14={}{} dma={} mwp={} cmwp={} dmwp={} cmrp={} dmrp={} P={}",
+            (int)b.memw.level(), (int)b.memr.level(), (int)b.isa_aen.level(),
+            (int)b.aen_brd.level(), (int)b.holda.level(),
+            b.bc->inhibited(), b.bc->bus_hold_count(), b.bc->cycle_type(),
+            SignalPool::bus_address,
+            rs(b.ad), rv(b.d_arr), rv(b.xd_arr), rv(b.md_arr),
+            d(b.xcvr->driving()), d(b.xcvr->pending()),
+            d(b.xcvr13_ic->driving()), d(b.xcvr13_ic->pending()),
+            d(b.mem_xcvr->driving()), d(b.mem_xcvr->pending()),
+            d(b.xcvr14_ic->driving()), d(b.xcvr14_ic->pending()),
+            (int)b.dma_ic->state(),
+            sys.isa_bus->mem_write_pending(), (int)sys.isa_bus->cpu_memw_prev(),
+            (int)sys.isa_bus->dma_memw_prev(),
+            (int)sys.isa_bus->cpu_memr_prev(), (int)sys.isa_bus->dma_memr_prev(),
+            sys.scheduler->current_perm());
+    };
+}
 
-    renderer.set_disk_a_path(dos_disk);
-
-    // Build system info snapshot for the System window.
+static void start_renderer(Renderer& renderer, System& sys) {
     bench::SystemInfo sys_info;
-    sys_info.expansion_kb = board.expansion_kb_;
+    sys_info.expansion_kb = sys.board->expansion_kb_;
     for (int i = 0; i < 5; i++) {
-        sys_info.slots[i].ref = board.isa_slots[i].ref();
-        if (auto* c = isa_bus.card(i))
+        sys_info.slots[i].ref = sys.board->isa_slots[i].ref();
+        if (auto* c = sys.isa_bus->card(i))
             sys_info.slots[i].card = c->card_name();
     }
 
-    if (cga)
-    {
-        renderer.start(nullptr, &board.clk_gen->clk_cycles_ref(),
-            &scheduler, board.cpu, &memview, board.dma_ic, nullptr,
-            &bus_probe, &keyboard, &fdc, cga.get(), board.clk_gen, sys_info,
-            board.pic, board.pit_ic);
-    }
-    else if (mda)
-    {
-        renderer.start(mda->framebuffer(), &board.clk_gen->clk_cycles_ref(),
-            &scheduler, board.cpu, &memview, board.dma_ic, mda.get(),
-            &bus_probe, &keyboard, &fdc, nullptr, board.clk_gen, sys_info,
-            board.pic, board.pit_ic);
+    if (sys.cga) {
+        renderer.start(nullptr, &sys.board->clk_gen->clk_cycles_ref(),
+            sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
+            nullptr, &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
+            sys.cga.get(), sys.board->clk_gen, sys_info,
+            sys.board->pic, sys.board->pit_ic);
+    } else if (sys.mda) {
+        renderer.start(sys.mda->framebuffer(), &sys.board->clk_gen->clk_cycles_ref(),
+            sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
+            sys.mda.get(), &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
+            nullptr, sys.board->clk_gen, sys_info,
+            sys.board->pic, sys.board->pit_ic);
     }
 
-    // Bind board traces to live simulation signals.
-    renderer.bind_board_signals(board.brd_net_map());
+    renderer.bind_board_signals(sys.board->brd_net_map());
+}
 
-    // Start paused. Pre-set the debugger view to the reset vector.
-    scheduler.pause();
+// ========================================================================
+// main
+// ========================================================================
+
+int main() {
+    spdlog::set_level(spdlog::level::info);
+    spdlog::info("bench -- IBM PC 5150 motherboard simulator");
+
+    SystemConfig cfg;
+#ifdef DISPLAY_CGA
+    cfg.use_cga = true;
+#else
+    cfg.use_cga = false;
+#endif
+
+    auto sys = build_system(cfg);
+    bind_debug(sys);
+
+    Renderer renderer;
+    renderer.set_disk_a_path(cfg.dos_disk);
+    start_renderer(renderer, sys);
+
+    sys.scheduler->pause();
 
     // --- Power on ---
     spdlog::info("=== Power on ===");
     spdlog::info("SW1: 0x{:02X}  SW2: 0x{:02X}",
-                 board.sw1_ic.value(), board.sw2_mux.value());
+                 sys.board->sw1_ic.value(), sys.board->sw2_mux.value());
     spdlog::info("Hardware: {} floppy drives, video={}, {}KB expansion",
-                 board.floppy_drives_, static_cast<int>(board.video_), board.expansion_kb_);
+                 sys.board->floppy_drives_, static_cast<int>(sys.board->video_),
+                 sys.board->expansion_kb_);
 
-    board.clk_gen->power_on();
-    board.clk_gen->psu_power_on();
+    sys.board->clk_gen->power_on();
+    sys.board->clk_gen->psu_power_on();
 
     // Run until the display window is closed.
-    // CPU HLT pauses the scheduler but keeps the window alive for inspection.
-    while (renderer.running())
+    while (renderer.running()) {
+        // Check for load request from renderer
+        std::string load_path = renderer.take_pending_load();
+        if (!load_path.empty()) {
+            spdlog::info("[SaveState] load requested: {}", load_path);
+
+            // Stop everything
+            renderer.stop();
+            sys.power_off();
+
+            // Reset signal pool (slot 0 is the null/dummy slot, keep it)
+            for (int i = 1; i < SignalPool::count; ++i)
+                SignalPool::levels[i] = Level::HiZ;
+            SignalPool::count = 1;
+
+            // Rebuild from archive
+            std::ifstream ifs(load_path, std::ios::binary);
+            cereal::BinaryInputArchive ar(ifs);
+            sys = build_system(cfg, &ar);
+            bind_debug(sys);
+
+            // Restart renderer with new pointers
+            renderer.~Renderer();
+            new (&renderer) Renderer{};
+            renderer.set_disk_a_path(cfg.dos_disk);
+            start_renderer(renderer, sys);
+
+            // Power on first (resets all ICs to defaults), then load state over top
+            sys.scheduler->pause();
+            sys.board->clk_gen->power_on();
+            sys.board->clk_gen->psu_power_on();
+
+            // Overwrite defaults with saved state
+            bench::load_remaining(ar, *sys.scheduler, sys.board->cpu);
+            sys.board->restore_signal_pool();
+            continue;
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     // --- Power off ---
     spdlog::info("=== Power off ===");
-    scheduler.resume();  // unblock pause_gate so the clock thread can exit
-    board.clk_gen->psu_power_off();
-    board.clk_gen->power_off();
-    pc_speaker.shutdown();
+    sys.power_off();
     renderer.stop();
 
-    spdlog::info("CLK cycles: {}", board.clk_gen->clk_cycles());
+    spdlog::info("CLK cycles: {}", sys.board->clk_gen->clk_cycles());
     spdlog::info("Done.");
     return 0;
 }

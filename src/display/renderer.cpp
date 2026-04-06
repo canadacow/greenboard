@@ -32,7 +32,10 @@
 #include "debug/memory_view.h"
 #include "test/test_keyboard.h"
 #include "isa/isa_fdc.h"
+#include "core/save_state.h"
 #include <nfd.h>
+#include <thread>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include "ic/ic_8237a.h"
@@ -132,6 +135,11 @@ struct DxState {
     const ISA_CGA* cga = nullptr;
     IC_8284A* clk_gen = nullptr;
     SystemInfo sys_info;
+
+    // Save/load state
+    Renderer* renderer_owner = nullptr;  // for signaling load requests to main
+    bool save_pending = false;
+    bool was_running_before_save = false;
 
     // CGA debug window
     bool cga_debug_open = false;
@@ -323,6 +331,22 @@ void DxState::render_overlay() {
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+    // Deferred save (paused last frame, clock thread now parked)
+    if (save_pending && scheduler && cpu) {
+        save_pending = false;
+        std::filesystem::create_directories("saves");
+        auto now = std::chrono::system_clock::now();
+        auto tt = std::chrono::system_clock::to_time_t(now);
+        struct tm lt;
+        localtime_s(&lt, &tt);
+        char fname[64];
+        std::snprintf(fname, sizeof(fname), "saves/bench_%04d%02d%02d_%02d%02d%02d.b51",
+                      lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday,
+                      lt.tm_hour, lt.tm_min, lt.tm_sec);
+        bench::save_system(*scheduler, cpu, clk_gen, fname);
+        if (was_running_before_save) scheduler->resume();
+    }
 
     // F12 toggles debugger panel.
     if (ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false) && dbg_visible)
@@ -1180,6 +1204,25 @@ void DxState::render_system_window() {
         }
     }
 
+    // --- Save / Load State ---
+    ImGui::Separator();
+    ImGui::TextColored(grn, "Save State");
+    if (ImGui::Button("Save State")) {
+        was_running_before_save = scheduler && !scheduler->is_paused();
+        if (was_running_before_save) scheduler->pause();
+        save_pending = true;  // executes next frame after clock thread parks
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load State") && renderer_owner) {
+        nfdchar_t* out = nullptr;
+        nfdresult_t result = NFD_OpenDialog("b51", "saves", &out);
+        if (result == NFD_OKAY && out) {
+            renderer_owner->load_path_ = out;
+            renderer_owner->load_requested_.store(true, std::memory_order_release);
+            free(out);
+        }
+    }
+
     ImGui::Separator();
     ImGui::TextColored(grn, "Floppy Drives");
 
@@ -1596,6 +1639,7 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.cga = cga_;
     dx.clk_gen = clk_gen_;
     dx.sys_info = sys_info_;
+    dx.renderer_owner = this;
     // Create rasterizer based on installed display card
     if (cga_)
         dx.rasterizer = std::make_unique<CgaRasterizer>(cga_);
@@ -1640,6 +1684,12 @@ void Renderer::render_loop(std::stop_token stop) {
 }
 
 void Renderer::set_disk_a_path(const std::string& path) { disk_a_path_ = path; }
+
+std::string Renderer::take_pending_load() {
+    if (!load_requested_.load(std::memory_order_acquire)) return {};
+    load_requested_.store(false, std::memory_order_release);
+    return std::move(load_path_);
+}
 
 void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      Scheduler* scheduler, IC_8088* cpu,

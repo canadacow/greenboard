@@ -51,6 +51,12 @@ public:
 
     void install(Socket& socket);
 
+    void save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
+    void load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    template <class Archive> void serialize(Archive& ar) {
+        ar(regs_, driving_, dma_output_);
+    }
+
 protected:
     void on_power_on() override;
     void on_power_off() override;
