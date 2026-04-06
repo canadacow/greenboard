@@ -340,10 +340,12 @@ int main() {
             renderer.set_disk_a_path(cfg.dos_disk);
             start_renderer(renderer, sys);
 
-            // Power on first (resets all ICs to defaults), then load state over top
+            // Power on (resets all ICs to defaults), wait for clock thread
+            // to finish power_on_all() and park, then overwrite with saved state.
             sys.scheduler->pause();
             sys.board->clk_gen->power_on();
             sys.board->clk_gen->psu_power_on();
+            sys.scheduler->wait_until_parked();
 
             // Overwrite defaults with saved state
             bench::load_remaining(ar, *sys.scheduler, sys.board->cpu);

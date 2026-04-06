@@ -423,11 +423,10 @@ void CgaRasterizer::render(const RenderContext& rc) {
     auto* ctx = rc.d3d_ctx;
     const auto* card = cga_card_;
 
-    // Upload font ROM (once, on first render)
-    static bool font_uploaded = false;
-    if (!font_uploaded && font_buf_) {
+    // Upload font ROM (once per rasterizer instance)
+    if (!font_uploaded_ && font_buf_) {
         ctx->UpdateSubresource(font_buf_.Get(), 0, nullptr, card->font_rom(), ISA_CGA::FONT_SIZE, 0);
-        font_uploaded = true;
+        font_uploaded_ = true;
     }
 
     // Upload VRAM

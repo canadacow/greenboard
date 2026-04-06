@@ -42,6 +42,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> vram_srv_;
     Microsoft::WRL::ComPtr<ID3D11Buffer> font_buf_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> font_srv_;
+    bool font_uploaded_ = false;
     Microsoft::WRL::ComPtr<ID3D11Buffer> cb_;
     Microsoft::WRL::ComPtr<ID3D11Buffer> palette_buf_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> palette_srv_;

@@ -409,6 +409,13 @@ public:
 
     bool is_paused() const { return paused_.load(std::memory_order_relaxed); }
 
+    // Spin until the clock thread is parked in pause_gate().
+    // Call after pause() + power_on() to ensure power_on_all() has completed.
+    void wait_until_parked() {
+        while (!in_pause_gate_.load(std::memory_order_acquire))
+            _mm_pause();
+    }
+
     void pause()  { paused_.store(true, std::memory_order_relaxed); }
     void resume() {
         paused_.store(false, std::memory_order_relaxed);
@@ -450,6 +457,7 @@ private:
     std::atomic<bool> step_instr_{false};
     std::atomic<bool> step_over_{false};
     std::atomic<int>  dbg_wake_{0};   // written by UI to break umwait
+    std::atomic<bool> in_pause_gate_{false};  // true while clock thread is parked
     IC_8088*          dbg_cpu_ = nullptr;
     uint64_t          dbg_instr_start_ = 0;
     uint16_t          dbg_over_ip_ = 0;
@@ -485,18 +493,27 @@ private:
             }
         }
 
+        in_pause_gate_.store(true, std::memory_order_release);
         for (;;) {
             // Consume a pending cycle step if available.
             int s = steps_.load(std::memory_order_relaxed);
-            if (s > 0 && steps_.compare_exchange_weak(s, s - 1, std::memory_order_relaxed))
+            if (s > 0 && steps_.compare_exchange_weak(s, s - 1, std::memory_order_relaxed)) {
+                in_pause_gate_.store(false, std::memory_order_release);
                 return;
-            if (!paused_.load(std::memory_order_relaxed))
+            }
+            if (!paused_.load(std::memory_order_relaxed)) {
+                in_pause_gate_.store(false, std::memory_order_release);
                 return;
+            }
             // Step requested -- start running.
-            if (step_instr_.load(std::memory_order_relaxed))
+            if (step_instr_.load(std::memory_order_relaxed)) {
+                in_pause_gate_.store(false, std::memory_order_release);
                 return;
-            if (step_over_.load(std::memory_order_relaxed))
+            }
+            if (step_over_.load(std::memory_order_relaxed)) {
+                in_pause_gate_.store(false, std::memory_order_release);
                 return;
+            }
 
             // Sleep until the UI thread writes to dbg_wake_.
             _umonitor(const_cast<int*>(reinterpret_cast<volatile int*>(&dbg_wake_)));
