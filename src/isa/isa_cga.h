@@ -258,6 +258,13 @@ private:
     bool     active_start_set_ = false; // only record the first VCC=0 per monitor frame
 public:
     uint32_t active_start_scanline() const { return active_start_; }
+
+    // Live beam position (for debug overlay).
+    uint32_t beam_scanline() const { return scanline_; }
+    uint32_t beam_hcc() const { return hcc_; }
+    uint32_t beam_dot() const { return dot_counter_; }
+    uint32_t beam_vcc() const { return vcc_; }
+    bool beam_in_vsync() const { return in_vsync_; }
 private:
     void stamp_scanline();       // write current state into scanline_regs_[scanline_]
 };

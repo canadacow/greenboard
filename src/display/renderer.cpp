@@ -144,7 +144,7 @@ struct DxState {
     // CGA debug window
     bool cga_debug_open = false;
     ImVec2 cga_pan = ImVec2(0, 0);
-    float cga_zoom = 2.0f;
+    float cga_zoom = 1.0f;
 
     // Molly guard state for reset
     bool confirm_reset = false;
@@ -1411,6 +1411,48 @@ void DxState::render_cga_debug() {
 
             ImVec2 cursor = ImGui::GetCursorScreenPos();
             ImGui::Image((ImTextureID)srv, ImVec2(tex_w, tex_h));
+
+            // --- Beam position overlay (electron gun indicator) ---
+            {
+                uint32_t beam_sl = cga->beam_scanline();
+                uint32_t beam_hcc = cga->beam_hcc();
+                uint32_t beam_dot = cga->beam_dot();
+                bool hires = (cga->mode_register() & 0x01) ||
+                             (cga->mode_register() & 0x10);
+                uint32_t dpc = hires ? 8 : 16;
+                float bx = (float)(beam_hcc * dpc + beam_dot) * cga_zoom;
+                float by = (float)beam_sl * cga_zoom * PAR;
+
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                float cx = cursor.x + bx;
+                float cy = cursor.y + by;
+                float arm = 12.0f;  // crosshair arm length in screen pixels
+
+                // Bright magenta crosshair + center dot
+                ImU32 col = IM_COL32(255, 0, 255, 255);
+                dl->AddLine(ImVec2(cx - arm, cy), ImVec2(cx + arm, cy), col, 1.5f);
+                dl->AddLine(ImVec2(cx, cy - arm), ImVec2(cx, cy + arm), col, 1.5f);
+                dl->AddCircleFilled(ImVec2(cx, cy), 3.0f, col);
+
+                // Infer port 3DA status from beam state
+                const uint8_t* cr = cga->crtc_regs();
+                uint8_t status_3da = 0;
+                if (beam_hcc >= cr[ISA_CGA::CRTC_HDISPLAYED] ||
+                    cga->beam_vcc() >= cr[ISA_CGA::CRTC_VDISPLAYED])
+                    status_3da |= 0x01;
+                if (cga->beam_in_vsync())
+                    status_3da |= 0x08;
+
+                // Label with scanline/HCC and 3DA value
+                char beam_label[96];
+                snprintf(beam_label, sizeof(beam_label),
+                         "SL:%u HCC:%u VCC:%u DOT:%u  3DA=%02Xh%s%s",
+                         beam_sl, beam_hcc, cga->beam_vcc(), beam_dot,
+                         status_3da,
+                         (status_3da & 0x01) ? " ~DE" : " DE",
+                         (status_3da & 0x08) ? " VSYNC" : "");
+                dl->AddText(ImVec2(cx + 6, cy - 14), col, beam_label);
+            }
 
             // Hover info: show scanline data at mouse position
             if (ImGui::IsItemHovered()) {
