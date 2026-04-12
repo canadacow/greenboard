@@ -79,6 +79,8 @@ STEP_PRE_TRANSFORM = {
     "DIP-28__600":  (0, 0, 90, 0),
     "DIP-40__600":  (0, 0, 90, 0),
     # Pin headers: same convention as DIPs
+    # Crystal: STEP body along X, BRD pins along Y -> +90
+    "VC": (0, 0, 90, 0),
     "PIN_ARRAY_2X1": (0, 0, 90, 0),
     "PIN_ARRAY_2X2": (0, 0, 90, 0),
     "PIN_ARRAY_4x1": (0, 0, 90, 0),
@@ -107,6 +109,32 @@ REF_STEP = {
 
 # Base rotation for ref-overridden components (same logic as STEP_BASE_ROTATION)
 # Per-ref pre-transforms (overrides STEP_PRE_TRANSFORM)
+# Socketed components: ref -> socket STEP file
+# Socket is placed at board level; IC is elevated by socket height (~4mm)
+SOCKET_HEIGHT = 4.01  # mm, from socket STEP Z-max
+SOCKETED_REFS = {}
+# CPU (U3) -- socketed
+SOCKETED_REFS["U3"] = "DIP-40_W15.24mm_Socket.step"
+# FPU (XU4) -- empty socket only, no IC
+SOCKETED_REFS["XU4"] = "DIP-40_W15.24mm_Socket.step"
+# ROMs U28-U33 (U28 is empty socket only)
+for _r in ["U28", "U29", "U30", "U31", "U32", "U33"]:
+    SOCKETED_REFS[_r] = "DIP-24_W15.24mm_Socket.step"
+# DRAMs: banks 1-3 socketed (U53-U61, U69-U77, U85-U93)
+# Bank 0 (U37-U45) is soldered directly to the board (first 64KB)
+for _bank in [(53,61), (69,77), (85,93)]:
+    for _n in range(_bank[0], _bank[1]+1):
+        SOCKETED_REFS[f"U{_n}"] = "DIP-16_W7.62mm_Socket.step"
+
+# Empty sockets: socket placed but no IC on top
+EMPTY_SOCKETS = {"XU4", "U28"}
+
+# Not populated at all: no IC, no socket, bare pads only
+SKIP_REFS = {"U100", "U101"}
+
+# U95 (75477) is socketed
+SOCKETED_REFS["U95"] = "DIP-8_W7.62mm_Socket.step"
+
 REF_PRE_TRANSFORM = {
     # 206-8.step: long axis already along X, no Z-rotation needed. Z offset for body.
     "SW1": (0, 0, 0, 8.2),
@@ -363,6 +391,10 @@ def main():
         ref = comp["ref"]
         fp = comp["footprint"]
 
+        if ref in SKIP_REFS:
+            skipped += 1
+            continue
+
         step_file = REF_STEP.get(ref) or FOOTPRINT_STEP.get(fp)
         if step_file is None:
             skipped += 1
@@ -431,6 +463,58 @@ def main():
         trsf = final.Multiplied(trsf)
 
         transformed = BRepBuilderAPI_Transform(occ_shape, trsf, True).Shape()
+
+        # If socketed, place the socket first at board level, then elevate the IC
+        socket_file = SOCKETED_REFS.get(ref)
+        if socket_file:
+            socket_shape = load_step(socket_file)
+            if socket_shape:
+                # Socket uses same footprint as IC -> same pre-transform & alignment
+                sock_pre = STEP_PRE_TRANSFORM.get(fp, (0, 0, 0, 0))
+                sock_rx, sock_ry, sock_rz, _ = sock_pre
+                has_sock_rot = any(abs(a) > 0.01 for a in (sock_rx, sock_ry, sock_rz))
+
+                if has_sock_rot:
+                    sock_cx, sock_cy = get_bb_center_xy(socket_shape)
+                    sock_trsf = gp_Trsf()
+                    sock_trsf.SetTranslation(gp_Vec(-sock_cx, -sock_cy, 0))
+                    for axis_dir, angle in [
+                        (gp_Dir(1, 0, 0), sock_rx),
+                        (gp_Dir(0, 1, 0), sock_ry),
+                        (gp_Dir(0, 0, 1), sock_rz),
+                    ]:
+                        if abs(angle) > 0.01:
+                            rot = gp_Trsf()
+                            rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), axis_dir), math.radians(angle))
+                            sock_trsf = rot.Multiplied(sock_trsf)
+                    socket_shape = BRepBuilderAPI_Transform(socket_shape, sock_trsf, True).Shape()
+
+                sock_cx2, sock_cy2 = get_bb_center_xy(socket_shape)
+                sock_align = gp_Trsf()
+                sock_align.SetTranslation(gp_Vec(pad_cx_mm - sock_cx2, pad_cy_mm - sock_cy2, 0))
+                if abs(brd_orient) > 0.01:
+                    rot = gp_Trsf()
+                    rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), math.radians(brd_orient))
+                    sock_align = rot.Multiplied(sock_align)
+                sock_final = gp_Trsf()
+                sock_final.SetTranslation(gp_Vec(brd_x, brd_y, 0))
+                sock_align = sock_final.Multiplied(sock_align)
+
+                sock_transformed = BRepBuilderAPI_Transform(socket_shape, sock_align, True).Shape()
+                sock_mesh = occ_shape_to_trimesh(sock_transformed, linear_deflection=0.2)
+                if sock_mesh and len(sock_mesh.faces) > 0:
+                    scene.add_geometry(sock_mesh, node_name=f"{ref}_Socket")
+
+            # Empty socket: place socket only, skip the IC
+            if ref in EMPTY_SOCKETS:
+                placed += 1
+                continue
+
+            # Elevate the IC by socket height
+            elevate = gp_Trsf()
+            elevate.SetTranslation(gp_Vec(0, 0, SOCKET_HEIGHT))
+            trsf = elevate.Multiplied(trsf)
+            transformed = BRepBuilderAPI_Transform(occ_shape, trsf, True).Shape()
 
         mesh = occ_shape_to_trimesh(transformed, linear_deflection=0.2)
         if mesh and len(mesh.faces) > 0:
