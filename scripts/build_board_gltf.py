@@ -89,8 +89,9 @@ STEP_PRE_TRANSFORM = {
     # Z offset +10.4 lifts pin bases to board surface (Z=0), body sits above.
     "5PINDIN":  (90, 0, 0, 10.4),
     "5PINDIN2": (90, 0, 0, 10.4),
-    # Power connector: pins along X in STEP, pads along X in BRD, no Z-rot needed
-    "POWER_CON": (0, 0, 0, 0),
+    # Power connector: pins exit at Y=-4.5 in STEP. After +90 X-rot, pins go to Z=-4.5.
+    # Z offset +4.5 lifts pin bases to board surface.
+    "POWER_CON": (90, 0, 0, 4.5),
     # Relay: DIP-8 body, pins along Y like KiCad DIPs -> +90
     "G5V-2DPDT": (0, 0, 90, 0),
 }
@@ -122,28 +123,28 @@ _step_cache = {}
 
 
 def load_step(filename):
-    """Load STEP file, return (shape, bb_center_x_mm, bb_center_y_mm). Cached."""
+    """Load STEP file, return raw OCC shape. Cached."""
     if filename in _step_cache:
         return _step_cache[filename]
     path = os.path.join(CHIPS_DIR, filename)
     if not os.path.exists(path):
         print(f"  WARNING: missing {path}")
-        _step_cache[filename] = (None, 0, 0)
-        return (None, 0, 0)
+        _step_cache[filename] = None
+        return None
     reader = STEPControl_Reader()
     reader.ReadFile(path)
     reader.TransferRoots()
     shape = reader.OneShape()
+    _step_cache[filename] = shape
+    return shape
 
-    # Compute bounding box center (XY) for alignment
+
+def get_bb_center_xy(shape):
+    """Return (cx, cy) of shape's bounding box in XY."""
     box = Bnd_Box()
     BRepBndLib.Add_s(shape, box)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
-    cx = (xmin + xmax) / 2
-    cy = (ymin + ymax) / 2
-
-    _step_cache[filename] = (shape, cx, cy)
-    return (shape, cx, cy)
+    return ((xmin + xmax) / 2, (ymin + ymax) / 2)
 
 
 def occ_shape_to_trimesh(shape, linear_deflection=0.1, angular_deflection=0.5):
@@ -367,52 +368,56 @@ def main():
             skipped += 1
             continue
 
-        occ_shape, step_cx, step_cy = load_step(step_file)
-        if occ_shape is None:
+        raw_shape = load_step(step_file)
+        if raw_shape is None:
             skipped += 1
             continue
 
-        # BRD component position (mils -> Blender mm with Y-flip)
-        brd_x, brd_y = brd_to_blender(comp["x"], comp["y"])
-        # Get pre-transform for this component (per-ref overrides per-footprint)
+        # Get pre-transform (per-ref overrides per-footprint)
         pre = REF_PRE_TRANSFORM.get(ref, STEP_PRE_TRANSFORM.get(fp, (0, 0, 0, 0)))
         pre_rx, pre_ry, pre_rz, z_offset = pre
 
-        # BRD orient (negated for Y-flip)
+        # Step 1: Apply pre-rotations to the raw shape around its own BB center,
+        #         THEN compute the new BB center for pad alignment.
+        step_cx, step_cy = get_bb_center_xy(raw_shape)
+        has_pre_rot = any(abs(a) > 0.01 for a in (pre_rx, pre_ry, pre_rz))
+
+        if has_pre_rot:
+            # Center at origin, rotate, then get new BB center
+            pre_trsf = gp_Trsf()
+            pre_trsf.SetTranslation(gp_Vec(-step_cx, -step_cy, 0))
+            for axis_dir, angle in [
+                (gp_Dir(1, 0, 0), pre_rx),
+                (gp_Dir(0, 1, 0), pre_ry),
+                (gp_Dir(0, 0, 1), pre_rz),
+            ]:
+                if abs(angle) > 0.01:
+                    rot = gp_Trsf()
+                    rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), axis_dir), math.radians(angle))
+                    pre_trsf = rot.Multiplied(pre_trsf)
+            pre_rotated = BRepBuilderAPI_Transform(raw_shape, pre_trsf, True).Shape()
+            # New BB center after rotation
+            step_cx, step_cy = get_bb_center_xy(pre_rotated)
+            occ_shape = pre_rotated
+        else:
+            occ_shape = raw_shape
+
+        # BRD position and orient (with per-ref overrides for BRD errors)
+        comp_x_mil, comp_y_mil = comp["x"], comp["y"]
+        # DIN connectors: BRD places them 520 mils from board edge; move flush to edge
+        if ref in ("J6", "J7"):
+            comp_x_mil = bounds["x_min"]
+        brd_x, brd_y = brd_to_blender(comp_x_mil, comp_y_mil)
         brd_orient = -(comp["orient"] / 10.0)
 
-        # Compute pad centroid in local coords (mils -> mm, with Y-flip)
+        # Pad centroid in local coords (mils -> mm, Y-flipped)
         pad_cx_mm, pad_cy_mm = pad_centroid_mm(comp["pads"])
         pad_cy_mm = -pad_cy_mm
 
-        # Build transform chain:
-        # 1. Center STEP at origin (subtract BB center)
-        # 2. Pre-rotate around component's own center
-        # 3. Translate to pad centroid offset + Z offset
-        # 4. BRD orient rotation
-        # 5. Translate to board position
-
-        # 1. Center at origin
+        # Step 2: Align BB center to pad centroid, apply Z offset, BRD orient, board position
         trsf = gp_Trsf()
-        trsf.SetTranslation(gp_Vec(-step_cx, -step_cy, 0))
+        trsf.SetTranslation(gp_Vec(pad_cx_mm - step_cx, pad_cy_mm - step_cy, z_offset))
 
-        # 2. Pre-rotations around origin (now component center)
-        for axis_dir, angle in [
-            (gp_Dir(1, 0, 0), pre_rx),
-            (gp_Dir(0, 1, 0), pre_ry),
-            (gp_Dir(0, 0, 1), pre_rz),
-        ]:
-            if abs(angle) > 0.01:
-                rot = gp_Trsf()
-                rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), axis_dir), math.radians(angle))
-                trsf = rot.Multiplied(trsf)
-
-        # 3. Offset to pad centroid + Z
-        t_offset = gp_Trsf()
-        t_offset.SetTranslation(gp_Vec(pad_cx_mm, pad_cy_mm, z_offset))
-        trsf = t_offset.Multiplied(trsf)
-
-        # 4. BRD orient (Z rotation)
         if abs(brd_orient) > 0.01:
             rot = gp_Trsf()
             rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
