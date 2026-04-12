@@ -9,6 +9,7 @@ Usage: .venv/Scripts/python.exe scripts/build_board_gltf.py
 import json, math, sys, os, time
 import numpy as np
 import trimesh
+from trimesh.visual.material import PBRMaterial
 
 from OCP.STEPControl import STEPControl_Reader
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
@@ -33,6 +34,31 @@ OUT_PATH = "assets/board_5150.glb"
 MIL_TO_MM = 0.0254
 PCB_THICKNESS = 1.6
 COPPER_THICKNESS = 0.035
+
+# --- Materials ---
+MAT_PCB = PBRMaterial(
+    name="PCB_Board",
+    baseColorFactor=[0x00/255, 0x2d/255, 0x04/255, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.6,
+)
+MAT_TRACE = PBRMaterial(
+    name="Trace",
+    baseColorFactor=[63/255, 126/255, 91/255, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.4,
+)
+MAT_VIA = PBRMaterial(
+    name="Via_Tin",
+    baseColorFactor=[0.75, 0.75, 0.78, 1.0],
+    metallicFactor=1.0,
+    roughnessFactor=0.30,
+)
+
+
+def apply_material(mesh, material):
+    """Apply a PBR material to a trimesh."""
+    mesh.visual = trimesh.visual.TextureVisuals(material=material)
 
 FOOTPRINT_STEP = {
     "DIP-8__300":           "DIP-8_W7.62mm.step",
@@ -355,23 +381,26 @@ def main():
                                               sections=16)
             hole.apply_translation([hx, hy, -PCB_THICKNESS / 2])
             board_mesh = board_mesh.difference(hole)
+    apply_material(board_mesh, MAT_PCB)
     scene.add_geometry(board_mesh, node_name="PCB_Board")
     print(f"  Board: {len(board_mesh.faces)} triangles")
 
     # b) Traces (offset by board center)
-    print("Building top traces...")
-    top_traces = build_traces(traces, layer_filter=0)
+    print("Building top traces (layer 15 = front copper)...")
+    top_traces = build_traces(traces, layer_filter=15)
     if top_traces:
         top_traces.apply_translation([-board_cx, -board_cy, 0])
         top_traces.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
+        apply_material(top_traces, MAT_TRACE)
         scene.add_geometry(top_traces, node_name="Traces_Top")
         print(f"  Top traces: {len(top_traces.faces)} triangles")
 
-    print("Building bottom traces...")
-    bot_traces = build_traces(traces, layer_filter=15)
+    print("Building bottom traces (layer 0 = back copper)...")
+    bot_traces = build_traces(traces, layer_filter=0)
     if bot_traces:
         bot_traces.apply_translation([-board_cx, -board_cy, -PCB_THICKNESS - COPPER_THICKNESS])
         bot_traces.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
+        apply_material(bot_traces, MAT_TRACE)
         scene.add_geometry(bot_traces, node_name="Traces_Bottom")
         print(f"  Bottom traces: {len(bot_traces.faces)} triangles")
 
@@ -380,6 +409,7 @@ def main():
     if via_mesh:
         via_mesh.apply_translation([-board_cx, -board_cy, 0])
         via_mesh.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
+        apply_material(via_mesh, MAT_VIA)
         scene.add_geometry(via_mesh, node_name="Vias")
         print(f"  Vias: {len(via_mesh.faces)} triangles")
 
