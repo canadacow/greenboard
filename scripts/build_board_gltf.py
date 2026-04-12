@@ -1,0 +1,393 @@
+"""Build a GLTF of the IBM 5150 motherboard from BRD data + STEP components.
+
+Reads board_traces.json for geometry, loads STEP files from assets/3dchips/,
+places components at BRD coordinates, and exports a .glb scene with
+separate named objects per component.
+
+Usage: .venv/Scripts/python.exe scripts/build_board_gltf.py
+"""
+import json, math, sys, os, time
+import numpy as np
+import trimesh
+
+from OCP.STEPControl import STEPControl_Reader
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.TopExp import TopExp_Explorer
+from OCP.TopAbs import TopAbs_FACE
+from OCP.BRep import BRep_Tool
+from OCP.TopLoc import TopLoc_Location
+from OCP.TopoDS import TopoDS
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace
+from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+from OCP.Bnd import Bnd_Box
+from OCP.BRepBndLib import BRepBndLib
+from OCP.gp import gp_Pnt, gp_Vec, gp_Ax1, gp_Dir, gp_Trsf
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+
+sys.stdout.reconfigure(encoding='utf-8')
+
+JSON_PATH = "assets/board_traces.json"
+CHIPS_DIR = "assets/3dchips"
+OUT_PATH = "assets/board_5150.glb"
+
+MIL_TO_MM = 0.0254
+PCB_THICKNESS = 1.6
+COPPER_THICKNESS = 0.035
+
+FOOTPRINT_STEP = {
+    "DIP-8__300":           "DIP-8_W7.62mm.step",
+    "DIP-14__300":          "DIP-14_W7.62mm.step",
+    "DIP-16__300":          "DIP-16_W7.62mm.step",
+    "DIP-18__300":          "DIP-18_W7.62mm.step",
+    "DIP-20__300":          "DIP-20_W7.62mm.step",
+    "DIP-24__600":          "DIP-24_W15.24mm.step",
+    "DIP-28__600":          "DIP-28_W15.24mm.step",
+    "DIP-40__600":          "DIP-40_W15.24mm.step",
+    "62":                   "7-5530843-0.step",
+    "62PinEdgeIOConnector": "7-5530843-0.step",
+    "5PINDIN":              "User Library-DIN-5.STEP",
+    "5PINDIN2":             "User Library-DIN-5.STEP",
+    "R5":                   "R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal.step",
+    "C1-1":                 "C_Disc_D3.0mm_W1.6mm_P2.50mm.step",
+    "CP8":                  "C_Disc_D7.5mm_W2.5mm_P5.00mm.step",
+    "VC":                   "Crystal_HC49-U_Vertical.step",
+    "PIN_ARRAY_2X1":        "PinHeader_1x02_P2.54mm_Vertical.step",
+    "PIN_ARRAY_2X2":        "PinHeader_2x02_P2.54mm_Vertical.step",
+    "PIN_ARRAY_4x1":        "PinHeader_1x04_P2.54mm_Vertical.step",
+    "D5":                   "D_DO-35_SOD27_P10.16mm_Horizontal.step",
+    "G5V-2DPDT":            "Relay_DPDT_Omron_G5V-2.step",
+    "POWER_CON":            "User Library-6 way 0_1inch pitch molex header.step",
+    "VR":                   "C_Trimmer_Murata_TZB4-B.step",
+    "PE-21712":             "TD1_PE21712_delay.step",
+    "TD2":                  "TD2_SIP3_delay.step",
+    "HOLE":                 None,
+}
+
+# Base rotation (degrees) to align STEP pin axis with BRD pad axis.
+# KiCad DIP STEPs have pins along Y; BRD pads run along X at orient=0 -> +90.
+STEP_BASE_ROTATION = {
+    "DIP-8__300": 90, "DIP-14__300": 90, "DIP-16__300": 90,
+    "DIP-18__300": 90, "DIP-20__300": 90, "DIP-24__600": 90,
+    "DIP-28__600": 90, "DIP-40__600": 90,
+    "R5": 90, "C1-1": 90, "CP8": 90, "D5": 90,  # axial components same convention
+    "PIN_ARRAY_2X1": 90, "PIN_ARRAY_2X2": 90, "PIN_ARRAY_4x1": 90,
+    "VR": 90,
+}
+
+REF_STEP = {
+    "SW1": "206-8.step",
+    "SW2": "206-8.step",
+    "RN1": "BO_4116R.step",
+    "RN2": "BO_4116R.step",
+    "RN3": "BO_4116R.step",
+    "RN4": "BO_4116R.step",
+}
+
+# Cache: filename -> (OCC shape, bb_center_x, bb_center_y)
+_step_cache = {}
+
+
+def load_step(filename):
+    """Load STEP file, return (shape, bb_center_x_mm, bb_center_y_mm). Cached."""
+    if filename in _step_cache:
+        return _step_cache[filename]
+    path = os.path.join(CHIPS_DIR, filename)
+    if not os.path.exists(path):
+        print(f"  WARNING: missing {path}")
+        _step_cache[filename] = (None, 0, 0)
+        return (None, 0, 0)
+    reader = STEPControl_Reader()
+    reader.ReadFile(path)
+    reader.TransferRoots()
+    shape = reader.OneShape()
+
+    # Compute bounding box center (XY) for alignment
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    cx = (xmin + xmax) / 2
+    cy = (ymin + ymax) / 2
+
+    _step_cache[filename] = (shape, cx, cy)
+    return (shape, cx, cy)
+
+
+def occ_shape_to_trimesh(shape, linear_deflection=0.1, angular_deflection=0.5):
+    """Tessellate an OCC shape to a trimesh.Trimesh."""
+    BRepMesh_IncrementalMesh(shape, linear_deflection, False, angular_deflection, True)
+
+    all_verts = []
+    all_faces = []
+    offset = 0
+
+    explorer = TopExp_Explorer(shape, TopAbs_FACE)
+    while explorer.More():
+        face = TopoDS.Face_s(explorer.Current())
+        loc = TopLoc_Location()
+        tri = BRep_Tool.Triangulation_s(face, loc)
+        if tri is not None:
+            trsf = loc.Transformation()
+            n_nodes = tri.NbNodes()
+            n_tri = tri.NbTriangles()
+
+            for i in range(1, n_nodes + 1):
+                p = tri.Node(i).Transformed(trsf)
+                all_verts.append([p.X(), p.Y(), p.Z()])
+
+            for i in range(1, n_tri + 1):
+                i1, i2, i3 = tri.Triangle(i).Get()
+                all_faces.append([i1 - 1 + offset, i2 - 1 + offset, i3 - 1 + offset])
+
+            offset += n_nodes
+        explorer.Next()
+
+    if not all_verts:
+        return None
+    return trimesh.Trimesh(vertices=np.array(all_verts), faces=np.array(all_faces))
+
+
+def pad_centroid_mm(pads):
+    """Compute centroid of pad positions (in mils), return (cx_mm, cy_mm)."""
+    if not pads:
+        return (0.0, 0.0)
+    xs = [p["x"] for p in pads]
+    ys = [p["y"] for p in pads]
+    return (sum(xs) / len(xs) * MIL_TO_MM, sum(ys) / len(ys) * MIL_TO_MM)
+
+
+def build_board_outline(outline_segs, bounds):
+    """Build PCB slab. Returns trimesh."""
+    segs = list(outline_segs)
+    if not segs:
+        # Fallback: rectangle from bounds
+        b = bounds
+        segs = [
+            {"x1": b["x_min"], "y1": b["y_min"], "x2": b["x_max"], "y2": b["y_min"]},
+            {"x1": b["x_max"], "y1": b["y_min"], "x2": b["x_max"], "y2": b["y_max"]},
+            {"x1": b["x_max"], "y1": b["y_max"], "x2": b["x_min"], "y2": b["y_max"]},
+            {"x1": b["x_min"], "y1": b["y_max"], "x2": b["x_min"], "y2": b["y_min"]},
+        ]
+
+    # Chain segments end-to-end
+    ordered = [segs.pop(0)]
+    while segs:
+        ex, ey = ordered[-1]["x2"], ordered[-1]["y2"]
+        found = False
+        for i, s in enumerate(segs):
+            if abs(s["x1"] - ex) < 1 and abs(s["y1"] - ey) < 1:
+                ordered.append(segs.pop(i)); found = True; break
+            if abs(s["x2"] - ex) < 1 and abs(s["y2"] - ey) < 1:
+                segs[i] = {"x1": s["x2"], "y1": s["y2"], "x2": s["x1"], "y2": s["y1"]}
+                ordered.append(segs.pop(i)); found = True; break
+        if not found:
+            break
+
+    edges = []
+    for s in ordered:
+        p1 = gp_Pnt(s["x1"] * MIL_TO_MM, s["y1"] * MIL_TO_MM, 0)
+        p2 = gp_Pnt(s["x2"] * MIL_TO_MM, s["y2"] * MIL_TO_MM, 0)
+        edges.append(BRepBuilderAPI_MakeEdge(p1, p2).Edge())
+
+    wire_builder = BRepBuilderAPI_MakeWire()
+    for e in edges:
+        wire_builder.Add(e)
+
+    face = BRepBuilderAPI_MakeFace(wire_builder.Wire()).Face()
+    prism = BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, -PCB_THICKNESS)).Shape()
+    return occ_shape_to_trimesh(prism, linear_deflection=0.5)
+
+
+def build_traces(traces, layer_filter=None):
+    """Build trace segments as thin ribbons. Returns trimesh."""
+    verts = []
+    faces = []
+    for tr in traces:
+        if layer_filter is not None and tr.get("layer", 0) != layer_filter:
+            continue
+        x1, y1 = tr["x1"] * MIL_TO_MM, tr["y1"] * MIL_TO_MM
+        x2, y2 = tr["x2"] * MIL_TO_MM, tr["y2"] * MIL_TO_MM
+        w = tr["w"] * MIL_TO_MM * 0.5
+        dx, dy = x2 - x1, y2 - y1
+        length = math.sqrt(dx*dx + dy*dy)
+        if length < 0.001:
+            continue
+        nx, ny = -dy/length*w, dx/length*w
+        z_top, z_bot = COPPER_THICKNESS, 0.0
+        i = len(verts)
+        verts.extend([
+            [x1+nx,y1+ny,z_top],[x1-nx,y1-ny,z_top],
+            [x2-nx,y2-ny,z_top],[x2+nx,y2+ny,z_top],
+            [x1+nx,y1+ny,z_bot],[x1-nx,y1-ny,z_bot],
+            [x2-nx,y2-ny,z_bot],[x2+nx,y2+ny,z_bot],
+        ])
+        faces.extend([
+            [i,i+1,i+2],[i,i+2,i+3],
+            [i+4,i+6,i+5],[i+4,i+7,i+6],
+            [i,i+3,i+7],[i,i+7,i+4],
+            [i+1,i+5,i+6],[i+1,i+6,i+2],
+            [i,i+4,i+5],[i,i+5,i+1],
+            [i+3,i+2,i+6],[i+3,i+6,i+7],
+        ])
+    if not verts:
+        return None
+    return trimesh.Trimesh(vertices=np.array(verts, dtype=np.float64),
+                           faces=np.array(faces, dtype=np.int64))
+
+
+def build_vias(vias_data):
+    """Build vias as cylinders."""
+    meshes = []
+    for via in vias_data:
+        x, y = via["x"] * MIL_TO_MM, via["y"] * MIL_TO_MM
+        r = via["dia"] * MIL_TO_MM * 0.5
+        cyl = trimesh.creation.cylinder(radius=r, height=PCB_THICKNESS + COPPER_THICKNESS*2, sections=8)
+        cyl.apply_translation([x, y, -PCB_THICKNESS/2 + COPPER_THICKNESS])
+        meshes.append(cyl)
+    return trimesh.util.concatenate(meshes) if meshes else None
+
+
+def main():
+    t0 = time.time()
+
+    print(f"Loading {JSON_PATH}...")
+    with open(JSON_PATH, 'r') as f:
+        data = json.load(f)
+
+    bounds = data["bounds"]
+    outline = data["board_outline"]
+    traces = data["traces"]
+    vias_data = data["vias"]
+    components = data["components"]
+    print(f"  {len(traces)} traces, {len(vias_data)} vias, {len(components)} components")
+
+    # Compute board center for origin centering (mils -> mm)
+    # KiCad Y-axis points downward; we flip to Blender Y-up.
+    board_cx = (bounds["x_min"] + bounds["x_max"]) / 2 * MIL_TO_MM
+    board_cy = (bounds["y_min"] + bounds["y_max"]) / 2 * MIL_TO_MM
+    print(f"  Board center: ({board_cx:.1f}, {board_cy:.1f}) mm -- will offset to origin")
+
+    def brd_to_blender(x_mil, y_mil):
+        """Convert BRD mils to Blender mm with Y-flip and centering."""
+        return (x_mil * MIL_TO_MM - board_cx,
+                -(y_mil * MIL_TO_MM - board_cy))  # negate Y
+
+    # Build scene with separate named meshes
+    scene = trimesh.Scene()
+
+    # a) Board slab from bounds (proper solid box)
+    print("Building PCB slab...")
+    bx0, by0 = brd_to_blender(bounds["x_min"], bounds["y_max"])  # TL -> -X,-Y
+    bx1, by1 = brd_to_blender(bounds["x_max"], bounds["y_min"])  # BR -> +X,+Y
+    board_mesh = trimesh.creation.box(
+        extents=[bx1 - bx0, by1 - by0, PCB_THICKNESS],
+        transform=trimesh.transformations.translation_matrix([
+            (bx0 + bx1) / 2, (by0 + by1) / 2, -PCB_THICKNESS / 2
+        ])
+    )
+    # Cut mounting holes
+    for comp in components:
+        if comp["footprint"] == "HOLE":
+            hx, hy = brd_to_blender(comp["x"], comp["y"])
+            hole = trimesh.creation.cylinder(radius=1.6, height=PCB_THICKNESS + 1,
+                                              sections=16)
+            hole.apply_translation([hx, hy, -PCB_THICKNESS / 2])
+            board_mesh = board_mesh.difference(hole)
+    scene.add_geometry(board_mesh, node_name="PCB_Board")
+    print(f"  Board: {len(board_mesh.faces)} triangles")
+
+    # b) Traces (offset by board center)
+    print("Building top traces...")
+    top_traces = build_traces(traces, layer_filter=0)
+    if top_traces:
+        top_traces.apply_translation([-board_cx, -board_cy, 0])
+        top_traces.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
+        scene.add_geometry(top_traces, node_name="Traces_Top")
+        print(f"  Top traces: {len(top_traces.faces)} triangles")
+
+    print("Building bottom traces...")
+    bot_traces = build_traces(traces, layer_filter=15)
+    if bot_traces:
+        bot_traces.apply_translation([-board_cx, -board_cy, -PCB_THICKNESS - COPPER_THICKNESS])
+        bot_traces.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
+        scene.add_geometry(bot_traces, node_name="Traces_Bottom")
+        print(f"  Bottom traces: {len(bot_traces.faces)} triangles")
+
+    print("Building vias...")
+    via_mesh = build_vias(vias_data)
+    if via_mesh:
+        via_mesh.apply_translation([-board_cx, -board_cy, 0])
+        via_mesh.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
+        scene.add_geometry(via_mesh, node_name="Vias")
+        print(f"  Vias: {len(via_mesh.faces)} triangles")
+
+    # c) Components
+    print("Placing components...")
+    placed = 0
+    skipped = 0
+    for comp in components:
+        ref = comp["ref"]
+        fp = comp["footprint"]
+
+        step_file = REF_STEP.get(ref) or FOOTPRINT_STEP.get(fp)
+        if step_file is None:
+            skipped += 1
+            continue
+
+        occ_shape, step_cx, step_cy = load_step(step_file)
+        if occ_shape is None:
+            skipped += 1
+            continue
+
+        # BRD component position (mils -> Blender mm with Y-flip)
+        brd_x, brd_y = brd_to_blender(comp["x"], comp["y"])
+        # Negate orient for Y-flip, add per-footprint base rotation
+        base_rot = STEP_BASE_ROTATION.get(fp, 0)
+        angle_deg = -(comp["orient"] / 10.0) + base_rot
+
+        # Compute pad centroid in local coords (mils -> mm, with Y-flip)
+        pad_cx_mm, pad_cy_mm = pad_centroid_mm(comp["pads"])
+        pad_cy_mm = -pad_cy_mm  # flip Y for local pads too
+
+        # Alignment offset: shift STEP so its BB center aligns with pad centroid
+        offset_x = pad_cx_mm - step_cx
+        offset_y = pad_cy_mm - step_cy
+
+        # Transform: offset -> rotate -> translate
+        trsf = gp_Trsf()
+        trsf.SetTranslation(gp_Vec(offset_x, offset_y, 0))
+
+        if abs(angle_deg) > 0.01:
+            rot = gp_Trsf()
+            rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
+                            math.radians(angle_deg))
+            trsf = rot.Multiplied(trsf)
+
+        # Final translation to board position
+        final = gp_Trsf()
+        final.SetTranslation(gp_Vec(brd_x, brd_y, 0))
+        trsf = final.Multiplied(trsf)
+
+        transformed = BRepBuilderAPI_Transform(occ_shape, trsf, True).Shape()
+
+        mesh = occ_shape_to_trimesh(transformed, linear_deflection=0.2)
+        if mesh and len(mesh.faces) > 0:
+            node_name = f"{ref}_{comp['value']}"
+            scene.add_geometry(mesh, node_name=node_name)
+            placed += 1
+
+    print(f"  Placed: {placed}, Skipped: {skipped}")
+
+    # Export
+    total_faces = sum(len(g.faces) for g in scene.geometry.values())
+    print(f"  Total: {len(scene.geometry)} objects, {total_faces} triangles")
+
+    print(f"Exporting {OUT_PATH}...")
+    scene.export(OUT_PATH, file_type='glb')
+
+    dt = time.time() - t0
+    size_mb = os.path.getsize(OUT_PATH) / (1024 * 1024)
+    print(f"Done in {dt:.1f}s. Output: {OUT_PATH} ({size_mb:.1f} MB)")
+
+
+if __name__ == '__main__':
+    main()
