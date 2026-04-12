@@ -63,15 +63,36 @@ FOOTPRINT_STEP = {
     "HOLE":                 None,
 }
 
-# Base rotation (degrees) to align STEP pin axis with BRD pad axis.
-# KiCad DIP STEPs have pins along Y; BRD pads run along X at orient=0 -> +90.
-STEP_BASE_ROTATION = {
-    "DIP-8__300": 90, "DIP-14__300": 90, "DIP-16__300": 90,
-    "DIP-18__300": 90, "DIP-20__300": 90, "DIP-24__600": 90,
-    "DIP-28__600": 90, "DIP-40__600": 90,
-    "R5": 90, "C1-1": 90, "CP8": 90, "D5": 90,  # axial components same convention
-    "PIN_ARRAY_2X1": 90, "PIN_ARRAY_2X2": 90, "PIN_ARRAY_4x1": 90,
-    "VR": 90,
+# Per-footprint pre-transform: (rot_x_deg, rot_y_deg, rot_z_deg, z_offset_mm)
+# Applied BEFORE the BRD orient rotation.
+# rot_z: aligns STEP pin axis with BRD pad axis (+90 for KiCad DIPs whose pins run along Y)
+# rot_x/rot_y: for connectors that need to face a board edge instead of pointing up
+# z_offset: aligns STEP board surface with Z=0
+STEP_PRE_TRANSFORM = {
+    # KiCad DIPs: pins along Y in STEP, pads along X in BRD -> +90 Z
+    "DIP-8__300":   (0, 0, 90, 0),
+    "DIP-14__300":  (0, 0, 90, 0),
+    "DIP-16__300":  (0, 0, 90, 0),
+    "DIP-18__300":  (0, 0, 90, 0),
+    "DIP-20__300":  (0, 0, 90, 0),
+    "DIP-24__600":  (0, 0, 90, 0),
+    "DIP-28__600":  (0, 0, 90, 0),
+    "DIP-40__600":  (0, 0, 90, 0),
+    # Pin headers: same convention as DIPs
+    "PIN_ARRAY_2X1": (0, 0, 90, 0),
+    "PIN_ARRAY_2X2": (0, 0, 90, 0),
+    "PIN_ARRAY_4x1": (0, 0, 90, 0),
+    # ISA slot: body below Z=0, shift up
+    "62":                   (0, 0, 0, 15.5),
+    "62PinEdgeIOConnector": (0, 0, 0, 15.5),
+    # DIN connectors: pins exit at Y=-10.4 in STEP. After +90 X-rot, pins go to Z=-10.4.
+    # Z offset +10.4 lifts pin bases to board surface (Z=0), body sits above.
+    "5PINDIN":  (90, 0, 0, 10.4),
+    "5PINDIN2": (90, 0, 0, 10.4),
+    # Power connector: pins along X in STEP, pads along X in BRD, no Z-rot needed
+    "POWER_CON": (0, 0, 0, 0),
+    # Relay: DIP-8 body, pins along Y like KiCad DIPs -> +90
+    "G5V-2DPDT": (0, 0, 90, 0),
 }
 
 REF_STEP = {
@@ -81,6 +102,19 @@ REF_STEP = {
     "RN2": "BO_4116R.step",
     "RN3": "BO_4116R.step",
     "RN4": "BO_4116R.step",
+}
+
+# Base rotation for ref-overridden components (same logic as STEP_BASE_ROTATION)
+# Per-ref pre-transforms (overrides STEP_PRE_TRANSFORM)
+REF_PRE_TRANSFORM = {
+    # 206-8.step: long axis already along X, no Z-rotation needed. Z offset for body.
+    "SW1": (0, 0, 0, 8.2),
+    "SW2": (0, 0, 0, 8.2),
+    # BO_4116R.step: long axis along Y, needs +90 like KiCad DIPs
+    "RN1": (0, 0, 90, 0),
+    "RN2": (0, 0, 90, 0),
+    "RN3": (0, 0, 90, 0),
+    "RN4": (0, 0, 90, 0),
 }
 
 # Cache: filename -> (OCC shape, bb_center_x, bb_center_y)
@@ -340,26 +374,49 @@ def main():
 
         # BRD component position (mils -> Blender mm with Y-flip)
         brd_x, brd_y = brd_to_blender(comp["x"], comp["y"])
-        # Negate orient for Y-flip, add per-footprint base rotation
-        base_rot = STEP_BASE_ROTATION.get(fp, 0)
-        angle_deg = -(comp["orient"] / 10.0) + base_rot
+        # Get pre-transform for this component (per-ref overrides per-footprint)
+        pre = REF_PRE_TRANSFORM.get(ref, STEP_PRE_TRANSFORM.get(fp, (0, 0, 0, 0)))
+        pre_rx, pre_ry, pre_rz, z_offset = pre
+
+        # BRD orient (negated for Y-flip)
+        brd_orient = -(comp["orient"] / 10.0)
 
         # Compute pad centroid in local coords (mils -> mm, with Y-flip)
         pad_cx_mm, pad_cy_mm = pad_centroid_mm(comp["pads"])
-        pad_cy_mm = -pad_cy_mm  # flip Y for local pads too
+        pad_cy_mm = -pad_cy_mm
 
-        # Alignment offset: shift STEP so its BB center aligns with pad centroid
-        offset_x = pad_cx_mm - step_cx
-        offset_y = pad_cy_mm - step_cy
+        # Build transform chain:
+        # 1. Center STEP at origin (subtract BB center)
+        # 2. Pre-rotate around component's own center
+        # 3. Translate to pad centroid offset + Z offset
+        # 4. BRD orient rotation
+        # 5. Translate to board position
 
-        # Transform: offset -> rotate -> translate
+        # 1. Center at origin
         trsf = gp_Trsf()
-        trsf.SetTranslation(gp_Vec(offset_x, offset_y, 0))
+        trsf.SetTranslation(gp_Vec(-step_cx, -step_cy, 0))
 
-        if abs(angle_deg) > 0.01:
+        # 2. Pre-rotations around origin (now component center)
+        for axis_dir, angle in [
+            (gp_Dir(1, 0, 0), pre_rx),
+            (gp_Dir(0, 1, 0), pre_ry),
+            (gp_Dir(0, 0, 1), pre_rz),
+        ]:
+            if abs(angle) > 0.01:
+                rot = gp_Trsf()
+                rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), axis_dir), math.radians(angle))
+                trsf = rot.Multiplied(trsf)
+
+        # 3. Offset to pad centroid + Z
+        t_offset = gp_Trsf()
+        t_offset.SetTranslation(gp_Vec(pad_cx_mm, pad_cy_mm, z_offset))
+        trsf = t_offset.Multiplied(trsf)
+
+        # 4. BRD orient (Z rotation)
+        if abs(brd_orient) > 0.01:
             rot = gp_Trsf()
             rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
-                            math.radians(angle_deg))
+                            math.radians(brd_orient))
             trsf = rot.Multiplied(trsf)
 
         # Final translation to board position
