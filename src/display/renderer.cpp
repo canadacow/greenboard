@@ -146,6 +146,12 @@ struct DxState {
     ImVec2 cga_pan = ImVec2(0, 0);
     float cga_zoom = 1.0f;
 
+    // Monitor: composite-NTSC filter (CGA only). Models the analog
+    // composite output of an NTSC monitor: chroma/luma encode at the
+    // colorburst rate (4 dots/cycle), demodulate with a 4-tap box
+    // filter. Reproduces hi-res text artifact colors and color bleed.
+    bool composite_mode = false;
+
     // Molly guard state for reset
     bool confirm_reset = false;
 
@@ -208,6 +214,7 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         static const char blit_hlsl[] = R"(
             cbuffer BlitCB : register(b0) {
                 float4 uv_rect;  // (u0, v0, u1, v1) source rect in texture
+                float4 params;   // x=composite flag, y=tex_w, z=tex_h, w=unused
             };
             struct VS_OUT { float4 pos : SV_Position; float2 uv : TEXCOORD; };
             VS_OUT VS(uint id : SV_VertexID) {
@@ -219,7 +226,92 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
             }
             Texture2D tex : register(t0);
             SamplerState samp : register(s0);
-            float4 PS(VS_OUT i) : SV_Target { return tex.Sample(samp, i.uv); }
+
+            // ----- Composite NTSC filter -------------------------------
+            // Models a CGA composite monitor.  The CGA dot clock is
+            // 14.318 MHz = 4 x colorburst (3.579545 MHz), so each source
+            // pixel is exactly 90 degrees of chroma carrier phase.
+            //
+            // We treat the rasterized RGB as the "ideal" YIQ signal,
+            // encode it onto a composite scalar at each source pixel's
+            // phase, then demodulate Y/I/Q with a 4-tap box filter
+            // (one full colorburst cycle).  Constant color regions
+            // round-trip; rapid hires luma transitions get misread as
+            // chroma -- the classic CGA composite artifact behaviour.
+            //
+            // Calibration constants come from reenigne's CGA composite
+            // reference (used by 86Box / PCem / DOSBox vid_cga_comp.c):
+            //
+            //   Carrier base phase = 33 deg (analog delay through the
+            //                                CGA output stage)
+            //                      + 90 deg (chroma reference rotation)
+            //                      + mode_hue (4 deg gfx, 14 deg text)
+            //
+            //   YIQ -> RGB matrix is the FCC NTSC standard, exact
+            //   coefficients matching vid_cga_comp.c.
+            //
+            //   YIQ encoding uses 0.299/0.587/0.114 luma weights and
+            //   the standard I/Q rotated chroma vectors.
+            //
+            // We default to text-mode hue (14 deg) since the toggle is
+            // a global monitor-level setting; gfx mode is only 10 deg
+            // off and the artifact colors look very close.
+            #define COMP_BASE_DEG    (33.0 + 90.0 + 14.0)  // 137 deg
+            #define COMP_PIX_RAD     1.5707963             // pi/2 / pixel
+            #define COMP_BASE_RAD    (COMP_BASE_DEG * 0.01745329)
+            #define COMP_SAT         1.15  // CGA composite is hot vs ITU
+
+            float4 PS_composite(VS_OUT i) {
+                float tex_w = params.y;
+                float inv_w = 1.0 / tex_w;
+
+                float src_x  = i.uv.x * tex_w - 0.5;
+                int   center = (int)floor(src_x);
+
+                float Y_acc = 0, I_acc = 0, Q_acc = 0;
+
+                [unroll] for (int dx = -1; dx <= 2; dx++) {
+                    int sx = center + dx;
+                    float u = (float(sx) + 0.5) * inv_w;
+                    float3 c = tex.SampleLevel(samp, float2(u, i.uv.y), 0).rgb;
+
+                    float Y =  0.299*c.r + 0.587*c.g + 0.114*c.b;
+                    float I =  0.595716*c.r - 0.274453*c.g - 0.321263*c.b;
+                    float Q =  0.211456*c.r - 0.522591*c.g + 0.311135*c.b;
+
+                    // Carrier phase at this source dot, with reenigne's
+                    // base offset (CGA analog delay + reference rot +
+                    // mode hue).
+                    float ph = float(sx) * COMP_PIX_RAD + COMP_BASE_RAD;
+                    float cs = cos(ph), sn = sin(ph);
+
+                    // Encode -> single composite scalar.
+                    float comp = Y + I*cs + Q*sn;
+
+                    // Demodulate (running box-filter accumulators).
+                    // The factor of 2 inside cancels with /4 below to
+                    // produce baseband I, Q.
+                    Y_acc += comp;
+                    I_acc += comp * 2.0 * cs;
+                    Q_acc += comp * 2.0 * sn;
+                }
+
+                float Yo =  Y_acc * 0.25;
+                float Io =  I_acc * 0.25 * COMP_SAT;
+                float Qo =  Q_acc * 0.25 * COMP_SAT;
+
+                // 86Box / FCC NTSC YIQ -> RGB matrix.
+                float3 rgb = float3(
+                    Yo + 0.9563*Io + 0.6210*Qo,
+                    Yo - 0.2721*Io - 0.6474*Qo,
+                    Yo - 1.1069*Io + 1.7046*Qo);
+                return float4(saturate(rgb), 1);
+            }
+
+            float4 PS(VS_OUT i) : SV_Target {
+                if (params.x > 0.5) return PS_composite(i);
+                return tex.Sample(samp, i.uv);
+            }
         )";
         ComPtr<ID3DBlob> vs_blob, ps_blob, err;
         D3DCompile(blit_hlsl, sizeof(blit_hlsl), "blit_vs", nullptr, nullptr,
@@ -234,9 +326,9 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
         device->CreateSamplerState(&sd, &blit_sampler);
 
-        // UV rect constant buffer for source crop
+        // Constant buffer: float4 uv_rect + float4 params
         D3D11_BUFFER_DESC cbd = {};
-        cbd.ByteWidth = 16;  // float4
+        cbd.ByteWidth = 32;  // 2 x float4
         cbd.Usage = D3D11_USAGE_DYNAMIC;
         cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -285,12 +377,19 @@ void DxState::render_display() {
             float clear[] = { 0, 0, 0, 1 };
             ctx->ClearRenderTargetView(rtv.Get(), clear);
 
-            // Upload source UV rect from the rasterizer
+            // Upload source UV rect + filter params from the rasterizer.
+            // Composite filter is monitor-side and only meaningful for CGA.
             auto uv = rasterizer->output_uv_rect();
             D3D11_MAPPED_SUBRESOURCE mapped;
             ctx->Map(blit_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-            float uv_data[4] = { uv.u0, uv.v0, uv.u1, uv.v1 };
-            memcpy(mapped.pData, uv_data, 16);
+            float cb_data[8] = {
+                uv.u0, uv.v0, uv.u1, uv.v1,
+                (cga && composite_mode) ? 1.0f : 0.0f,
+                (float)CgaRasterizer::OUT_W,
+                (float)CgaRasterizer::OUT_H,
+                0.0f
+            };
+            memcpy(mapped.pData, cb_data, sizeof(cb_data));
             ctx->Unmap(blit_cb.Get(), 0);
 
             ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
@@ -301,6 +400,7 @@ void DxState::render_display() {
             ctx->VSSetShader(blit_vs.Get(), nullptr, 0);
             ctx->VSSetConstantBuffers(0, 1, blit_cb.GetAddressOf());
             ctx->PSSetShader(blit_ps.Get(), nullptr, 0);
+            ctx->PSSetConstantBuffers(0, 1, blit_cb.GetAddressOf());
             ctx->PSSetShaderResources(0, 1, &srv);
             ctx->PSSetSamplers(0, 1, blit_sampler.GetAddressOf());
             ctx->Draw(3, 0);
@@ -1160,6 +1260,18 @@ void DxState::render_system_window() {
         ImGui::TextColored(dim, "RAM: 256 KB planar DRAM");
     ImGui::TextColored(dim, "Display: %s", cga ? "CGA" : "MDA");
     ImGui::TextColored(dim, "ROM: GLABIOS 0.4.1");
+
+    // --- Monitor (CGA only): composite vs RGBI ---
+    if (cga) {
+        ImGui::Separator();
+        ImGui::TextColored(grn, "Monitor");
+        if (ImGui::Checkbox("Composite mode", &composite_mode)) {
+            spdlog::info("[System] CGA composite mode {}", composite_mode ? "ON" : "OFF");
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Simulate an NTSC composite monitor.\n"
+                              "Color bleed and hi-res text artifact colors.");
+    }
 
     // --- ISA Expansion Slots ---
     ImGui::Separator();
