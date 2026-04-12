@@ -404,9 +404,10 @@ def main():
 
         # BRD position and orient (with per-ref overrides for BRD errors)
         comp_x_mil, comp_y_mil = comp["x"], comp["y"]
-        # DIN connectors: BRD places them 520 mils from board edge; move flush to edge
+        # DIN connectors: BRD error -- manual correction from board inspection.
         if ref in ("J6", "J7"):
-            comp_x_mil = bounds["x_min"]
+            comp_x_mil = comp["x"] - 7.0 / MIL_TO_MM    # -7mm in X
+            comp_y_mil = comp["y"] - 1.0 / MIL_TO_MM     # -1mm in Y
         brd_x, brd_y = brd_to_blender(comp_x_mil, comp_y_mil)
         brd_orient = -(comp["orient"] / 10.0)
 
