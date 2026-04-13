@@ -834,7 +834,10 @@ def main():
     t0 = time.time()
     m = extrude_multi(board_h, THIRD, z_offset=-2*THIRD)
     if m:
-        apply_material(m, MAT_PCB)
+        apply_material(m, PBRMaterial(name="PCB_Core", **{
+            "baseColorFactor": MAT_PCB.baseColorFactor,
+            "metallicFactor": MAT_PCB.metallicFactor,
+            "roughnessFactor": MAT_PCB.roughnessFactor}))
         scene.add_geometry(m, node_name="PCB_Core")
         print(f"  Core: {len(m.faces)} tris ({time.time()-t0:.1f}s)")
 
@@ -846,7 +849,11 @@ def main():
         bot_board_2d = board_h.difference(bot_traces_2d)
     m = extrude_multi(bot_board_2d, THIRD, z_offset=-PCB_THICKNESS)
     if m:
-        apply_material(m, MAT_PCB)
+        m.invert()
+        apply_material(m, PBRMaterial(name="PCB_Bot", **{
+            "baseColorFactor": MAT_PCB.baseColorFactor,
+            "metallicFactor": MAT_PCB.metallicFactor,
+            "roughnessFactor": MAT_PCB.roughnessFactor}))
         scene.add_geometry(m, node_name="PCB_Bot")
         print(f"  PCB bot: {len(m.faces)} tris ({time.time()-t0:.1f}s)")
 
@@ -867,7 +874,24 @@ def main():
         scene.add_geometry(via_mesh, node_name="Vias")
         print(f"  Vias: {len(via_mesh.faces)} tris")
 
-    # c) Components (tessellate once per STEP, clone + matrix-transform per placement)
+    # d) UV-map top layer meshes to board bounds (for silkscreen texture in Blender)
+    def apply_board_uv(mesh):
+        """Add UVs mapping vertex XY to board-normalized [0,1] coordinates."""
+        verts = mesh.vertices
+        u = (verts[:, 0] - bx0) / (bx1 - bx0)
+        v = (verts[:, 1] - by0) / (by1 - by0)
+        uv = np.column_stack([u, v]).astype(np.float32)
+        mesh.visual = trimesh.visual.TextureVisuals(uv=uv, material=mesh.visual.material)
+
+    for node_name in ("PCB_Top", "Traces_Top"):
+        try:
+            _, geom_key = scene.graph[node_name]
+            apply_board_uv(scene.geometry[geom_key])
+            print(f"  UV mapped {node_name}")
+        except (KeyError, ValueError):
+            pass
+
+    # e) Components (tessellate once per STEP, clone + matrix-transform per placement)
     print("Placing components...")
     placed = 0
     skipped = 0
