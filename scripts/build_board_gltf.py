@@ -526,51 +526,60 @@ def main():
     holes_2d = unary_union([Point(*brd_to_blender(c["x"], c["y"])).buffer(1.6)
                             for c in components if c["footprint"] == "HOLE"])
 
-    SKIN = 0.1  # trace inlay depth (mm) -- visible at board scale
+    THIRD = PCB_THICKNESS / 3.0
 
-    # Board with holes, minus ALL trace cutouts (top + bottom)
-    board_cutout = board_2d
+    board_h = board_2d
     if holes_2d and not holes_2d.is_empty:
-        board_cutout = board_cutout.difference(holes_2d)
-    if top_traces_2d and not top_traces_2d.is_empty:
-        board_cutout = board_cutout.difference(top_traces_2d)
-    if bot_traces_2d and not bot_traces_2d.is_empty:
-        board_cutout = board_cutout.difference(bot_traces_2d)
+        board_h = board_2d.difference(holes_2d)
 
-    # Board slab: full thickness, with cutout holes for both trace layers
-    # Z = -PCB_THICKNESS to 0
-    print("Extruding board...")
+    # Top layer: board minus top traces + top traces. Z = -THIRD to 0
+    print("Top layer...")
     t0 = time.time()
-    board_mesh = extrude_multi(board_cutout, PCB_THICKNESS, z_offset=-PCB_THICKNESS)
-    apply_material(board_mesh, MAT_PCB)
-    scene.add_geometry(board_mesh, node_name="PCB_Board")
-    print(f"  Board: {len(board_mesh.faces)} tris ({time.time()-t0:.1f}s)")
-
-    # Top traces: Z = -SKIN to 0, inlaid flush with board top
+    top_board_2d = board_h
     if top_traces_2d and not top_traces_2d.is_empty:
-        print("Extruding top traces...")
-        t0 = time.time()
-        top_clipped = top_traces_2d.intersection(board_2d)
-        if holes_2d and not holes_2d.is_empty:
-            top_clipped = top_clipped.difference(holes_2d)
-        top_mesh = extrude_multi(top_clipped, SKIN, z_offset=-SKIN)
-        if top_mesh:
-            apply_material(top_mesh, MAT_TRACE)
-            scene.add_geometry(top_mesh, node_name="Traces_Top")
-            print(f"  Top traces: {len(top_mesh.faces)} tris ({time.time()-t0:.1f}s)")
+        top_board_2d = board_h.difference(top_traces_2d)
+    m = extrude_multi(top_board_2d, THIRD, z_offset=-THIRD)
+    if m:
+        apply_material(m, MAT_PCB)
+        scene.add_geometry(m, node_name="PCB_Top")
+        print(f"  PCB top: {len(m.faces)} tris ({time.time()-t0:.1f}s)")
 
-    # Bottom traces: Z = -PCB_THICKNESS to -PCB_THICKNESS + SKIN, inlaid flush with board bottom
+    if top_traces_2d and not top_traces_2d.is_empty:
+        tc = top_traces_2d.intersection(board_h)
+        m = extrude_multi(tc, THIRD, z_offset=-THIRD)
+        if m:
+            apply_material(m, MAT_TRACE)
+            scene.add_geometry(m, node_name="Traces_Top")
+            print(f"  Top traces: {len(m.faces)} tris")
+
+    # Core: full board, no cutouts. Z = -2*THIRD to -THIRD
+    print("Core...")
+    t0 = time.time()
+    m = extrude_multi(board_h, THIRD, z_offset=-2*THIRD)
+    if m:
+        apply_material(m, MAT_PCB)
+        scene.add_geometry(m, node_name="PCB_Core")
+        print(f"  Core: {len(m.faces)} tris ({time.time()-t0:.1f}s)")
+
+    # Bottom layer: board minus bot traces + bot traces. Z = -PCB to -2*THIRD
+    print("Bottom layer...")
+    t0 = time.time()
+    bot_board_2d = board_h
     if bot_traces_2d and not bot_traces_2d.is_empty:
-        print("Extruding bottom traces...")
-        t0 = time.time()
-        bot_clipped = bot_traces_2d.intersection(board_2d)
-        if holes_2d and not holes_2d.is_empty:
-            bot_clipped = bot_clipped.difference(holes_2d)
-        bot_mesh = extrude_multi(bot_clipped, SKIN, z_offset=-PCB_THICKNESS)
-        if bot_mesh:
-            apply_material(bot_mesh, MAT_TRACE)
-            scene.add_geometry(bot_mesh, node_name="Traces_Bottom")
-            print(f"  Bottom traces: {len(bot_mesh.faces)} tris ({time.time()-t0:.1f}s)")
+        bot_board_2d = board_h.difference(bot_traces_2d)
+    m = extrude_multi(bot_board_2d, THIRD, z_offset=-PCB_THICKNESS)
+    if m:
+        apply_material(m, MAT_PCB)
+        scene.add_geometry(m, node_name="PCB_Bot")
+        print(f"  PCB bot: {len(m.faces)} tris ({time.time()-t0:.1f}s)")
+
+    if bot_traces_2d and not bot_traces_2d.is_empty:
+        bc = bot_traces_2d.intersection(board_h)
+        m = extrude_multi(bc, THIRD, z_offset=-PCB_THICKNESS)
+        if m:
+            apply_material(m, MAT_TRACE)
+            scene.add_geometry(m, node_name="Traces_Bottom")
+            print(f"  Bot traces: {len(m.faces)} tris")
 
     print("Building vias...")
     via_mesh = build_vias(vias_data)
