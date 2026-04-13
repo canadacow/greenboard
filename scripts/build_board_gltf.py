@@ -110,9 +110,19 @@ MAT_ISA_CONTACT = PBRMaterial(
 # Geometric face classifiers for STEP files without color data.
 # Called with (xmin, ymin, zmin, xmax, ymax, zmax) -> synthetic rgb_key string.
 def _isa_slot_classifier(xmin, ymin, zmin, xmax, ymax, zmax):
-    dx, dz = xmax - xmin, zmax - zmin
-    # Arch contacts: thin vertical features. Lead pins: flat at bottom.
-    if (dx < 3 and dz > 2) or (zmin < -18 and dz < 0.5):
+    dx, dy, dz = xmax - xmin, ymax - ymin, zmax - zmin
+    cx = (xmin + xmax) / 2
+    # End walls: span full Y width (dy > 3) -- always plastic body
+    if dy > 3:
+        return "isa_body"
+    # Curved end pieces beyond pin range -- plastic body
+    if abs(cx) > 38.5:
+        return "isa_body"
+    # Through-hole leads: flat at bottom
+    if zmin < -18 and dz < 0.5:
+        return "isa_lead"
+    # Arch contacts + pin shanks: thin vertical features
+    if dx < 3 and dz > 2:
         return "isa_contact"
     return "isa_body"
 
@@ -126,8 +136,8 @@ FOOTPRINT_FACE_CLASSIFIER = {
 # rgb_key=None means faces with no STEP color data
 # String keys come from geometric classifiers above
 FOOTPRINT_MAT_OVERRIDE = {
-    "62":                   {"isa_body": MAT_ISA_BODY, "isa_contact": MAT_ISA_CONTACT},
-    "62PinEdgeIOConnector": {"isa_body": MAT_ISA_BODY, "isa_contact": MAT_ISA_CONTACT},
+    "62":                   {"isa_body": MAT_ISA_BODY, "isa_contact": MAT_ISA_CONTACT, "isa_lead": MAT_LEAD},
+    "62PinEdgeIOConnector": {"isa_body": MAT_ISA_BODY, "isa_contact": MAT_ISA_CONTACT, "isa_lead": MAT_LEAD},
     "5PINDIN":   {None: MAT_DIN},
     "5PINDIN2":  {None: MAT_DIN},
     "POWER_CON": {(1.0, 1.0, 1.0): MAT_MOLEX_BODY, (0.216, 0.216, 0.216): MAT_LEAD, None: MAT_LEAD},
