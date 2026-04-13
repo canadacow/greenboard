@@ -39,12 +39,74 @@ MIL_TO_MM = 0.0254
 PCB_THICKNESS = 1.6
 COPPER_THICKNESS = 0.035
 
+# --- Patch trimesh to deduplicate shared textures in glTF export ---
+import trimesh.exchange.gltf as _gltf
+_orig_append_image = _gltf._append_image
+_image_index_cache = {}
+
+def _dedup_append_image(img, tree, buffer_items, extension_webp):
+    key = id(img)
+    if key in _image_index_cache:
+        return _image_index_cache[key]
+    idx = _orig_append_image(img, tree, buffer_items, extension_webp)
+    _image_index_cache[key] = idx
+    return idx
+
+_gltf._append_image = _dedup_append_image
+
+# --- PBR Textures ---
+from PIL import Image as _PILImage
+
+def _load_pbr(directory):
+    """Load PBR textures from a directory. Returns (normal, roughness, ao) PIL images."""
+    normal = ao = None
+    mr = None  # metallicRoughness (glTF: G=roughness, B=metallic)
+    try:
+        normal = _PILImage.open(os.path.join(directory, "A23DTEX_Normal.jpg"))
+    except (OSError, IOError):
+        pass
+    try:
+        rough_img = _PILImage.open(os.path.join(directory, "A23DTEX_Roughness.jpg"))
+        rough_arr = np.array(rough_img.convert('L'))
+        # Check for separate metallic texture
+        metal_arr = np.zeros_like(rough_arr)
+        try:
+            metal_img = _PILImage.open(os.path.join(directory, "A23DTEX_Metallic.jpg"))
+            metal_arr = np.array(metal_img.convert('L'))
+        except (OSError, IOError):
+            pass
+        # Pack into glTF metallicRoughness: G=roughness B=metallic
+        mr_arr = np.zeros((*rough_arr.shape, 3), dtype=np.uint8)
+        mr_arr[:, :, 1] = rough_arr
+        mr_arr[:, :, 2] = metal_arr
+        mr = _PILImage.fromarray(mr_arr)
+    except (OSError, IOError):
+        pass
+    try:
+        ao = _PILImage.open(os.path.join(directory, "A23DTEX_Ambient Occlusion.jpg"))
+    except (OSError, IOError):
+        pass
+    albedo = None
+    try:
+        albedo = _PILImage.open(os.path.join(directory, "A23DTEX_Albedo.jpg"))
+    except (OSError, IOError):
+        pass
+    return normal, mr, ao, albedo
+
+_PBR_IC_NORMAL, _PBR_IC_MR, _PBR_IC_AO, _PBR_IC_ALBEDO = _load_pbr("assets/pbr/ic")
+_PBR_PCB_NORMAL, _PBR_PCB_MR, _PBR_PCB_AO, _PBR_PCB_ALBEDO = _load_pbr("assets/pbr/pcb")
+_PBR_PLASTIC_NORMAL, _PBR_PLASTIC_MR, _PBR_PLASTIC_AO, _PBR_PLASTIC_ALBEDO = _load_pbr("assets/pbr/plastic_comp")
+_PBR_LEAD_NORMAL, _PBR_LEAD_MR, _PBR_LEAD_AO, _PBR_LEAD_ALBEDO = _load_pbr("assets/pbr/leads")
+
 # --- Materials ---
 MAT_PCB = PBRMaterial(
     name="PCB_Board",
     baseColorFactor=[0.0, 0.05, 0.016, 1.0],
     metallicFactor=0.0,
     roughnessFactor=0.6,
+    normalTexture=_PBR_PCB_NORMAL,
+    occlusionTexture=_PBR_PCB_AO,
+    metallicRoughnessTexture=_PBR_PCB_MR,
 )
 MAT_TRACE = PBRMaterial(
     name="Trace",
@@ -60,45 +122,60 @@ MAT_VIA = PBRMaterial(
 )
 MAT_IC_BODY = PBRMaterial(
     name="IC_Body",
-    baseColorFactor=[0.05, 0.05, 0.05, 1.0],
+    baseColorFactor=[0.0, 0.0, 0.0, 1.0],
     metallicFactor=0.0,
     roughnessFactor=0.35,
+    normalTexture=_PBR_IC_NORMAL,
+    occlusionTexture=_PBR_IC_AO,
+    metallicRoughnessTexture=_PBR_IC_MR,
 )
 MAT_LEAD = PBRMaterial(
     name="Lead_Tin",
-    baseColorFactor=[0.77, 0.77, 0.74, 1.0],
+    baseColorTexture=_PBR_LEAD_ALBEDO,
     metallicFactor=1.0,
     roughnessFactor=0.20,
+    normalTexture=_PBR_LEAD_NORMAL,
+    metallicRoughnessTexture=_PBR_LEAD_MR,
 )
 MAT_DIN = PBRMaterial(
     name="DIN_Connector",
-    baseColorFactor=[0.12, 0.12, 0.12, 1.0],
+    baseColorFactor=[0.0, 0.0, 0.0, 1.0],
     metallicFactor=0.6,
     roughnessFactor=0.35,
+    normalTexture=_PBR_PLASTIC_NORMAL,
+    metallicRoughnessTexture=_PBR_PLASTIC_MR,
 )
 MAT_MOLEX_BODY = PBRMaterial(
     name="Molex_White",
     baseColorFactor=[0.92, 0.90, 0.85, 1.0],
     metallicFactor=0.0,
     roughnessFactor=0.5,
+    normalTexture=_PBR_PLASTIC_NORMAL,
+    metallicRoughnessTexture=_PBR_PLASTIC_MR,
 )
 MAT_DIP_SWITCH = PBRMaterial(
     name="DIP_Switch",
     baseColorFactor=[0.0, 0.45, 0.55, 1.0],
     metallicFactor=0.0,
     roughnessFactor=0.4,
+    normalTexture=_PBR_PLASTIC_NORMAL,
+    metallicRoughnessTexture=_PBR_PLASTIC_MR,
 )
 MAT_RELAY_BODY = PBRMaterial(
     name="Relay_Body",
     baseColorFactor=[0.85, 0.55, 0.05, 1.0],
     metallicFactor=0.0,
     roughnessFactor=0.4,
+    normalTexture=_PBR_PLASTIC_NORMAL,
+    metallicRoughnessTexture=_PBR_PLASTIC_MR,
 )
 MAT_ISA_BODY = PBRMaterial(
     name="ISA_Body",
-    baseColorFactor=[0.06, 0.06, 0.06, 1.0],
+    baseColorFactor=[0.0, 0.0, 0.0, 1.0],
     metallicFactor=0.0,
     roughnessFactor=0.4,
+    normalTexture=_PBR_PLASTIC_NORMAL,
+    metallicRoughnessTexture=_PBR_PLASTIC_MR,
 )
 MAT_ISA_CONTACT = PBRMaterial(
     name="ISA_Contact",
@@ -495,8 +572,13 @@ def rgb_to_material(rgb):
     return mat
 
 
-def place_colored_meshes(scene, meshes, transform, node_name, mat_override=None):
-    """Clone cached meshes, apply transform and material, add to scene."""
+def place_colored_meshes(scene, meshes, transform, node_name,
+                         mat_override=None, label_img=None):
+    """Clone cached meshes, apply transform and material, add to scene.
+
+    If label_img is provided, the IC body mesh (MAT_IC_BODY) gets UV-mapped
+    with the label texture instead of a solid color.
+    """
     for i, (mesh, rgb) in enumerate(meshes):
         m = mesh.copy()
         m.apply_transform(transform)
@@ -506,8 +588,36 @@ def place_colored_meshes(scene, meshes, transform, node_name, mat_override=None)
             material = mat_override[rgb]
         else:
             material = rgb_to_material(rgb)
-        if material:
+
+        # Apply label texture to IC body mesh
+        is_body = (material is MAT_IC_BODY) if material else False
+        if is_body and label_img is not None:
+            verts = m.vertices
+            normals = m.face_normals
+            # UV map: project XY onto [0,1] based on mesh bounding box
+            x_min, y_min, z_min = verts.min(axis=0)
+            x_max, y_max, z_max = verts.max(axis=0)
+            dx = x_max - x_min
+            dy = y_max - y_min
+            if dx > 0.01 and dy > 0.01:
+                u = (verts[:, 0] - x_min) / dx
+                v = (verts[:, 1] - y_min) / dy
+                uv = np.column_stack([u, v]).astype(np.float32)
+                label_mat = PBRMaterial(
+                    name=f"Label_{node_name}",
+                    baseColorTexture=label_img,
+                    metallicFactor=0.0,
+                    roughnessFactor=0.35,
+                    normalTexture=_PBR_IC_NORMAL,
+                    occlusionTexture=_PBR_IC_AO,
+                    metallicRoughnessTexture=_PBR_IC_MR,
+                )
+                m.visual = trimesh.visual.TextureVisuals(uv=uv, material=label_mat)
+            elif material:
+                apply_material(m, material)
+        elif material:
             apply_material(m, material)
+
         suffix = f"_{i}" if len(meshes) > 1 else ""
         scene.add_geometry(m, node_name=f"{node_name}{suffix}")
 
@@ -892,6 +1002,19 @@ def main():
             pass
 
     # e) Components (tessellate once per STEP, clone + matrix-transform per placement)
+    # Load IC label textures
+    from PIL import Image as PILImage
+    LABEL_DIR = "assets/ic_labels_rendered"
+    _label_cache = {}
+    def get_label_img(ref):
+        if ref not in _label_cache:
+            path = os.path.join(LABEL_DIR, f"{ref}.png")
+            if os.path.exists(path):
+                _label_cache[ref] = PILImage.open(path).convert('RGB')
+            else:
+                _label_cache[ref] = None
+        return _label_cache[ref]
+
     print("Placing components...")
     placed = 0
     skipped = 0
@@ -962,7 +1085,9 @@ def main():
             mat = _translation(0, 0, SOCKET_HEIGHT) @ mat
 
         override = REF_MAT_OVERRIDE.get(ref) or FOOTPRINT_MAT_OVERRIDE.get(fp)
-        place_colored_meshes(scene, meshes, mat, f"{ref}_{comp['value']}", override)
+        label = get_label_img(ref)
+        place_colored_meshes(scene, meshes, mat, f"{ref}_{comp['value']}",
+                             override, label_img=label)
         placed += 1
 
     print(f"  Placed: {placed}, Skipped: {skipped}")
