@@ -232,7 +232,9 @@ def occ_shape_to_trimesh(shape, linear_deflection=0.1, angular_deflection=0.5):
 
     if not all_verts:
         return None
-    return trimesh.Trimesh(vertices=np.array(all_verts), faces=np.array(all_faces))
+    mesh = trimesh.Trimesh(vertices=np.array(all_verts), faces=np.array(all_faces))
+    mesh.fix_normals()
+    return mesh
 
 
 def pad_centroid_mm(pads):
