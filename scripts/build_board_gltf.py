@@ -118,10 +118,11 @@ def _isa_slot_classifier(xmin, ymin, zmin, xmax, ymax, zmax):
     # Curved end pieces beyond pin range -- plastic body
     if abs(cx) > 38.5:
         return "isa_body"
-    # Through-hole leads: flat at bottom
-    if zmin < -18 and dz < 0.5:
+    # Through-hole leads: small faces reaching below Z=-14.5 (pin shanks + bottoms)
+    # Exclude wide body walls (dx > 5)
+    if zmin < -14.5 and dx < 5:
         return "isa_lead"
-    # Arch contacts + pin shanks: thin vertical features
+    # Gold arch contacts: thin vertical features inside the slot
     if dx < 3 and dz > 2:
         return "isa_contact"
     return "isa_body"
