@@ -11,7 +11,6 @@ import numpy as np
 import trimesh
 from trimesh.visual.material import PBRMaterial
 
-from OCP.STEPControl import STEPControl_Reader
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE
@@ -20,10 +19,15 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
-from OCP.Bnd import Bnd_Box
-from OCP.BRepBndLib import BRepBndLib
-from OCP.gp import gp_Pnt, gp_Vec, gp_Ax1, gp_Dir, gp_Trsf
-from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+from OCP.gp import gp_Pnt, gp_Vec
+# XDE for STEP color extraction
+from OCP.STEPCAFControl import STEPCAFControl_Reader
+from OCP.XCAFApp import XCAFApp_Application
+from OCP.XCAFDoc import XCAFDoc_DocumentTool, XCAFDoc_ColorSurf, XCAFDoc_ColorGen
+from OCP.TDocStd import TDocStd_Document
+from OCP.TCollection import TCollection_ExtendedString
+from OCP.Quantity import Quantity_Color
+from OCP.TDF import TDF_LabelSequence
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -54,6 +58,86 @@ MAT_VIA = PBRMaterial(
     metallicFactor=1.0,
     roughnessFactor=0.30,
 )
+MAT_IC_BODY = PBRMaterial(
+    name="IC_Body",
+    baseColorFactor=[0.05, 0.05, 0.05, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.35,
+)
+MAT_LEAD = PBRMaterial(
+    name="Lead_Tin",
+    baseColorFactor=[0.77, 0.77, 0.74, 1.0],
+    metallicFactor=1.0,
+    roughnessFactor=0.20,
+)
+MAT_DIN = PBRMaterial(
+    name="DIN_Connector",
+    baseColorFactor=[0.12, 0.12, 0.12, 1.0],
+    metallicFactor=0.6,
+    roughnessFactor=0.35,
+)
+MAT_MOLEX_BODY = PBRMaterial(
+    name="Molex_White",
+    baseColorFactor=[0.92, 0.90, 0.85, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.5,
+)
+MAT_DIP_SWITCH = PBRMaterial(
+    name="DIP_Switch",
+    baseColorFactor=[0.0, 0.45, 0.55, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.4,
+)
+MAT_RELAY_BODY = PBRMaterial(
+    name="Relay_Body",
+    baseColorFactor=[0.85, 0.55, 0.05, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.4,
+)
+MAT_ISA_BODY = PBRMaterial(
+    name="ISA_Body",
+    baseColorFactor=[0.06, 0.06, 0.06, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.4,
+)
+MAT_ISA_CONTACT = PBRMaterial(
+    name="ISA_Contact",
+    baseColorFactor=[0.83, 0.69, 0.22, 1.0],
+    metallicFactor=1.0,
+    roughnessFactor=0.25,
+)
+
+# Geometric face classifiers for STEP files without color data.
+# Called with (xmin, ymin, zmin, xmax, ymax, zmax) -> synthetic rgb_key string.
+def _isa_slot_classifier(xmin, ymin, zmin, xmax, ymax, zmax):
+    dx, dz = xmax - xmin, zmax - zmin
+    # Arch contacts: thin vertical features. Lead pins: flat at bottom.
+    if (dx < 3 and dz > 2) or (zmin < -18 and dz < 0.5):
+        return "isa_contact"
+    return "isa_body"
+
+
+FOOTPRINT_FACE_CLASSIFIER = {
+    "62":                   _isa_slot_classifier,
+    "62PinEdgeIOConnector": _isa_slot_classifier,
+}
+
+# Per-footprint material overrides: {rgb_key -> material}
+# rgb_key=None means faces with no STEP color data
+# String keys come from geometric classifiers above
+FOOTPRINT_MAT_OVERRIDE = {
+    "62":                   {"isa_body": MAT_ISA_BODY, "isa_contact": MAT_ISA_CONTACT},
+    "62PinEdgeIOConnector": {"isa_body": MAT_ISA_BODY, "isa_contact": MAT_ISA_CONTACT},
+    "5PINDIN":   {None: MAT_DIN},
+    "5PINDIN2":  {None: MAT_DIN},
+    "POWER_CON": {(1.0, 1.0, 1.0): MAT_MOLEX_BODY, (0.216, 0.216, 0.216): MAT_LEAD, None: MAT_LEAD},
+    "G5V-2DPDT": {(0.019, 0.018, 0.018): MAT_RELAY_BODY},
+}
+# Per-ref overrides (take priority over footprint)
+REF_MAT_OVERRIDE = {
+    "SW1": {None: MAT_DIP_SWITCH},
+    "SW2": {None: MAT_DIP_SWITCH},
+}
 
 
 def apply_material(mesh, material):
@@ -172,46 +256,88 @@ REF_PRE_TRANSFORM = {
     "RN4": (0, 0, 90, 0),
 }
 
-# Cache: filename -> (OCC shape, bb_center_x, bb_center_y)
-_step_cache = {}
+# --- XDE STEP loading (extracts per-face colors) ---
+_xde_cache = {}  # filename -> (shape, color_tool, doc)  -- doc kept alive!
 
 
-def load_step(filename):
-    """Load STEP file, return raw OCC shape. Cached."""
-    if filename in _step_cache:
-        return _step_cache[filename]
+def load_step_xde(filename):
+    """Load STEP with XDE for color data. Returns (shape, color_tool). Cached."""
+    if filename in _xde_cache:
+        entry = _xde_cache[filename]
+        return (entry[0], entry[1])
     path = os.path.join(CHIPS_DIR, filename)
     if not os.path.exists(path):
         print(f"  WARNING: missing {path}")
-        _step_cache[filename] = None
-        return None
-    reader = STEPControl_Reader()
+        _xde_cache[filename] = (None, None, None)
+        return (None, None)
+
+    app = XCAFApp_Application.GetApplication_s()
+    doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
+    app.InitDocument(doc)
+
+    reader = STEPCAFControl_Reader()
+    reader.SetColorMode(True)
     reader.ReadFile(path)
-    reader.TransferRoots()
-    shape = reader.OneShape()
-    _step_cache[filename] = shape
-    return shape
+    reader.Transfer(doc)
+
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+
+    labels = TDF_LabelSequence()
+    shape_tool.GetFreeShapes(labels)
+    if labels.Length() == 0:
+        _xde_cache[filename] = (None, None, None)
+        return (None, None)
+
+    shape = shape_tool.GetShape_s(labels.Value(1))
+    _xde_cache[filename] = (shape, color_tool, doc)  # doc must stay alive
+    return (shape, color_tool)
 
 
-def get_bb_center_xy(shape):
-    """Return (cx, cy) of shape's bounding box in XY."""
-    box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box)
-    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
-    return ((xmin + xmax) / 2, (ymin + ymax) / 2)
+def tessellate_colored(shape, color_tool, linear_deflection=0.2, angular_deflection=0.5,
+                       face_classifier=None):
+    """Tessellate shape, grouping faces by STEP color.
 
+    Strategy: tessellate into ONE mesh first so fix_normals() sees the full
+    watertight topology, then split by color.  Splitting by color first
+    creates non-watertight sub-meshes where fix_normals() picks the wrong
+    winding direction.
 
-def occ_shape_to_trimesh(shape, linear_deflection=0.1, angular_deflection=0.5):
-    """Tessellate an OCC shape to a trimesh.Trimesh."""
+    face_classifier: optional callable(xmin,ymin,zmin,xmax,ymax,zmax) -> key
+        Used when a face has no STEP color to classify by geometry.
+
+    Returns list of (trimesh, key) tuples, one per color group.
+    """
     BRepMesh_IncrementalMesh(shape, linear_deflection, False, angular_deflection, True)
 
     all_verts = []
     all_faces = []
+    face_colors = []  # one rgb_key per triangle
     offset = 0
 
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
     while explorer.More():
         face = TopoDS.Face_s(explorer.Current())
+
+        # Query face color from XDE (faces not in label tree raise)
+        rgb_key = None
+        if color_tool is not None:
+            try:
+                c = Quantity_Color()
+                if (color_tool.GetColor(face, XCAFDoc_ColorSurf, c) or
+                        color_tool.GetColor(face, XCAFDoc_ColorGen, c)):
+                    rgb_key = (round(c.Red(), 3), round(c.Green(), 3), round(c.Blue(), 3))
+            except Exception:
+                pass
+
+        # Geometric fallback for colorless faces
+        if rgb_key is None and face_classifier is not None:
+            from OCP.Bnd import Bnd_Box
+            from OCP.BRepBndLib import BRepBndLib
+            box = Bnd_Box()
+            BRepBndLib.Add_s(face, box)
+            rgb_key = face_classifier(*box.Get())
+
         loc = TopLoc_Location()
         tri = BRep_Tool.Triangulation_s(face, loc)
         if tri is not None:
@@ -226,15 +352,153 @@ def occ_shape_to_trimesh(shape, linear_deflection=0.1, angular_deflection=0.5):
             for i in range(1, n_tri + 1):
                 i1, i2, i3 = tri.Triangle(i).Get()
                 all_faces.append([i1 - 1 + offset, i2 - 1 + offset, i3 - 1 + offset])
+                face_colors.append(rgb_key)
 
             offset += n_nodes
+
         explorer.Next()
 
     if not all_verts:
+        return []
+
+    # Fix normals on the combined mesh (watertight = correct winding)
+    combined = trimesh.Trimesh(
+        vertices=np.array(all_verts), faces=np.array(all_faces))
+    combined.fix_normals()
+
+    # Split fixed faces by color group
+    color_set = set(face_colors)
+    result = []
+    for rgb_key in color_set:
+        mask = [fc == rgb_key for fc in face_colors]
+        sub = combined.submesh([mask], append=True)
+        if sub and len(sub.faces) > 0:
+            result.append((sub, rgb_key))
+
+    return result
+
+
+_tess_cache = {}  # filename -> [(trimesh, rgb_key), ...]
+
+
+def get_colored_meshes(filename, linear_deflection=0.2, face_classifier=None):
+    """Get tessellated color-grouped meshes for a STEP file. Cached."""
+    cache_key = (filename, face_classifier is not None)
+    if cache_key in _tess_cache:
+        return _tess_cache[cache_key]
+
+    shape, color_tool = load_step_xde(filename)
+    if shape is None:
+        _tess_cache[cache_key] = None
         return None
-    mesh = trimesh.Trimesh(vertices=np.array(all_verts), faces=np.array(all_faces))
-    mesh.fix_normals()
-    return mesh
+
+    meshes = tessellate_colored(shape, color_tool, linear_deflection,
+                                face_classifier=face_classifier)
+    if not meshes:
+        _tess_cache[cache_key] = None
+        return None
+
+    _tess_cache[cache_key] = meshes
+    return meshes
+
+
+def meshes_bb_center_xy(meshes):
+    """Get XY bounding box center of a list of (trimesh, _) tuples."""
+    all_v = np.vstack([m.vertices for m, _ in meshes])
+    return ((all_v[:, 0].min() + all_v[:, 0].max()) / 2,
+            (all_v[:, 1].min() + all_v[:, 1].max()) / 2)
+
+
+def _translation(x, y, z):
+    m = np.eye(4)
+    m[0, 3] = x
+    m[1, 3] = y
+    m[2, 3] = z
+    return m
+
+
+def _rotation(axis, deg):
+    """Rotation matrix. axis: 0=X, 1=Y, 2=Z."""
+    r = math.radians(deg)
+    c, s = math.cos(r), math.sin(r)
+    m = np.eye(4)
+    if axis == 0:
+        m[1, 1] = c; m[1, 2] = -s; m[2, 1] = s; m[2, 2] = c
+    elif axis == 1:
+        m[0, 0] = c; m[0, 2] = s; m[2, 0] = -s; m[2, 2] = c
+    else:
+        m[0, 0] = c; m[0, 1] = -s; m[1, 0] = s; m[1, 1] = c
+    return m
+
+
+def _apply_pre_rotation(meshes, pre_rx, pre_ry, pre_rz):
+    """Compute pre-rotation matrix and new BB center. Returns (matrix, new_cx, new_cy)."""
+    cx, cy = meshes_bb_center_xy(meshes)
+    has_rot = any(abs(a) > 0.01 for a in (pre_rx, pre_ry, pre_rz))
+    if not has_rot:
+        return np.eye(4), cx, cy
+
+    mat = _translation(-cx, -cy, 0)
+    for axis, angle in [(0, pre_rx), (1, pre_ry), (2, pre_rz)]:
+        if abs(angle) > 0.01:
+            mat = _rotation(axis, angle) @ mat
+
+    # Compute new BB center after rotation
+    all_v = np.vstack([m.vertices for m, _ in meshes])
+    v4 = np.column_stack([all_v, np.ones(len(all_v))])
+    v_rot = (mat @ v4.T).T
+    new_cx = (v_rot[:, 0].min() + v_rot[:, 0].max()) / 2
+    new_cy = (v_rot[:, 1].min() + v_rot[:, 1].max()) / 2
+    return mat, new_cx, new_cy
+
+
+_mat_cache = {}
+
+
+def rgb_to_material(rgb):
+    """Map STEP face color to a PBR material."""
+    if rgb is None:
+        return None
+    if rgb in _mat_cache:
+        return _mat_cache[rgb]
+
+    r, g, b = rgb
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    mx = max(r, g, b)
+    mn = min(r, g, b)
+    sat = (mx - mn) / mx if mx > 0.01 else 0.0
+
+    if sat < 0.15 and lum > 0.35:
+        mat = MAT_LEAD
+    elif lum < 0.15:
+        mat = MAT_IC_BODY
+    else:
+        mat = PBRMaterial(
+            name=f"Color_{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}",
+            baseColorFactor=[r, g, b, 1.0],
+            metallicFactor=0.0,
+            roughnessFactor=0.5,
+        )
+
+    _mat_cache[rgb] = mat
+    return mat
+
+
+def place_colored_meshes(scene, meshes, transform, node_name, mat_override=None):
+    """Clone cached meshes, apply transform and material, add to scene."""
+    for i, (mesh, rgb) in enumerate(meshes):
+        m = mesh.copy()
+        m.apply_transform(transform)
+        # Check override first, then default mapping
+        material = None
+        if mat_override and rgb in mat_override:
+            material = mat_override[rgb]
+        else:
+            material = rgb_to_material(rgb)
+        if material:
+            apply_material(m, material)
+        suffix = f"_{i}" if len(meshes) > 1 else ""
+        scene.add_geometry(m, node_name=f"{node_name}{suffix}")
 
 
 def pad_centroid_mm(pads):
@@ -592,7 +856,7 @@ def main():
         scene.add_geometry(via_mesh, node_name="Vias")
         print(f"  Vias: {len(via_mesh.faces)} tris")
 
-    # c) Components
+    # c) Components (tessellate once per STEP, clone + matrix-transform per placement)
     print("Placing components...")
     placed = 0
     skipped = 0
@@ -609,127 +873,62 @@ def main():
             skipped += 1
             continue
 
-        raw_shape = load_step(step_file)
-        if raw_shape is None:
+        classifier = FOOTPRINT_FACE_CLASSIFIER.get(fp)
+        meshes = get_colored_meshes(step_file, face_classifier=classifier)
+        if not meshes:
             skipped += 1
             continue
 
-        # Get pre-transform (per-ref overrides per-footprint)
+        # Pre-transform (per-ref overrides per-footprint)
         pre = REF_PRE_TRANSFORM.get(ref, STEP_PRE_TRANSFORM.get(fp, (0, 0, 0, 0)))
         pre_rx, pre_ry, pre_rz, z_offset = pre
+        pre_mat, step_cx, step_cy = _apply_pre_rotation(meshes, pre_rx, pre_ry, pre_rz)
 
-        # Step 1: Apply pre-rotations to the raw shape around its own BB center,
-        #         THEN compute the new BB center for pad alignment.
-        step_cx, step_cy = get_bb_center_xy(raw_shape)
-        has_pre_rot = any(abs(a) > 0.01 for a in (pre_rx, pre_ry, pre_rz))
-
-        if has_pre_rot:
-            # Center at origin, rotate, then get new BB center
-            pre_trsf = gp_Trsf()
-            pre_trsf.SetTranslation(gp_Vec(-step_cx, -step_cy, 0))
-            for axis_dir, angle in [
-                (gp_Dir(1, 0, 0), pre_rx),
-                (gp_Dir(0, 1, 0), pre_ry),
-                (gp_Dir(0, 0, 1), pre_rz),
-            ]:
-                if abs(angle) > 0.01:
-                    rot = gp_Trsf()
-                    rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), axis_dir), math.radians(angle))
-                    pre_trsf = rot.Multiplied(pre_trsf)
-            pre_rotated = BRepBuilderAPI_Transform(raw_shape, pre_trsf, True).Shape()
-            # New BB center after rotation
-            step_cx, step_cy = get_bb_center_xy(pre_rotated)
-            occ_shape = pre_rotated
-        else:
-            occ_shape = raw_shape
-
-        # BRD position and orient (with per-ref overrides for BRD errors)
+        # BRD position and orient
         comp_x_mil, comp_y_mil = comp["x"], comp["y"]
-        # DIN connectors: BRD error -- manual correction from board inspection.
         if ref in ("J6", "J7"):
-            comp_x_mil = comp["x"] - 7.0 / MIL_TO_MM    # -7mm in X
-            comp_y_mil = comp["y"] - 1.0 / MIL_TO_MM     # -1mm in Y
+            comp_x_mil = comp["x"] - 7.0 / MIL_TO_MM
+            comp_y_mil = comp["y"] - 1.0 / MIL_TO_MM
         brd_x, brd_y = brd_to_blender(comp_x_mil, comp_y_mil)
         brd_orient = -(comp["orient"] / 10.0)
 
-        # Pad centroid in local coords (mils -> mm, Y-flipped)
         pad_cx_mm, pad_cy_mm = pad_centroid_mm(comp["pads"])
         pad_cy_mm = -pad_cy_mm
 
-        # Step 2: Align BB center to pad centroid, apply Z offset, BRD orient, board position
-        trsf = gp_Trsf()
-        trsf.SetTranslation(gp_Vec(pad_cx_mm - step_cx, pad_cy_mm - step_cy, z_offset))
-
+        # Build transform: align to pad centroid, orient, position
+        mat = _translation(pad_cx_mm - step_cx, pad_cy_mm - step_cy, z_offset) @ pre_mat
         if abs(brd_orient) > 0.01:
-            rot = gp_Trsf()
-            rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
-                            math.radians(brd_orient))
-            trsf = rot.Multiplied(trsf)
+            mat = _rotation(2, brd_orient) @ mat
+        mat = _translation(brd_x, brd_y, 0) @ mat
 
-        # Final translation to board position
-        final = gp_Trsf()
-        final.SetTranslation(gp_Vec(brd_x, brd_y, 0))
-        trsf = final.Multiplied(trsf)
-
-        transformed = BRepBuilderAPI_Transform(occ_shape, trsf, True).Shape()
-
-        # If socketed, place the socket first at board level, then elevate the IC
+        # Socket handling
         socket_file = SOCKETED_REFS.get(ref)
         if socket_file:
-            socket_shape = load_step(socket_file)
-            if socket_shape:
-                # Socket uses same footprint as IC -> same pre-transform & alignment
+            sock_meshes = get_colored_meshes(socket_file)
+            if sock_meshes:
                 sock_pre = STEP_PRE_TRANSFORM.get(fp, (0, 0, 0, 0))
-                sock_rx, sock_ry, sock_rz, _ = sock_pre
-                has_sock_rot = any(abs(a) > 0.01 for a in (sock_rx, sock_ry, sock_rz))
+                sock_mat, sock_cx, sock_cy = _apply_pre_rotation(
+                    sock_meshes, sock_pre[0], sock_pre[1], sock_pre[2])
 
-                if has_sock_rot:
-                    sock_cx, sock_cy = get_bb_center_xy(socket_shape)
-                    sock_trsf = gp_Trsf()
-                    sock_trsf.SetTranslation(gp_Vec(-sock_cx, -sock_cy, 0))
-                    for axis_dir, angle in [
-                        (gp_Dir(1, 0, 0), sock_rx),
-                        (gp_Dir(0, 1, 0), sock_ry),
-                        (gp_Dir(0, 0, 1), sock_rz),
-                    ]:
-                        if abs(angle) > 0.01:
-                            rot = gp_Trsf()
-                            rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), axis_dir), math.radians(angle))
-                            sock_trsf = rot.Multiplied(sock_trsf)
-                    socket_shape = BRepBuilderAPI_Transform(socket_shape, sock_trsf, True).Shape()
-
-                sock_cx2, sock_cy2 = get_bb_center_xy(socket_shape)
-                sock_align = gp_Trsf()
-                sock_align.SetTranslation(gp_Vec(pad_cx_mm - sock_cx2, pad_cy_mm - sock_cy2, 0))
+                sock_final = _translation(
+                    pad_cx_mm - sock_cx, pad_cy_mm - sock_cy, 0) @ sock_mat
                 if abs(brd_orient) > 0.01:
-                    rot = gp_Trsf()
-                    rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), math.radians(brd_orient))
-                    sock_align = rot.Multiplied(sock_align)
-                sock_final = gp_Trsf()
-                sock_final.SetTranslation(gp_Vec(brd_x, brd_y, 0))
-                sock_align = sock_final.Multiplied(sock_align)
+                    sock_final = _rotation(2, brd_orient) @ sock_final
+                sock_final = _translation(brd_x, brd_y, 0) @ sock_final
 
-                sock_transformed = BRepBuilderAPI_Transform(socket_shape, sock_align, True).Shape()
-                sock_mesh = occ_shape_to_trimesh(sock_transformed, linear_deflection=0.2)
-                if sock_mesh and len(sock_mesh.faces) > 0:
-                    scene.add_geometry(sock_mesh, node_name=f"{ref}_Socket")
+                place_colored_meshes(scene, sock_meshes, sock_final, f"{ref}_Socket",
+                                    REF_MAT_OVERRIDE.get(ref) or FOOTPRINT_MAT_OVERRIDE.get(fp))
 
-            # Empty socket: place socket only, skip the IC
             if ref in EMPTY_SOCKETS:
                 placed += 1
                 continue
 
-            # Elevate the IC by socket height
-            elevate = gp_Trsf()
-            elevate.SetTranslation(gp_Vec(0, 0, SOCKET_HEIGHT))
-            trsf = elevate.Multiplied(trsf)
-            transformed = BRepBuilderAPI_Transform(occ_shape, trsf, True).Shape()
+            # Elevate IC above socket
+            mat = _translation(0, 0, SOCKET_HEIGHT) @ mat
 
-        mesh = occ_shape_to_trimesh(transformed, linear_deflection=0.2)
-        if mesh and len(mesh.faces) > 0:
-            node_name = f"{ref}_{comp['value']}"
-            scene.add_geometry(mesh, node_name=node_name)
-            placed += 1
+        override = REF_MAT_OVERRIDE.get(ref) or FOOTPRINT_MAT_OVERRIDE.get(fp)
+        place_colored_meshes(scene, meshes, mat, f"{ref}_{comp['value']}", override)
+        placed += 1
 
     print(f"  Placed: {placed}, Skipped: {skipped}")
 
