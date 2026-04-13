@@ -38,13 +38,13 @@ COPPER_THICKNESS = 0.035
 # --- Materials ---
 MAT_PCB = PBRMaterial(
     name="PCB_Board",
-    baseColorFactor=[0x00/255, 0x2d/255, 0x04/255, 1.0],
+    baseColorFactor=[0.0, 0.05, 0.016, 1.0],
     metallicFactor=0.0,
     roughnessFactor=0.6,
 )
 MAT_TRACE = PBRMaterial(
     name="Trace",
-    baseColorFactor=[63/255, 126/255, 91/255, 1.0],
+    baseColorFactor=[0.063, 0.250, 0.125, 1.0],
     metallicFactor=0.0,
     roughnessFactor=0.4,
 )
@@ -286,41 +286,125 @@ def build_board_outline(outline_segs, bounds):
     return occ_shape_to_trimesh(prism, linear_deflection=0.5)
 
 
-def build_traces(traces, layer_filter=None):
-    """Build trace segments as thin ribbons. Returns trimesh."""
-    verts = []
-    faces = []
+def build_traces(traces, layer_filter=None, z_top=None, z_bot=None):
+    """Build traces as a clean extruded 2D polygon (no self-intersections).
+
+    Uses Shapely to union all trace ribbons in 2D, then triangulates
+    and extrudes into a watertight solid.
+    """
+    from shapely.geometry import LineString
+    from shapely.ops import unary_union
+
+    if z_top is None:
+        z_top = COPPER_THICKNESS
+    if z_bot is None:
+        z_bot = -0.3  # penetrate into board for boolean etch
+
+    # Build 2D polygons from trace segments
+    polys = []
     for tr in traces:
         if layer_filter is not None and tr.get("layer", 0) != layer_filter:
             continue
         x1, y1 = tr["x1"] * MIL_TO_MM, tr["y1"] * MIL_TO_MM
         x2, y2 = tr["x2"] * MIL_TO_MM, tr["y2"] * MIL_TO_MM
-        w = tr["w"] * MIL_TO_MM * 0.5
-        dx, dy = x2 - x1, y2 - y1
-        length = math.sqrt(dx*dx + dy*dy)
-        if length < 0.001:
+        w = tr["w"] * MIL_TO_MM / 2
+        if abs(x2 - x1) < 0.001 and abs(y2 - y1) < 0.001:
             continue
-        nx, ny = -dy/length*w, dx/length*w
-        z_top, z_bot = COPPER_THICKNESS, 0.0
-        i = len(verts)
-        verts.extend([
-            [x1+nx,y1+ny,z_top],[x1-nx,y1-ny,z_top],
-            [x2-nx,y2-ny,z_top],[x2+nx,y2+ny,z_top],
-            [x1+nx,y1+ny,z_bot],[x1-nx,y1-ny,z_bot],
-            [x2-nx,y2-ny,z_bot],[x2+nx,y2+ny,z_bot],
-        ])
-        faces.extend([
-            [i,i+1,i+2],[i,i+2,i+3],
-            [i+4,i+6,i+5],[i+4,i+7,i+6],
-            [i,i+3,i+7],[i,i+7,i+4],
-            [i+1,i+5,i+6],[i+1,i+6,i+2],
-            [i,i+4,i+5],[i,i+5,i+1],
-            [i+3,i+2,i+6],[i+3,i+6,i+7],
-        ])
-    if not verts:
+        line = LineString([(x1, y1), (x2, y2)])
+        polys.append(line.buffer(w, cap_style='flat'))
+
+    if not polys:
         return None
-    return trimesh.Trimesh(vertices=np.array(verts, dtype=np.float64),
-                           faces=np.array(faces, dtype=np.int64))
+
+    # Union into one clean MultiPolygon
+    merged = unary_union(polys)
+
+    # Triangulate and extrude
+    return _extrude_polygon(merged, z_top, z_bot)
+
+
+def _extrude_polygon(poly, z_top, z_bot):
+    """Extrude a Shapely polygon/multipolygon into a trimesh solid."""
+    from shapely.geometry import MultiPolygon, Polygon
+    import shapely
+
+    if poly.is_empty:
+        return None
+
+    if isinstance(poly, Polygon):
+        polys = [poly]
+    elif isinstance(poly, MultiPolygon):
+        polys = list(poly.geoms)
+    else:
+        return None
+
+    all_verts = []
+    all_faces = []
+
+    for pg in polys:
+        # Get exterior + holes as coordinate arrays
+        rings = [np.array(pg.exterior.coords[:-1])]  # drop closing duplicate
+        for hole in pg.interiors:
+            rings.append(np.array(hole.coords[:-1]))
+
+        # Triangulate the polygon face
+        from shapely import get_coordinates
+        # Use trimesh's triangulate_polygon which handles holes
+        try:
+            face_verts, face_faces = trimesh.creation._polygon_to_vertices(pg)
+        except Exception:
+            # Fallback: simple ear-clip on exterior only
+            coords = np.array(pg.exterior.coords[:-1])
+            n = len(coords)
+            if n < 3:
+                continue
+            face_verts = coords
+            face_faces = [[0, i, i + 1] for i in range(1, n - 1)]
+            face_faces = np.array(face_faces)
+
+        n_verts = len(face_verts)
+        offset = len(all_verts)
+
+        # Top face vertices
+        for v in face_verts:
+            all_verts.append([v[0], v[1], z_top])
+        # Bottom face vertices
+        for v in face_verts:
+            all_verts.append([v[0], v[1], z_bot])
+
+        # Top faces
+        for f in face_faces:
+            all_faces.append([f[0] + offset, f[1] + offset, f[2] + offset])
+        # Bottom faces (reversed winding)
+        for f in face_faces:
+            all_faces.append([f[0] + offset + n_verts, f[2] + offset + n_verts, f[1] + offset + n_verts])
+
+        # Side walls from exterior ring
+        ext_coords = np.array(pg.exterior.coords[:-1])
+        n_ext = len(ext_coords)
+        # Find indices in face_verts that match exterior coords
+        # (face_verts may have been reordered by triangulation)
+        # Simpler: just build side walls from the exterior ring directly
+        side_offset = len(all_verts)
+        for v in ext_coords:
+            all_verts.append([v[0], v[1], z_top])
+        for v in ext_coords:
+            all_verts.append([v[0], v[1], z_bot])
+        for i in range(n_ext):
+            j = (i + 1) % n_ext
+            t0 = side_offset + i
+            t1 = side_offset + j
+            b0 = side_offset + n_ext + i
+            b1 = side_offset + n_ext + j
+            all_faces.append([t0, t1, b1])
+            all_faces.append([t0, b1, b0])
+
+    if not all_verts:
+        return None
+
+    mesh = trimesh.Trimesh(vertices=np.array(all_verts, dtype=np.float64),
+                           faces=np.array(all_faces, dtype=np.int64))
+    return mesh
 
 
 def build_vias(vias_data):
@@ -363,55 +447,129 @@ def main():
     # Build scene with separate named meshes
     scene = trimesh.Scene()
 
-    # a) Board slab from bounds (proper solid box)
+    # a) Board slab
     print("Building PCB slab...")
-    bx0, by0 = brd_to_blender(bounds["x_min"], bounds["y_max"])  # TL -> -X,-Y
-    bx1, by1 = brd_to_blender(bounds["x_max"], bounds["y_min"])  # BR -> +X,+Y
+    bx0, by0 = brd_to_blender(bounds["x_min"], bounds["y_max"])
+    bx1, by1 = brd_to_blender(bounds["x_max"], bounds["y_min"])
     board_mesh = trimesh.creation.box(
         extents=[bx1 - bx0, by1 - by0, PCB_THICKNESS],
         transform=trimesh.transformations.translation_matrix([
             (bx0 + bx1) / 2, (by0 + by1) / 2, -PCB_THICKNESS / 2
         ])
     )
-    # Cut mounting holes
-    for comp in components:
-        if comp["footprint"] == "HOLE":
-            hx, hy = brd_to_blender(comp["x"], comp["y"])
-            hole = trimesh.creation.cylinder(radius=1.6, height=PCB_THICKNESS + 1,
-                                              sections=16)
-            hole.apply_translation([hx, hy, -PCB_THICKNESS / 2])
-            board_mesh = board_mesh.difference(hole)
-    apply_material(board_mesh, MAT_PCB)
-    scene.add_geometry(board_mesh, node_name="PCB_Board")
-    print(f"  Board: {len(board_mesh.faces)} triangles")
 
-    # b) Traces (offset by board center)
-    print("Building top traces (layer 15 = front copper)...")
+    # b) Build traces and etch into board
+    print("Building top traces (layer 15)...")
     top_traces = build_traces(traces, layer_filter=15)
     if top_traces:
         top_traces.apply_translation([-board_cx, -board_cy, 0])
-        top_traces.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
-        apply_material(top_traces, MAT_TRACE)
-        scene.add_geometry(top_traces, node_name="Traces_Top")
-        print(f"  Top traces: {len(top_traces.faces)} triangles")
+        top_traces.apply_transform(np.diag([1, -1, 1, 1]))
+        print(f"  Top traces: {len(top_traces.faces)} tris")
 
-    print("Building bottom traces (layer 0 = back copper)...")
+    print("Building bottom traces (layer 0)...")
     bot_traces = build_traces(traces, layer_filter=0)
     if bot_traces:
         bot_traces.apply_translation([-board_cx, -board_cy, -PCB_THICKNESS - COPPER_THICKNESS])
-        bot_traces.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
-        apply_material(bot_traces, MAT_TRACE)
-        scene.add_geometry(bot_traces, node_name="Traces_Bottom")
-        print(f"  Bottom traces: {len(bot_traces.faces)} triangles")
+        bot_traces.apply_transform(np.diag([1, -1, 1, 1]))
+        print(f"  Bottom traces: {len(bot_traces.faces)} tris")
+
+    from shapely.geometry import LineString, Point, box as shapely_box
+    from shapely.ops import unary_union
+
+    board_2d = shapely_box(bx0, by0, bx1, by1)
+
+    def build_trace_polys_2d(traces_data, layer):
+        polys = []
+        for tr in traces_data:
+            if tr.get("layer", 0) != layer:
+                continue
+            x1 = tr["x1"] * MIL_TO_MM - board_cx
+            y1 = -(tr["y1"] * MIL_TO_MM - board_cy)
+            x2 = tr["x2"] * MIL_TO_MM - board_cx
+            y2 = -(tr["y2"] * MIL_TO_MM - board_cy)
+            w = tr["w"] * MIL_TO_MM / 2
+            if abs(x2 - x1) < 0.001 and abs(y2 - y1) < 0.001:
+                continue
+            polys.append(LineString([(x1, y1), (x2, y2)]).buffer(w, cap_style='flat'))
+        return unary_union(polys) if polys else None
+
+    def extrude_multi(polygon, height, z_offset=0):
+        from shapely.geometry import MultiPolygon, Polygon, GeometryCollection
+        if polygon is None or polygon.is_empty:
+            return None
+        if isinstance(polygon, Polygon):
+            geoms = [polygon]
+        elif isinstance(polygon, (MultiPolygon, GeometryCollection)):
+            geoms = [g for g in polygon.geoms if isinstance(g, Polygon) and not g.is_empty]
+        else:
+            return None
+        if not geoms:
+            return None
+        meshes = [trimesh.creation.extrude_polygon(pg, height=height) for pg in geoms]
+        result = trimesh.util.concatenate(meshes)
+        if z_offset != 0:
+            result.apply_translation([0, 0, z_offset])
+        return result
+
+    # 2D trace unions
+    print("Building top traces (2D union)...")
+    t0 = time.time()
+    top_traces_2d = build_trace_polys_2d(traces, layer=15)
+    print(f"  Done: {time.time()-t0:.1f}s")
+
+    print("Building bottom traces (2D union)...")
+    t0 = time.time()
+    bot_traces_2d = build_trace_polys_2d(traces, layer=0)
+    print(f"  Done: {time.time()-t0:.1f}s")
+
+    # Mounting holes as 2D circles
+    holes_2d = unary_union([Point(*brd_to_blender(c["x"], c["y"])).buffer(1.6)
+                            for c in components if c["footprint"] == "HOLE"])
+
+    # Board is full thickness. Top traces are thin slabs on top surface.
+    # Bottom traces are thin slabs on bottom surface.
+    # Each side's traces are cut from the board on that side only.
+    ETCH_DEPTH = COPPER_THICKNESS  # how thick the trace slab is
+
+    print("2D boolean (board - holes)...")
+    board_cutout = board_2d
+    if holes_2d and not holes_2d.is_empty:
+        board_cutout = board_cutout.difference(holes_2d)
+
+    # Full board slab (minus holes)
+    print("Extruding board...")
+    t0 = time.time()
+    board_mesh = extrude_multi(board_cutout, PCB_THICKNESS, z_offset=-PCB_THICKNESS)
+    apply_material(board_mesh, MAT_PCB)
+    scene.add_geometry(board_mesh, node_name="PCB_Board")
+    print(f"  Board: {len(board_mesh.faces)} tris ({time.time()-t0:.1f}s)")
+
+    # Top traces: thin slab sitting on top of the board (Z=0 to Z=ETCH_DEPTH)
+    if top_traces_2d and not top_traces_2d.is_empty:
+        print("Extruding top traces...")
+        t0 = time.time()
+        top_mesh = extrude_multi(top_traces_2d, ETCH_DEPTH, z_offset=0)
+        apply_material(top_mesh, MAT_TRACE)
+        scene.add_geometry(top_mesh, node_name="Traces_Top")
+        print(f"  Top traces: {len(top_mesh.faces)} tris ({time.time()-t0:.1f}s)")
+
+    # Bottom traces: thin slab on bottom of board (Z=-PCB_THICKNESS-ETCH_DEPTH to Z=-PCB_THICKNESS)
+    if bot_traces_2d and not bot_traces_2d.is_empty:
+        print("Extruding bottom traces...")
+        t0 = time.time()
+        bot_mesh = extrude_multi(bot_traces_2d, ETCH_DEPTH, z_offset=-PCB_THICKNESS - ETCH_DEPTH)
+        apply_material(bot_mesh, MAT_TRACE)
+        scene.add_geometry(bot_mesh, node_name="Traces_Bottom")
+        print(f"  Bottom traces: {len(bot_mesh.faces)} tris ({time.time()-t0:.1f}s)")
 
     print("Building vias...")
     via_mesh = build_vias(vias_data)
     if via_mesh:
         via_mesh.apply_translation([-board_cx, -board_cy, 0])
-        via_mesh.apply_transform(np.diag([1, -1, 1, 1]))  # flip Y
+        via_mesh.apply_transform(np.diag([1, -1, 1, 1]))
         apply_material(via_mesh, MAT_VIA)
         scene.add_geometry(via_mesh, node_name="Vias")
-        print(f"  Vias: {len(via_mesh.faces)} triangles")
+        print(f"  Vias: {len(via_mesh.faces)} tris")
 
     # c) Components
     print("Placing components...")
