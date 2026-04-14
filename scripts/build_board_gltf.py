@@ -169,6 +169,24 @@ MAT_RELAY_BODY = PBRMaterial(
     normalTexture=_PBR_PLASTIC_NORMAL,
     metallicRoughnessTexture=_PBR_PLASTIC_MR,
 )
+MAT_RESISTOR_BODY = PBRMaterial(
+    name="Resistor_Body",
+    baseColorFactor=[0.0, 0.35, 0.35, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.6,
+)
+MAT_CAP_CERAMIC = PBRMaterial(
+    name="Cap_Ceramic",
+    baseColorFactor=[0.75, 0.45, 0.05, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.5,
+)
+MAT_FILM_CAP = PBRMaterial(
+    name="Film_Cap",
+    baseColorFactor=[0.7, 0.05, 0.02, 1.0],
+    metallicFactor=0.0,
+    roughnessFactor=0.5,
+)
 MAT_ISA_BODY = PBRMaterial(
     name="ISA_Body",
     baseColorFactor=[0.0, 0.0, 0.0, 1.0],
@@ -220,6 +238,11 @@ FOOTPRINT_MAT_OVERRIDE = {
     "5PINDIN2":  {None: MAT_DIN},
     "POWER_CON": {(1.0, 1.0, 1.0): MAT_MOLEX_BODY, (0.216, 0.216, 0.216): MAT_LEAD, None: MAT_LEAD},
     "G5V-2DPDT": {(0.019, 0.018, 0.018): MAT_RELAY_BODY},
+    # Resistors: tan STEP body -> teal green
+    "R5":  {(0.754, 0.464, 0.207): MAT_RESISTOR_BODY},
+    # Disc caps: dark red STEP body -> orange ceramic
+    "C1-1": {(0.619, 0.152, 0.019): MAT_CAP_CERAMIC},
+    "CP8":  {"cap_body": MAT_FILM_CAP, "cap_lead": MAT_LEAD},
 }
 # Per-ref overrides (take priority over footprint)
 REF_MAT_OVERRIDE = {
@@ -247,7 +270,7 @@ FOOTPRINT_STEP = {
     "5PINDIN2":             "User Library-DIN-5.STEP",
     "R5":                   "R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal.step",
     "C1-1":                 "C_Disc_D3.0mm_W1.6mm_P2.50mm.step",
-    "CP8":                  "C_Disc_D7.5mm_W2.5mm_P5.00mm.step",
+    "CP8":                  None,  # parametric axial cap, generated inline
     "VC":                   "Crystal_HC49-U_Vertical.step",
     "PIN_ARRAY_2X1":        "PinHeader_1x02_P2.54mm_Vertical.step",
     "PIN_ARRAY_2X2":        "PinHeader_2x02_P2.54mm_Vertical.step",
@@ -573,12 +596,16 @@ def rgb_to_material(rgb):
 
 
 def place_colored_meshes(scene, meshes, transform, node_name,
-                         mat_override=None, label_img=None):
+                         mat_override=None, label_img=None, band_img=None):
     """Clone cached meshes, apply transform and material, add to scene.
 
     If label_img is provided, the IC body mesh (MAT_IC_BODY) gets UV-mapped
     with the label texture instead of a solid color.
+    If band_img is provided, the resistor body gets UV-mapped with band texture.
     """
+    # Resistor body STEP color
+    RESISTOR_BODY_RGB = (0.754, 0.464, 0.207)
+
     for i, (mesh, rgb) in enumerate(meshes):
         m = mesh.copy()
         m.apply_transform(transform)
@@ -588,6 +615,32 @@ def place_colored_meshes(scene, meshes, transform, node_name,
             material = mat_override[rgb]
         else:
             material = rgb_to_material(rgb)
+
+        # Apply band texture to resistor body
+        if band_img is not None and rgb == RESISTOR_BODY_RGB:
+            verts = m.vertices
+            x_min, y_min, z_min = verts.min(axis=0)
+            x_max, y_max, z_max = verts.max(axis=0)
+            dx = x_max - x_min
+            dy = y_max - y_min
+            # UV: longest axis = U (band direction), other = V
+            if dx > dy:
+                u = (verts[:, 0] - x_min) / max(dx, 0.01)
+                v = (verts[:, 1] - y_min) / max(dy, 0.01)
+            else:
+                u = (verts[:, 1] - y_min) / max(dy, 0.01)
+                v = (verts[:, 0] - x_min) / max(dx, 0.01)
+            uv = np.column_stack([u, v]).astype(np.float32)
+            band_mat = PBRMaterial(
+                name=f"Bands_{node_name}",
+                baseColorTexture=band_img,
+                metallicFactor=0.0,
+                roughnessFactor=0.6,
+            )
+            m.visual = trimesh.visual.TextureVisuals(uv=uv, material=band_mat)
+            suffix = f"_{i}" if len(meshes) > 1 else ""
+            scene.add_geometry(m, node_name=f"{node_name}{suffix}")
+            continue
 
         # Apply label texture to IC body mesh
         is_body = (material is MAT_IC_BODY) if material else False
@@ -620,6 +673,86 @@ def place_colored_meshes(scene, meshes, transform, node_name,
 
         suffix = f"_{i}" if len(meshes) > 1 else ""
         scene.add_geometry(m, node_name=f"{node_name}{suffix}")
+
+
+_axial_cap_cache = {}
+
+def _bent_lead(x_sign, body_half, pad_half, body_rad, lead_rad, sections=24):
+    """Build one bent lead: horizontal from body, 90-degree bend, vertical into board."""
+    horiz_len = pad_half - body_half - body_rad * 0.3  # horizontal portion
+    vert_len = body_rad + 2.0  # down through board
+
+    # Horizontal segment along X
+    horiz = trimesh.creation.cylinder(radius=lead_rad, height=horiz_len, sections=sections)
+    horiz.apply_transform(trimesh.transformations.rotation_matrix(math.pi/2, [0, 1, 0]))
+    horiz.apply_translation([x_sign * (body_half + horiz_len/2), 0, 0])
+
+    # Bend: quarter-torus approximated by short angled segments
+    bend_r = body_rad * 0.3  # bend radius
+    bend_segs = []
+    n_bend = 8
+    bx = x_sign * (body_half + horiz_len)
+    for j in range(n_bend):
+        a0 = (math.pi / 2) * j / n_bend
+        a1 = (math.pi / 2) * (j + 1) / n_bend
+        mx = bx + x_sign * bend_r * math.sin((a0 + a1) / 2)
+        mz = -bend_r * (1 - math.cos((a0 + a1) / 2))
+        seg_len = bend_r * (math.pi / 2) / n_bend
+        seg = trimesh.creation.cylinder(radius=lead_rad, height=seg_len, sections=sections)
+        angle = (a0 + a1) / 2
+        seg.apply_transform(trimesh.transformations.rotation_matrix(angle * x_sign, [0, 1, 0]))
+        seg.apply_translation([mx, 0, mz])
+        bend_segs.append(seg)
+
+    # Vertical segment going down
+    vert = trimesh.creation.cylinder(radius=lead_rad, height=vert_len, sections=sections)
+    vert.apply_translation([bx + x_sign * bend_r, 0, -bend_r - vert_len/2])
+
+    parts = [horiz] + bend_segs + [vert]
+    return trimesh.util.concatenate(parts)
+
+
+# Film cap dimensions derived from BRD silkscreen outlines:
+# Outline: 800 x 200 mils = 20.3 x 5.1 mm
+# Short dimension (200 mils) = body diameter = 5.1mm
+# Long dimension (800 mils) = full extent. Body ~65% of that.
+FILM_CAP_DIMS = {
+    ".01u":   (5.1, 13.0, 0.5),   # body_dia, body_len, lead_dia (mm)
+    ".01uF":  (5.1, 13.0, 0.5),
+    ".047uF": (5.1, 14.0, 0.5),   # slightly longer body for larger value
+    ".047":   (5.1, 14.0, 0.5),
+}
+
+
+def build_axial_cap(pad_span_mm, body_len=16.5, body_rad=3.0, lead_rad=0.3):
+    """Build a parametric axial film cap as color-grouped meshes.
+    Body centered at origin sitting on Z=0 (board surface), leads bend down.
+    Returns list of (trimesh, rgb_key)."""
+    key = (pad_span_mm, body_len, body_rad, lead_rad)
+    if key in _axial_cap_cache:
+        return _axial_cap_cache[key]
+
+    pad_half = pad_span_mm / 2
+    body_half = body_len / 2
+
+    # Body cylinder along X, raised so bottom sits on board surface
+    body = trimesh.creation.cylinder(radius=body_rad, height=body_len, sections=32)
+    body.apply_transform(trimesh.transformations.rotation_matrix(math.pi/2, [0, 1, 0]))
+    body.apply_translation([0, 0, body_rad])
+
+    # Bent leads
+    left = _bent_lead(-1, body_half, pad_half, body_rad, lead_rad)
+    left.apply_translation([0, 0, body_rad])
+    right = _bent_lead(+1, body_half, pad_half, body_rad, lead_rad)
+    right.apply_translation([0, 0, body_rad])
+
+    leads = trimesh.util.concatenate([left, right])
+    body.fix_normals()
+    leads.fix_normals()
+
+    result = [(body, "cap_body"), (leads, "cap_lead")]
+    _axial_cap_cache[key] = result
+    return result
 
 
 def pad_centroid_mm(pads):
@@ -1005,7 +1138,9 @@ def main():
     # Load IC label textures
     from PIL import Image as PILImage
     LABEL_DIR = "assets/ic_labels_rendered"
+    BAND_DIR = "assets/resistor_bands"
     _label_cache = {}
+    _band_cache = {}
     def get_label_img(ref):
         if ref not in _label_cache:
             path = os.path.join(LABEL_DIR, f"{ref}.png")
@@ -1014,6 +1149,14 @@ def main():
             else:
                 _label_cache[ref] = None
         return _label_cache[ref]
+    def get_band_img(ref):
+        if ref not in _band_cache:
+            path = os.path.join(BAND_DIR, f"{ref}.png")
+            if os.path.exists(path):
+                _band_cache[ref] = PILImage.open(path).convert('RGB')
+            else:
+                _band_cache[ref] = None
+        return _band_cache[ref]
 
     print("Placing components...")
     placed = 0
@@ -1027,6 +1170,32 @@ def main():
             continue
 
         step_file = REF_STEP.get(ref) or FOOTPRINT_STEP.get(fp)
+
+        # Parametric axial cap (CP8) with real Mallory 150M dimensions
+        if fp == "CP8":
+            pads = comp["pads"]
+            if len(pads) >= 2:
+                dx = (pads[0]["x"] - pads[1]["x"]) * MIL_TO_MM
+                dy = (pads[0]["y"] - pads[1]["y"]) * MIL_TO_MM
+                span = math.sqrt(dx*dx + dy*dy)
+            else:
+                span = 20.3
+            dims = FILM_CAP_DIMS.get(comp["value"], (5.1, 13.0, 0.5))
+            body_dia, body_len, lead_dia = dims
+            meshes = build_axial_cap(span, body_len=body_len,
+                                     body_rad=body_dia / 2, lead_rad=lead_dia / 2)
+            override = FOOTPRINT_MAT_OVERRIDE.get(fp)
+            brd_x, brd_y = brd_to_blender(comp["x"], comp["y"])
+            brd_orient = -(comp["orient"] / 10.0)
+            mat = np.eye(4)
+            if abs(brd_orient) > 0.01:
+                mat = _rotation(2, brd_orient) @ mat
+            mat = _translation(brd_x, brd_y, 0) @ mat
+            place_colored_meshes(scene, meshes, mat, f"{ref}_{comp['value']}",
+                                 override)
+            placed += 1
+            continue
+
         if step_file is None:
             skipped += 1
             continue
@@ -1086,8 +1255,9 @@ def main():
 
         override = REF_MAT_OVERRIDE.get(ref) or FOOTPRINT_MAT_OVERRIDE.get(fp)
         label = get_label_img(ref)
+        band = get_band_img(ref)
         place_colored_meshes(scene, meshes, mat, f"{ref}_{comp['value']}",
-                             override, label_img=label)
+                             override, label_img=label, band_img=band)
         placed += 1
 
     print(f"  Placed: {placed}, Skipped: {skipped}")
