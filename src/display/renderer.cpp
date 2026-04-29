@@ -256,7 +256,7 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
             // We default to text-mode hue (14 deg) since the toggle is
             // a global monitor-level setting; gfx mode is only 10 deg
             // off and the artifact colors look very close.
-            #define COMP_BASE_DEG    (33.0 + 90.0 + 14.0)  // 137 deg
+            #define COMP_BASE_DEG    (33.0 - 90.0 + 14.0)  // -43 deg (= 317)
             #define COMP_PIX_RAD     1.5707963             // pi/2 / pixel
             #define COMP_BASE_RAD    (COMP_BASE_DEG * 0.01745329)
             #define COMP_SAT         1.15  // CGA composite is hot vs ITU
