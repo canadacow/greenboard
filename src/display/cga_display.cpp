@@ -50,6 +50,12 @@ Buffer<uint> scanline_buf : register(t3);  // 262 scanlines x 52 uint32s (12 hea
 #define SL_VRAM_OFFSET 12  // vram_row starts at uint32 index 12
 
 RWTexture2D<float4> output_tex : register(u0);  // 912x262 full NTSC frame
+RWTexture2D<uint>   index_out  : register(u1);  // raw 4-bit RGBI index per dot
+
+// Emit one dot: rendered RGB + raw RGBI index (for the composite
+// monitor filter, which decodes from the digital index stream).
+#define EMIT(idx_) { output_tex[dtid.xy] = pal_color(idx_); \
+                     index_out[dtid.xy] = (idx_) & 0xF; return; }
 
 // --- Mode bits ---
 #define MODE_HIRES_TEXT  0x01
@@ -143,7 +149,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     uint sl_hsync_width   = scanline_buf[sl_base + 8];
     uint h_total          = scanline_buf[sl_base + 9];
 
-    float4 border = pal_color(sl_color & 0xF);
+    uint border_idx = sl_color & 0xF;
 
     // Character width in dots -- fixed by dot clock divider.
     bool hires = (sl_mode & MODE_GRAPHICS) ? (sl_mode & MODE_HIRES_GFX) != 0
@@ -179,12 +185,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
 
     // Classify this pixel.
     uint region_px = px;
-    float4 out_color;
 
     if (region_px < left_porch_dots) {
         // Left overscan (back porch) -- border color.
-        output_tex[dtid.xy] = border;
-        return;
+        EMIT(border_idx);
     }
     region_px -= left_porch_dots;
 
@@ -196,8 +200,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
         // Vertical display enable: VCC < R6.
         uint v_disp = (sl_v_displayed > 0) ? sl_v_displayed : 25;
         if (char_row >= v_disp || !(sl_mode & MODE_ENABLE)) {
-            output_tex[dtid.xy] = border;
-            return;
+            EMIT(border_idx);
         }
 
         if (sl_mode & MODE_GRAPHICS) {
@@ -206,7 +209,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
                 uint lit = (byte_val >> (7 - (active_px & 7))) & 1;
                 uint fg = sl_color & 0xF;
                 if (fg == 0) fg = 15;
-                out_color = pal_color(lit ? fg : 0);
+                EMIT(lit ? fg : 0);
             } else {
                 uint src_x = active_px / 2;
                 uint byte_val = sl_vram_byte(sl_base, src_x / 4);
@@ -224,7 +227,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
                     else
                         color_idx = gfx_pal[0 + (base ? 1 : 0)][pixel];
                 }
-                out_color = pal_color(color_idx);
+                EMIT(color_idx);
             }
         } else {
             uint cell = (sl_ma + char_col) & 0x1FFF;
@@ -250,25 +253,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
             if (cursor_enabled && cursor_blink &&
                 cell == cursor_addr &&
                 scanline >= cursor_start && scanline <= cursor_end) {
-                out_color = pal_color(fg);
+                EMIT(fg);
             } else {
-                out_color = pal_color(bit ? fg : bg);
+                EMIT(bit ? fg : bg);
             }
         }
-
-        output_tex[dtid.xy] = out_color;
-        return;
     }
     region_px -= active_dots;
 
     if (region_px < right_porch_dots) {
         // Right overscan (front porch) -- border color.
-        output_tex[dtid.xy] = border;
-        return;
+        EMIT(border_idx);
     }
 
     // HSYNC -- blanked (black).
-    output_tex[dtid.xy] = float4(0, 0, 0, 1);
+    EMIT(0);
 }
 )HLSL";
 
@@ -413,6 +412,24 @@ bool CgaRasterizer::init(const RenderContext& rc) {
         device->CreateShaderResourceView(out_tex_.Get(), nullptr, &out_srv_);
     }
 
+    // Index texture (912x262 R8_UINT): raw RGBI index per dot, consumed
+    // by the composite monitor filter in the renderer's blit pass.
+    {
+        D3D11_TEXTURE2D_DESC td = {};
+        td.Width = OUT_W;
+        td.Height = OUT_H;
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8_UINT;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+        device->CreateTexture2D(&td, nullptr, &idx_tex_);
+
+        device->CreateUnorderedAccessView(idx_tex_.Get(), nullptr, &idx_uav_);
+        device->CreateShaderResourceView(idx_tex_.Get(), nullptr, &idx_srv_);
+    }
+
     spdlog::info("[CGA] GPU rasterizer initialized ({}x{}, viewport {}x{})",
                  OUT_W, OUT_H, VIEW_W, VIEW_H);
     return true;
@@ -462,14 +479,15 @@ void CgaRasterizer::render(const RenderContext& rc) {
     ctx->CSSetConstantBuffers(0, 1, cb_.GetAddressOf());
     ID3D11ShaderResourceView* srvs[] = { vram_srv_.Get(), font_srv_.Get(), palette_srv_.Get(), scanline_srv_.Get() };
     ctx->CSSetShaderResources(0, 4, srvs);
-    ctx->CSSetUnorderedAccessViews(0, 1, out_uav_.GetAddressOf(), nullptr);
+    ID3D11UnorderedAccessView* uavs[2] = { out_uav_.Get(), idx_uav_.Get() };
+    ctx->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
 
     // 912x262 / (16,16) = (57, 17) thread groups
     ctx->Dispatch((OUT_W + 15) / 16, (OUT_H + 15) / 16, 1);
 
     // Unbind
-    ID3D11UnorderedAccessView* null_uav = nullptr;
-    ctx->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
+    ID3D11UnorderedAccessView* null_uavs[2] = {};
+    ctx->CSSetUnorderedAccessViews(0, 2, null_uavs, nullptr);
     ID3D11ShaderResourceView* null_srvs[4] = {};
     ctx->CSSetShaderResources(0, 4, null_srvs);
 

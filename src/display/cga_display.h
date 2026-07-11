@@ -17,6 +17,7 @@ public:
     void render(const RenderContext& rc) override;
     const ISA_Card* card() const override;
     ID3D11ShaderResourceView* output_srv() const override { return out_srv_.Get(); }
+    ID3D11ShaderResourceView* index_srv() const override { return idx_srv_.Get(); }
 
     // Crop: 640x200 visible portion from the 912x262 full frame.
     // The buffer starts at VSYNC end (monitor retrace).  Active display
@@ -51,6 +52,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> out_tex_;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> out_uav_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> out_srv_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> idx_tex_;   // R8_UINT RGBI index per dot
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> idx_uav_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> idx_srv_;
 };
 
 } // namespace bench

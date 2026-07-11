@@ -38,6 +38,11 @@ public:
     // Output texture SRV for D3D11 blit (nullptr if renders via D2D).
     virtual ID3D11ShaderResourceView* output_srv() const { return nullptr; }
 
+    // Raw color-index texture (R8_UINT, one 4-bit RGBI index per dot).
+    // Used by the composite monitor filter, which needs the digital
+    // RGBI stream rather than the rendered RGB. nullptr if unsupported.
+    virtual ID3D11ShaderResourceView* index_srv() const { return nullptr; }
+
     // Source UV rect within the output texture for blitting.
     // Default: full texture.  Override to crop (e.g. 640x200 from 912x262).
     struct UVRect { float u0, v0, u1, v1; };
