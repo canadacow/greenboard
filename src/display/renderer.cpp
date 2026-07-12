@@ -159,9 +159,8 @@ struct DxState {
     float comp_bi = 0, comp_bq = 0;
     bool comp_grayscale = false;
     uint8_t comp_mode_cached = 0xFF;   // last mode reg the table was built for
-    uint8_t comp_col_cached = 0xFF;    // last color reg the table was built for
 
-    void update_composite_table(uint8_t cgamode, uint8_t cgacol);
+    void update_composite_table(uint8_t cgamode);
 
     // Molly guard state for reset
     bool confirm_reset = false;
@@ -410,11 +409,9 @@ void DxState::render_display() {
             bool composite_on = cga && composite_mode && rasterizer->index_srv();
             if (composite_on) {
                 uint8_t m = cga->mode_register();
-                uint8_t c = cga->color_register();
-                if (m != comp_mode_cached || c != comp_col_cached) {
+                if (m != comp_mode_cached) {
                     comp_mode_cached = m;
-                    comp_col_cached = c;
-                    update_composite_table(m, c);
+                    update_composite_table(m);
                     D3D11_MAPPED_SUBRESOURCE mt;
                     ctx->Map(comp_table_buf.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mt);
                     memcpy(mt.pData, comp_table, sizeof(comp_table));
@@ -495,7 +492,7 @@ static const double comp_intensity[4] = {
     77.175381, 88.654656, 166.564623, 174.228438
 };
 
-void DxState::update_composite_table(uint8_t cgamode, uint8_t cgacol) {
+void DxState::update_composite_table(uint8_t cgamode) {
     constexpr double tau = 6.28318531;
 
     // Old CGA: composite = chroma + intensity.
@@ -545,15 +542,14 @@ void DxState::update_composite_table(uint8_t cgamode, uint8_t cgacol) {
     comp_bi = (float)(int)(bi * iq_adjust_i + bq * iq_adjust_q);
     comp_bq = (float)(int)(-bi * iq_adjust_q + bq * iq_adjust_i);
 
-    // Luma-only decode: BW bit, or hires text with black border and no
-    // hsync-adjust bit -- the burst is the border color in 80-col text,
-    // so a black border means no burst and the monitor drops color.
-    bool hires_text = (cgamode & 3) == 1;
-    comp_grayscale = ((cgamode & 0x04) != 0) ||
-                     (hires_text && (cgacol & 0x0F) == 0 && !(cgacol & 0x80));
+    // Luma-only decode on the BW bit only (no colorburst in the encoded
+    // signal).  MartyPC -- the compatibility reference for 8088 MPH --
+    // does not model a monitor color-killer for the no-burst 80-col
+    // text case (black border), and always decodes chroma otherwise.
+    comp_grayscale = (cgamode & 0x04) != 0;
 
-    spdlog::info("[Composite] table rebuilt: mode=0x{:02X} col=0x{:02X} hue={} {}",
-                 cgamode, cgacol, mode_hue, comp_grayscale ? "(grayscale)" : "");
+    spdlog::info("[Composite] table rebuilt: mode=0x{:02X} hue={} {}",
+                 cgamode, mode_hue, comp_grayscale ? "(grayscale)" : "");
 }
 
 void DxState::render_overlay() {
@@ -1414,6 +1410,11 @@ void DxState::render_system_window() {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Simulate an NTSC composite monitor.\n"
                               "Color bleed and hi-res text artifact colors.");
+        if (composite_mode) {
+            ImGui::TextColored(dim, "mode=%02X -> %s",
+                cga->mode_register(),
+                comp_grayscale ? "grayscale (BW bit)" : "color");
+        }
     }
 
     // --- ISA Expansion Slots ---
