@@ -101,6 +101,18 @@ uint8_t ISA_CGA::on_io_read(uint16_t port) {
 // I/O writes -- just update registers, on_cycle() stamps scanlines.
 // =========================================================================
 
+// CPU accesses to CGA VRAM are synchronized to the card's lclock: the
+// card holds I/O CH RDY low until its 16-dot cycle reaches the access
+// grant slot, plus a fixed service latency. Constants match MartyPC's
+// hardware-derived WAIT_TABLE: waits = ((5 - phase) & 15) + 9 dots,
+// i.e. grant at lclock phase 5 with 9 dots of service time. This is
+// what makes CPU code racing the beam cost the same cycles as real
+// hardware (3-8 CPU cycles extra per VRAM access, phase-dependent).
+uint32_t ISA_CGA::mmio_wait_clks(uint32_t /*addr*/) {
+    uint32_t wait_dots = ((5u - lclk_phase_) & 15u) + 9u;
+    return (wait_dots + 2) / 3;  // ceil to CPU CLKs
+}
+
 void ISA_CGA::on_io_write(uint16_t port, uint8_t val) {
     switch (port) {
         case 0x3D0: case 0x3D2: case 0x3D4: case 0x3D6:
@@ -199,6 +211,12 @@ void ISA_CGA::on_cycle(Fiber) {
     // 16 dots otherwise (40-col text, 320x200 gfx).
     bool hires = (mode_ & MODE_HIRES_TEXT) || (mode_ & MODE_HIRES_GFX);
     uint32_t dots_per_char = hires ? 8 : 16;
+
+    // Free-running lclock phase (16 dots @ 14.318 MHz = 1.79 MHz), used
+    // by the CPU-access wait-state synchronizer. Advances 3 dots per
+    // system CLK regardless of CRTC state -- must tick before any
+    // early return below.
+    lclk_phase_ = (lclk_phase_ + 3) & 15;
 
     dot_counter_ += 3;
     if (dot_counter_ < dots_per_char)

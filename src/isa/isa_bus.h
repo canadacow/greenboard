@@ -45,6 +45,10 @@ public:
             if (cards_[i]) cards_[i]->card_load(ar);
     }
     template <class Archive> void do_serialize(Archive& ar) {
+        // NOTE: wait-state fields (mem_cmd_active_, mmio_wait_countdown_)
+        // are deliberately NOT serialized -- they are transient bus-cycle
+        // state, and adding fields here breaks existing .b51 saves
+        // (cereal binary archives have no versioning).
         ar(dack_prev_, tc_prev_, dma_dack_pending_, dma_ior_count_,
            dma_active_ch_, dma_write_mode_, ior_prev_, iow_prev_,
            dma_memr_prev_, dma_memw_prev_, cpu_memr_prev_, cpu_memw_prev_,
@@ -83,6 +87,14 @@ private:
     Pin memr_{};
     Pin memw_{};
     Pin aen_{};
+
+    // I/O CH RDY (slot pin A10) -- driven Low to insert CPU wait states
+    // on behalf of a card (CGA VRAM synchronizer). Routed on the board
+    // to the 8284A ~AEN1 input.
+    Pin io_ch_rdy_{};
+    bool io_ch_rdy_wired_ = false;
+    bool mem_cmd_active_ = false;      // a CPU memory command is in progress
+    int mmio_wait_countdown_ = 0;      // CLKs left to hold I/O CH RDY low
 
     // DMA channels 1-3
     Pin dack_[4]{};

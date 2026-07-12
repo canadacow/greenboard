@@ -196,6 +196,8 @@ public:
         ar(cereal::binary_data(vram_, sizeof(vram_)),
            crtc_index_,
            cereal::binary_data(crtc_reg_, sizeof(crtc_reg_)),
+           // lclk_phase_ deliberately not serialized: free-running wait-state
+           // phase, re-established within 16 CLKs; keeps .b51 format stable.
            mode_, color_, composite_,
            dot_counter_, hcc_, scanline_, vcc_, ra_, ma_,
            vtadj_counter_, in_vtadj_, in_vsync_, vsync_counter_,
@@ -211,6 +213,7 @@ public:
     void    on_io_write(uint16_t port, uint8_t val) override;
     uint8_t on_mmio_read(uint32_t addr) override;
     void    on_mmio_write(uint32_t addr, uint8_t val) override;
+    uint32_t mmio_wait_clks(uint32_t addr) override;
 
 private:
     std::string name_{"CGA"};
@@ -245,6 +248,7 @@ private:
     static constexpr uint32_t CLK_PER_FRAME = 304 * 262;  // 79648 CLK/frame
     ScanlineRegs scanline_regs_[FRAME_LINES] = {};
     uint32_t dot_counter_ = 0;    // dot clock accumulator (3 per system CLK)
+    uint8_t lclk_phase_ = 0;      // free-running 16-dot lclock phase (wait states)
     uint32_t hcc_ = 0;           // horizontal character counter (0..R0)
     uint32_t scanline_ = 0;      // current scanline 0..261
     uint32_t vcc_ = 0;           // vertical character counter

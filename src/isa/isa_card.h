@@ -35,6 +35,11 @@ public:
     virtual uint8_t on_mmio_read(uint32_t addr) = 0;
     virtual void    on_mmio_write(uint32_t addr, uint8_t val) = 0;
 
+    // Wait states: CLK cycles to hold I/O CH RDY low when a CPU memory
+    // cycle to this card begins. Cards that synchronize CPU access to an
+    // internal clock (CGA character clock) override this. Default: none.
+    virtual uint32_t mmio_wait_clks(uint32_t /*addr*/) { return 0; }
+
     // DMA: provide next byte for device->memory transfer.
     virtual uint8_t on_dma_read() { return 0xFF; }
 

@@ -22,6 +22,10 @@ void ISA_Bus::install(IsaSlot& slot) {
     if (slot.memr) { memr_ = slot.memr->pin(); slot.memr->connect(this); }
     if (slot.memw) { memw_ = slot.memw->pin(); slot.memw->connect(this); }
     if (slot.aen) { aen_ = slot.aen->pin(); slot.aen->connect(this); }
+    if (slot.io_ch_rdy) {
+        io_ch_rdy_ = slot.io_ch_rdy->pin();
+        io_ch_rdy_wired_ = true;
+    }
 
     // DMA channels 1-3
     Signal* dack_sigs[] = { slot.dack0, slot.dack1, slot.dack2, slot.dack3 };
@@ -61,6 +65,8 @@ void ISA_Bus::install(IsaSlot& slot) {
     declare_input(iow_);
     declare_input(memr_);
     declare_input(memw_);
+    if (io_ch_rdy_wired_)
+        declare_output(io_ch_rdy_);
     for (int ch = 1; ch <= 3; ++ch)
         declare_async_input(dack_[ch]);
     declare_async_input(tc_);
@@ -291,6 +297,38 @@ void ISA_Bus::on_cycle(Fiber caller) {
     }
     iow_prev_ = iow_cur;
     ior_prev_ = ior_cur;
+
+    // --- CPU wait states (I/O CH RDY) ---
+    // When a CPU memory command to a card begins, ask the card how many
+    // CLKs to hold I/O CH RDY low (CGA synchronizes CPU access to its
+    // character clock). The board routes I/O CH RDY to the 8284A ~AEN1,
+    // dropping READY so the CPU inserts Tw states. Level-based MMIO
+    // dispatch below keeps working during the stretched cycle.
+    if (io_ch_rdy_wired_) {
+        bool cpu_cmd = (memr_.level() == Level::Low || memw_.level() == Level::Low) &&
+                       aen_.level() != Level::High && !dma_active();
+        if (cpu_cmd && !mem_cmd_active_) {
+            mem_cmd_active_ = true;
+            ISA_Card* card = find_mmio_owner(SignalPool::bus_address);
+            if (card) {
+                uint32_t waits = card->mmio_wait_clks(SignalPool::bus_address);
+                if (waits > 0) {
+                    mmio_wait_countdown_ = (int)waits;
+                    io_ch_rdy_.drive(Level::Low);
+                }
+            }
+        } else if (!cpu_cmd && mem_cmd_active_) {
+            mem_cmd_active_ = false;
+            if (mmio_wait_countdown_ > 0) {
+                // Command ended early (shouldn't happen) -- release.
+                mmio_wait_countdown_ = 0;
+                io_ch_rdy_.release();
+            }
+        } else if (mmio_wait_countdown_ > 0) {
+            if (--mmio_wait_countdown_ == 0)
+                io_ch_rdy_.release();
+        }
+    }
 
     // --- CPU MMIO ---
     // Runs unconditionally: the 8288 bus recovery re-asserts ~MEMW/~MEMR
