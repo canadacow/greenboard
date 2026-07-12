@@ -79,6 +79,24 @@ struct DxState {
     ComPtr<ID3D11SamplerState> blit_sampler;
     ComPtr<ID3D11Buffer> blit_cb;  // UV rect constant buffer
 
+    // CRT scaler intermediate: decoded source (composite or RGBI) rendered
+    // 1:1 at dot resolution, then CRT-scaled to the back buffer.
+    ComPtr<ID3D11Texture2D> crt_src_tex;
+    ComPtr<ID3D11RenderTargetView> crt_src_rtv;
+    ComPtr<ID3D11ShaderResourceView> crt_src_srv;
+    bool crt_scaler = true;
+
+    // Fullscreen (borderless) state -- Alt+Enter toggle.
+    bool fullscreen = false;
+    WINDOWPLACEMENT saved_placement = { sizeof(WINDOWPLACEMENT) };
+    LONG saved_style = 0;
+    bool resize_pending = false;
+    int resize_w = 0, resize_h = 0;
+
+    void toggle_fullscreen();
+    void request_resize(int w, int h) { resize_pending = true; resize_w = w; resize_h = h; }
+    void apply_resize();
+
     // Active display rasterizer (MDA or CGA, owned by renderer)
     std::unique_ptr<Rasterizer> rasterizer;
 
@@ -206,6 +224,9 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
     scd.BufferCount = 2;
     scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     factory->CreateSwapChainForHwnd(device.Get(), hwnd, &scd, nullptr, nullptr, &swapChain);
+    // Alt+Enter is handled by us (borderless fullscreen), not DXGI's
+    // exclusive-mode transition.
+    factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
     // RTV for ImGui (it renders via DX11 directly, not D2D).
     ComPtr<ID3D11Texture2D> backBuf;
@@ -227,6 +248,7 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                 float4 params;   // x=composite, y=tex_w, z=tex_h, w=grayscale decode
                 float4 comp0;    // video_ri, video_rq, video_gi, video_gq
                 float4 comp1;    // video_bi, video_bq, sharpness, unused
+                float4 crt0;     // x=pass mode (2=CRT), y/z=viewport w/h, w=mask scale
             };
             struct VS_OUT { float4 pos : SV_Position; float2 uv : TEXCOORD; };
             VS_OUT VS(uint id : SV_VertexID) {
@@ -320,7 +342,81 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                 return float4(rgb, 1);
             }
 
+            // ----- CRT scaler ------------------------------------------
+            // Physically-motivated CRT model, computed in linear light:
+            //
+            //  * Horizontal: the electron beam is a gaussian spot moving
+            //    across the line -- 5-tap gaussian in source dots.
+            //  * Vertical: each scanline is a gaussian beam profile whose
+            //    width grows with brightness (bright lines bloom, dark
+            //    lines show wider gaps) -- the Lottes beam model.
+            //  * Aperture grille: RGB phosphor stripes in physical output
+            //    pixels. mask scale (crt0.w) is chosen CPU-side from the
+            //    actual viewport height so triads stay ~1/360 of screen
+            //    height: 1px stripes at 1080p, 2px at 4K UHD.
+            //
+            // Source is the decoded dot-resolution image (composite or
+            // RGBI), so scanline geometry is exact: 200 visible lines.
+            float3 crt_fetch(float2 uv) {
+                float3 c = tex.SampleLevel(samp, uv, 0).rgb;
+                return c * c;  // approximate CRT gamma 2.2 with 2.0 (fast, stable)
+            }
+
+            // Gaussian-filtered beam color at line center yline (texels),
+            // horizontal beam center src_x (dots).
+            float3 crt_hbeam(float src_x, float yline) {
+                float v = yline / params.z;
+                float xf = floor(src_x - 0.5);
+                float3 acc = float3(0, 0, 0);
+                float wsum = 0.0;
+                [unroll] for (int k = -2; k <= 2; k++) {
+                    float xc = xf + k + 0.5;             // tap dot center
+                    float d = xc - src_x;                // dots from beam center
+                    float w = exp(-d * d * (1.0 / (2.0 * 0.55 * 0.55)));
+                    acc += crt_fetch(float2(xc / params.y, v)) * w;
+                    wsum += w;
+                }
+                return acc / wsum;
+            }
+
+            float4 PS_crt(VS_OUT pin) {
+                float2 src = pin.uv * float2(params.y, params.z);  // dots, lines
+
+                // Two nearest scanlines.
+                float ly = src.y - 0.5;
+                float l0 = floor(ly);
+                float f0 = ly - l0;          // distance from line l0 center
+
+                float3 c0 = crt_hbeam(src.x, l0 + 0.5);
+                float3 c1 = crt_hbeam(src.x, l0 + 1.5);
+
+                // Beam profile: gaussian, width scales with line luminance.
+                float lum0 = dot(c0, float3(0.299, 0.587, 0.114));
+                float lum1 = dot(c1, float3(0.299, 0.587, 0.114));
+                float s0 = lerp(0.30, 0.45, saturate(lum0));
+                float s1 = lerp(0.30, 0.45, saturate(lum1));
+                float w0 = exp(-f0 * f0 / (2.0 * s0 * s0));
+                float f1 = 1.0 - f0;
+                float w1 = exp(-f1 * f1 / (2.0 * s1 * s1));
+
+                float3 col = c0 * w0 + c1 * w1;
+
+                // Aperture grille (RGB stripes) in physical pixels.
+                float mscale = max(crt0.w, 1.0);
+                uint stripe = (uint)floor(pin.pos.x / mscale) % 3u;
+                const float ml = 0.45;  // off-phosphor leakage
+                float3 mask = (stripe == 0u) ? float3(1, ml, ml)
+                            : (stripe == 1u) ? float3(ml, 1, ml)
+                                             : float3(ml, ml, 1);
+                // Normalize mask+scanline energy loss (keeps APL close to
+                // the unfiltered image without clipping whites too hard).
+                col *= mask * (3.0 / (1.0 + 2.0 * ml)) * 1.10;
+
+                return float4(sqrt(saturate(col)), 1);  // back to gamma
+            }
+
             float4 PS(VS_OUT i) : SV_Target {
+                if (crt0.x > 1.5) return PS_crt(i);
                 if (params.x > 0.5) return PS_composite(i);
                 return tex.Sample(samp, i.uv);
             }
@@ -338,9 +434,9 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
         device->CreateSamplerState(&sd, &blit_sampler);
 
-        // Constant buffer: uv_rect + params + comp0 + comp1
+        // Constant buffer: uv_rect + params + comp0 + comp1 + crt0
         D3D11_BUFFER_DESC cbd = {};
-        cbd.ByteWidth = 64;  // 4 x float4
+        cbd.ByteWidth = 80;  // 5 x float4
         cbd.Usage = D3D11_USAGE_DYNAMIC;
         cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -359,6 +455,20 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         tsrv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
         tsrv.Buffer.NumElements = 1024;
         device->CreateShaderResourceView(comp_table_buf.Get(), &tsrv, &comp_table_srv);
+
+        // CRT scaler intermediate RT (decoded source at dot resolution)
+        D3D11_TEXTURE2D_DESC td = {};
+        td.Width = CgaRasterizer::OUT_W;
+        td.Height = CgaRasterizer::OUT_H;
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        device->CreateTexture2D(&td, nullptr, &crt_src_tex);
+        device->CreateRenderTargetView(crt_src_tex.Get(), nullptr, &crt_src_rtv);
+        device->CreateShaderResourceView(crt_src_tex.Get(), nullptr, &crt_src_srv);
     }
 
     // ImGui -- scale font + style for high-DPI.
@@ -419,41 +529,90 @@ void DxState::render_display() {
                 }
             }
 
-            // Upload source UV rect + filter params
-            auto uv = rasterizer->output_uv_rect();
-            D3D11_MAPPED_SUBRESOURCE mapped;
-            ctx->Map(blit_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-            float cb_data[16] = {
-                uv.u0, uv.v0, uv.u1, uv.v1,
-                composite_on ? 1.0f : 0.0f,
-                (float)CgaRasterizer::OUT_W,
-                (float)CgaRasterizer::OUT_H,
-                comp_grayscale ? 1.0f : 0.0f,
-                comp_ri, comp_rq, comp_gi, comp_gq,
-                comp_bi, comp_bq, 0.0f /* sharpness */, 0.0f
+            // Aspect-correct destination viewport: the CGA active area is
+            // a 4:3 picture on the monitor. Letterbox/pillarbox to fit.
+            float dst_w = (float)winW, dst_h = (float)winH;
+            if (dst_w / dst_h > 4.0f / 3.0f) dst_w = dst_h * (4.0f / 3.0f);
+            else                             dst_h = dst_w * (3.0f / 4.0f);
+            D3D11_VIEWPORT dst_vp = {
+                ((float)winW - dst_w) * 0.5f, ((float)winH - dst_h) * 0.5f,
+                dst_w, dst_h, 0, 1
             };
-            memcpy(mapped.pData, cb_data, sizeof(cb_data));
-            ctx->Unmap(blit_cb.Get(), 0);
 
-            ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
-            D3D11_VIEWPORT vp = { 0, 0, (float)winW, (float)winH, 0, 1 };
-            ctx->RSSetViewports(1, &vp);
+            bool crt_on = crt_scaler && crt_src_rtv;
+            // Mask scale: keep phosphor triads ~1/360 of picture height.
+            // 1px stripes up to 1080p-class, 2px at 1440p, 3px at 4K UHD.
+            float mask_scale = (std::max)(1.0f, std::floor(dst_h / 1080.0f + 0.5f));
+
+            auto uv = rasterizer->output_uv_rect();
+
+            // Common pipeline state
             ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             ctx->IASetInputLayout(nullptr);
             ctx->VSSetShader(blit_vs.Get(), nullptr, 0);
             ctx->VSSetConstantBuffers(0, 1, blit_cb.GetAddressOf());
             ctx->PSSetShader(blit_ps.Get(), nullptr, 0);
             ctx->PSSetConstantBuffers(0, 1, blit_cb.GetAddressOf());
-            ID3D11ShaderResourceView* ps_srvs[3] = {
-                srv, comp_table_srv.Get(), rasterizer->index_srv()
-            };
-            ctx->PSSetShaderResources(0, 3, ps_srvs);
             ctx->PSSetSamplers(0, 1, blit_sampler.GetAddressOf());
-            ctx->Draw(3, 0);
 
-            // Unbind
-            ID3D11ShaderResourceView* null_srvs[3] = {};
-            ctx->PSSetShaderResources(0, 3, null_srvs);
+            auto upload_cb = [&](float u0, float v0, float u1, float v1,
+                                 float comp_flag, float crt_mode, float vw, float vh) {
+                D3D11_MAPPED_SUBRESOURCE mapped;
+                ctx->Map(blit_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+                float cb_data[20] = {
+                    u0, v0, u1, v1,
+                    comp_flag,
+                    (float)CgaRasterizer::OUT_W,
+                    (float)CgaRasterizer::OUT_H,
+                    comp_grayscale ? 1.0f : 0.0f,
+                    comp_ri, comp_rq, comp_gi, comp_gq,
+                    comp_bi, comp_bq, 0.0f /* sharpness */, 0.0f,
+                    crt_mode, vw, vh, mask_scale
+                };
+                memcpy(mapped.pData, cb_data, sizeof(cb_data));
+                ctx->Unmap(blit_cb.Get(), 0);
+            };
+
+            if (crt_on) {
+                // Pass 1: decode source (composite or raw) 1:1 into the
+                // dot-resolution intermediate.
+                upload_cb(0, 0, 1, 1, composite_on ? 1.0f : 0.0f, 0.0f,
+                          (float)CgaRasterizer::OUT_W, (float)CgaRasterizer::OUT_H);
+                ctx->OMSetRenderTargets(1, crt_src_rtv.GetAddressOf(), nullptr);
+                D3D11_VIEWPORT src_vp = { 0, 0,
+                    (float)CgaRasterizer::OUT_W, (float)CgaRasterizer::OUT_H, 0, 1 };
+                ctx->RSSetViewports(1, &src_vp);
+                ID3D11ShaderResourceView* p1_srvs[3] = {
+                    srv, comp_table_srv.Get(), rasterizer->index_srv()
+                };
+                ctx->PSSetShaderResources(0, 3, p1_srvs);
+                ctx->Draw(3, 0);
+                ID3D11ShaderResourceView* null3[3] = {};
+                ctx->PSSetShaderResources(0, 3, null3);
+
+                // Pass 2: CRT-scale the intermediate to the back buffer.
+                upload_cb(uv.u0, uv.v0, uv.u1, uv.v1, 0.0f, 2.0f, dst_w, dst_h);
+                ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+                ctx->RSSetViewports(1, &dst_vp);
+                ID3D11ShaderResourceView* p2_srvs[1] = { crt_src_srv.Get() };
+                ctx->PSSetShaderResources(0, 1, p2_srvs);
+                ctx->Draw(3, 0);
+                ID3D11ShaderResourceView* null1[1] = {};
+                ctx->PSSetShaderResources(0, 1, null1);
+            } else {
+                // Single pass: decode + crop straight to the back buffer.
+                upload_cb(uv.u0, uv.v0, uv.u1, uv.v1,
+                          composite_on ? 1.0f : 0.0f, 0.0f, dst_w, dst_h);
+                ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+                ctx->RSSetViewports(1, &dst_vp);
+                ID3D11ShaderResourceView* ps_srvs[3] = {
+                    srv, comp_table_srv.Get(), rasterizer->index_srv()
+                };
+                ctx->PSSetShaderResources(0, 3, ps_srvs);
+                ctx->Draw(3, 0);
+                ID3D11ShaderResourceView* null_srvs[3] = {};
+                ctx->PSSetShaderResources(0, 3, null_srvs);
+            }
         }
     }
     // D2D rasterizers (MDA) already drew to the D2D target directly.
@@ -1415,6 +1574,11 @@ void DxState::render_system_window() {
                 cga->mode_register(),
                 comp_grayscale ? "grayscale (BW bit)" : "color");
         }
+        ImGui::Checkbox("CRT scaler", &crt_scaler);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Scanline beam + aperture grille phosphor mask.\n"
+                              "Mask scales with output resolution (4K-aware).");
+        ImGui::TextColored(dim, "Alt+Enter: fullscreen");
     }
 
     // --- ISA Expansion Slots ---
@@ -1775,6 +1939,62 @@ void DxState::present() {
     swapChain->Present(1, 0);
 }
 
+// Alt+Enter: borderless fullscreen on the window's current monitor.
+void DxState::toggle_fullscreen() {
+    fullscreen = !fullscreen;
+    if (fullscreen) {
+        saved_style = GetWindowLongW(hwnd, GWL_STYLE);
+        GetWindowPlacement(hwnd, &saved_placement);
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
+        SetWindowLongW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(hwnd, HWND_TOP,
+                     mi.rcMonitor.left, mi.rcMonitor.top,
+                     mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top,
+                     SWP_FRAMECHANGED);
+        spdlog::info("[Renderer] Fullscreen ON ({}x{})",
+                     mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top);
+    } else {
+        SetWindowLongW(hwnd, GWL_STYLE, saved_style);
+        SetWindowPlacement(hwnd, &saved_placement);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        spdlog::info("[Renderer] Fullscreen OFF");
+    }
+}
+
+// Deferred WM_SIZE: resize swap chain between frames (RTV must be unbound).
+void DxState::apply_resize() {
+    if (!resize_pending) return;
+    resize_pending = false;
+    int w = resize_w, h = resize_h;
+    if (!swapChain || w <= 0 || h <= 0 || (w == winW && h == winH)) return;
+
+    ctx->OMSetRenderTargets(0, nullptr, nullptr);
+    rtv.Reset();
+    HRESULT hr = swapChain->ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, 0);
+    if (FAILED(hr)) {
+        spdlog::error("[Renderer] ResizeBuffers failed: 0x{:08X}", (unsigned)hr);
+        return;
+    }
+    ComPtr<ID3D11Texture2D> backBuf;
+    swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuf));
+    device->CreateRenderTargetView(backBuf.Get(), nullptr, &rtv);
+
+    winW = w; winH = h;
+    cellW = (float)w / MDA_COLS;
+    cellH = (float)h / MDA_ROWS;
+
+    // D2D rasterizers (MDA) render into views of the old back buffer --
+    // rebuild them against the new one.
+    if (rasterizer && rasterizer->uses_d2d()) {
+        RenderContext rc = { device.Get(), ctx.Get(), winW, winH, cellW, cellH };
+        rasterizer->init(rc);
+    }
+}
+
 // ========================================================================
 // Window
 // ========================================================================
@@ -1866,6 +2086,23 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     // menu activation, otherwise F10 requires two presses.
     if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp == VK_F10)
         return 0;
+
+    // Alt+Enter: toggle borderless fullscreen. Swallow the key entirely
+    // so it neither reaches the emulated keyboard nor beeps.
+    if (msg == WM_SYSKEYDOWN && wp == VK_RETURN) {
+        if (!(lp & (1 << 30)) && s_dx)   // ignore auto-repeat
+            s_dx->toggle_fullscreen();
+        return 0;
+    }
+    if (msg == WM_SYSKEYUP && wp == VK_RETURN)
+        return 0;
+
+    // Track client size changes (fullscreen toggle, user resize).
+    // The swap chain resize is applied between frames.
+    if (msg == WM_SIZE && s_dx && wp != SIZE_MINIMIZED) {
+        s_dx->request_resize(LOWORD(lp), HIWORD(lp));
+        return 0;
+    }
 
     // Forward keyboard events to the emulated keyboard.
     // Only when ImGui doesn't want keyboard input (not typing in a text field).
@@ -1964,6 +2201,7 @@ void Renderer::render_loop(std::stop_token stop) {
                 brd_map_ready_.store(false, std::memory_order_release);
             }
 
+            dx.apply_resize();
             dx.render_display();
             dx.render_overlay();
             dx.present();

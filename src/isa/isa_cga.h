@@ -249,6 +249,21 @@ private:
     ScanlineRegs scanline_regs_[FRAME_LINES] = {};
     uint32_t dot_counter_ = 0;    // dot clock accumulator (3 per system CLK)
     uint8_t lclk_phase_ = 0;      // free-running 16-dot lclock phase (wait states)
+
+    // --- CGA snow (80-col text CPU/CRTC memory contention) ---
+    // In 80-column text mode the CRTC uses every VRAM slot, so a CPU
+    // access steals the in-progress character fetch: the CPU's data
+    // byte lands in the CRTC latch and is displayed for that one cell
+    // on that one scanline. Events are collected as accesses happen and
+    // applied to the captured row in stamp_scanline().
+    // NOT serialized (transient, and .b51 format must stay stable).
+    static constexpr int MAX_SNOW_EVENTS = 16;
+    struct SnowEvent { uint8_t col; uint8_t attr_half; uint8_t byte; };
+    SnowEvent snow_events_[MAX_SNOW_EVENTS] = {};
+    int snow_event_count_ = 0;
+    uint64_t last_snow_key_ = ~0ull;  // (addr<<1)|is_write of current bus cycle
+    bool mmio_touched_ = false;       // an MMIO dispatch happened this CLK
+    void note_snow(uint32_t addr, uint8_t byte, bool is_write);
     uint32_t hcc_ = 0;           // horizontal character counter (0..R0)
     uint32_t scanline_ = 0;      // current scanline 0..261
     uint32_t vcc_ = 0;           // vertical character counter

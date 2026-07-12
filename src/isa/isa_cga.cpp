@@ -155,11 +155,50 @@ void ISA_CGA::on_io_write(uint16_t port, uint8_t val) {
 // =========================================================================
 
 uint8_t ISA_CGA::on_mmio_read(uint32_t addr) {
-    return vram_[(addr - FB_BASE) & (FB_SIZE - 1)];
+    uint8_t val = vram_[(addr - FB_BASE) & (FB_SIZE - 1)];
+    note_snow(addr, val, false);
+    return val;
 }
 
 void ISA_CGA::on_mmio_write(uint32_t addr, uint8_t val) {
     vram_[(addr - FB_BASE) & (FB_SIZE - 1)] = val;
+    note_snow(addr, val, true);
+}
+
+// CGA snow: record a CPU VRAM access that steals the CRTC's fetch.
+// Only 80-column text mode snows -- in 40-col and graphics modes the
+// CGA interleaves CPU access into a free memory slot (that is what the
+// wait states synchronize to), but 80-col text needs every slot.
+// The stolen fetch shows the CPU's data byte in place of the character
+// code or attribute, depending on which half of the character clock
+// the access lands in.
+void ISA_CGA::note_snow(uint32_t addr, uint8_t byte, bool is_write) {
+    if ((mode_ & (MODE_HIRES_TEXT | MODE_GRAPHICS | MODE_ENABLE)) !=
+        (MODE_HIRES_TEXT | MODE_ENABLE))
+        return;
+
+    mmio_touched_ = true;
+
+    // The ISA bus dispatches level-based: the same bus cycle calls this
+    // every CLK while ~MEMR/~MEMW is low. Collapse to one event.
+    uint64_t key = ((uint64_t)addr << 1) | (is_write ? 1 : 0);
+    if (key == last_snow_key_)
+        return;
+    last_snow_key_ = key;
+
+    // Corruption is only visible while the beam is fetching characters.
+    if (in_vsync_ || in_vtadj_)
+        return;
+    if (hcc_ >= crtc_reg_[CRTC_HDISPLAYED] || vcc_ >= crtc_reg_[CRTC_VDISPLAYED])
+        return;
+    if (snow_event_count_ >= MAX_SNOW_EVENTS)
+        return;
+
+    snow_events_[snow_event_count_++] = {
+        (uint8_t)hcc_,
+        (uint8_t)((dot_counter_ >> 2) & 1),  // char or attr half of the fetch
+        byte
+    };
 }
 
 // =========================================================================
@@ -217,6 +256,14 @@ void ISA_CGA::on_cycle(Fiber) {
     // system CLK regardless of CRTC state -- must tick before any
     // early return below.
     lclk_phase_ = (lclk_phase_ + 3) & 15;
+
+    // Snow bookkeeping: a CLK with no MMIO dispatch means the current
+    // CPU bus cycle ended (~MEMR/~MEMW went high between cycles), so a
+    // later access to the same address is a new bus cycle and may snow
+    // again.
+    if (!mmio_touched_)
+        last_snow_key_ = ~0ull;
+    mmio_touched_ = false;
 
     dot_counter_ += 3;
     if (dot_counter_ < dots_per_char)
@@ -353,6 +400,17 @@ void ISA_CGA::stamp_scanline() {
     // Zero remainder.
     for (uint32_t i = bytes; i < SCANLINE_ROW_BYTES; ++i)
         dst[i] = 0;
+
+    // Apply snow: CPU accesses during this scanline stole CRTC fetches.
+    // The corrupted cell shows the CPU's byte for one scanline; the row
+    // refetches clean next scanline (and this slot is re-stamped next
+    // frame), so the glitch flickers like real snow.
+    for (int i = 0; i < snow_event_count_; ++i) {
+        uint32_t off = (uint32_t)snow_events_[i].col * 2 + snow_events_[i].attr_half;
+        if (off < bytes)
+            dst[off] = snow_events_[i].byte;
+    }
+    snow_event_count_ = 0;
 }
 
 } // namespace bench
