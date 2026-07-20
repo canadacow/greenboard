@@ -14,4 +14,9 @@ void thread_set_time_critical();
 // No-op if the platform has no hybrid topology or detection fails.
 void thread_pin_to_pcores();
 
+// Pin the calling thread to efficiency cores only (E-cores on Intel hybrid).
+// Power experiment: a maxed E-core stays under the fan-curve knee where a
+// boosted P-core does not. No-op without hybrid topology.
+void thread_pin_to_ecores();
+
 } // namespace bench

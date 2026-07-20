@@ -32,10 +32,19 @@ void IC_8284A::install(Socket& socket) {
     declare_output(pin_ready_); declare_output(pin_reset_);
 }
 
+// Power experiment: pin the clock thread to E-cores instead of P-cores.
+// A maxed E-core avoids single-core turbo boost and its fan noise --
+// watch the HUD MHz to see if it still clears 4.77 MHz. Flip to false
+// to restore P-core pinning.
+static constexpr bool kClockOnECores = false;
+
 void IC_8284A::run(std::stop_token stop) {
-    // Hot thread -- maximize scheduling priority and pin to P-cores.
+    // Hot thread -- maximize scheduling priority and pin to one core class.
     thread_set_time_critical();
-    thread_pin_to_pcores();
+    if (kClockOnECores)
+        thread_pin_to_ecores();
+    else
+        thread_pin_to_pcores();
 
     clk_cycles_ = 0;
 

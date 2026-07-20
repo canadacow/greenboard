@@ -128,30 +128,34 @@ void IC_8259A::on_cycle(Fiber /*caller*/) {
     rd_prev_ = rd_cur;
     inta_prev_ = inta_cur;
 
-    // IRQ line changes -- edge detection
-    for (int i = 0; i < 8; ++i) {
-        bool now_high = ir_[i].level() == Level::High;
-        bool was_low = (ir_prev_ & (1 << i)) == 0;
-        if (now_high && was_low) {
-            ir_prev_ |= (1 << i);
-            if (edge_triggered_) {
-                irr_ |= (1 << i);
-                if (i == 6) {
-                    spdlog::info("[8259A] IRQ6 edge -> IRR={:02X} IMR={:02X} ISR={:02X} masked={} "
-                                 "blocked_by_isr={}",
-                                 irr_, imr_, isr_,
-                                 (imr_ & (1 << 6)) ? 1 : 0,
-                                 (isr_ & ((1 << 6) - 1)) ? 1 : 0);
-                }
-                evaluate_int();
-            }
-        } else if (!now_high && !was_low) {
-            ir_prev_ &= ~(1 << i);
-            if (!edge_triggered_) {
-                irr_ &= ~(1 << i);
-                evaluate_int();
-            }
+    // IRQ line changes -- edge detection.
+    // Sample all 8 IR pins branchlessly into one byte, then bail on the
+    // (overwhelmingly common) no-change cycle. Per-bit work only runs
+    // for bits that actually transitioned.
+    uint8_t ir_now = 0;
+    for (int i = 0; i < 8; ++i)
+        ir_now |= uint8_t(ir_[i].level() == Level::High) << i;
+    if (ir_now == ir_prev_)
+        return;
+
+    uint8_t rising  = uint8_t(ir_now & ~ir_prev_);
+    uint8_t falling = uint8_t(~ir_now & ir_prev_);
+    ir_prev_ = ir_now;
+
+    if (rising && edge_triggered_) {
+        irr_ |= rising;
+        if (rising & (1 << 6)) {
+            spdlog::info("[8259A] IRQ6 edge -> IRR={:02X} IMR={:02X} ISR={:02X} masked={} "
+                         "blocked_by_isr={}",
+                         irr_, imr_, isr_,
+                         (imr_ & (1 << 6)) ? 1 : 0,
+                         (isr_ & ((1 << 6) - 1)) ? 1 : 0);
         }
+        evaluate_int();
+    }
+    if (falling && !edge_triggered_) {
+        irr_ &= uint8_t(~falling);
+        evaluate_int();
     }
 }
 

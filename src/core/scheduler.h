@@ -125,6 +125,8 @@ public:
         // Store evals list for on-demand solve_perm().
         evals_.assign(evals.begin(), evals.end());
         wave_plans_.clear();
+        last_perm_ = ~0ull;
+        last_flat_ = nullptr;
 
         unified_resolved_ = true;
     }
@@ -316,18 +318,21 @@ public:
             mul *= 3;
         }
 
-        auto it = wave_plans_.find(perm);
-        if (it == wave_plans_.end()) {
-            auto plan = solve_perm(perm);
-            plan.flatten();
-            it = wave_plans_.emplace(perm, std::move(plan)).first;
+        if (perm != last_perm_) [[unlikely]] {
+            auto it = wave_plans_.find(perm);
+            if (it == wave_plans_.end()) {
+                auto plan = solve_perm(perm);
+                plan.flatten();
+                it = wave_plans_.emplace(perm, std::move(plan)).first;
+            }
+            last_perm_ = perm;
+            last_flat_ = &it->second.flat;
+            current_perm_ = perm;
         }
-
-        current_perm_ = perm;
 
         // Flattened eval: single contiguous array, plain index loop.
         // No double indirection through vector<vector<Component*>>.
-        const auto& flat = it->second.flat;
+        const auto& flat = *last_flat_;
         const int plan_size = static_cast<int>(flat.size());
         Component* const* plan = flat.data();
         for (int i = 0; i < plan_size; ++i) {
@@ -546,6 +551,13 @@ private:
     };
     std::unordered_map<uint64_t, WavePlan> wave_plans_;
     uint64_t current_perm_ = 0;
+
+    // Last-perm plan cache: the permutation repeats for long runs of
+    // cycles, so evaluate() skips the hash lookup while it is unchanged.
+    // unordered_map is node-based, so the cached pointer stays valid
+    // across emplace. Invalidated in resolve() with wave_plans_.
+    uint64_t last_perm_ = ~0ull;
+    const std::vector<Component*>* last_flat_ = nullptr;
 public:
     uint64_t current_perm() const { return current_perm_; }
 private:
