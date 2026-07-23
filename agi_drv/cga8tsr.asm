@@ -45,6 +45,22 @@ s_rows  db 0
 s_cols  db 0
 s_lines db 0
 s_wb    db 0
+f_x     dw 0
+f_y     dw 0
+f_x2    dw 0
+f_y2    dw 0
+f_col   db 0
+f_byte  db 0
+f_word  dw 0
+p_e     db 0
+p_o     db 0
+ab_seg  dw 0
+ab_x    dw 0
+ab_x2   dw 0
+ab_y    dw 0
+ab_yb   dw 0
+ab_p    dw 0
+ab_w    dw 0
 
 crtc_tbl db 4,0x7F, 5,0x06, 6,0x64, 7,0x70, 9,0x01
 
@@ -74,6 +90,12 @@ handler:
     je   .getpx
     cmp  ah,0x0E
     je   .tty
+    cmp  ah,0xF8
+    je   .fillrect
+    cmp  ah,0xF9
+    je   .patfill
+    cmp  ah,0xFA
+    je   .agiblit
 .chain:
     jmp  far [cs:oldvec]
 
@@ -189,6 +211,8 @@ handler:
     and  ah,0xF0
     or   ah,bl
 .px_store:
+    cmp  ah,[cs:si]          ; unchanged pixel: skip store + re-encode
+    je   .px_done
     mov  [cs:si],ah
     call encode_cell
 .px_done:
@@ -357,6 +381,459 @@ handler:
     sti
     cld
     call scroll_core
+    pop  es
+    pop  ds
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    iret
+
+; ---------------- fill rect (AH=F8h, SCGA private) ----------------
+; AL = color, CX = x, DX = y, SI = width, DI = height.
+; Shadow filled nibble-exact; interior cells written as solid words,
+; edge cells re-encoded from shadow.
+.fillrect:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    sti
+    cld
+    cmp  cx,160
+    jae  .fr_done
+    cmp  dx,200
+    jae  .fr_done
+    and  al,0x0F
+    mov  [cs:f_col],al
+    mov  [cs:f_x],cx
+    mov  [cs:f_y],dx
+    mov  bx,cx
+    add  bx,si
+    dec  bx
+    cmp  bx,160
+    jb   .frx
+    mov  bx,159
+.frx:
+    mov  [cs:f_x2],bx
+    cmp  bx,cx
+    jl   .fr_done
+    mov  bx,dx
+    add  bx,di
+    dec  bx
+    cmp  bx,200
+    jb   .fry
+    mov  bx,199
+.fry:
+    mov  [cs:f_y2],bx
+    cmp  bx,dx
+    jl   .fr_done
+    mov  al,[cs:f_col]       ; f_byte = c | c<<4;  f_word = solid cell
+    mov  ah,al
+    push cx
+    mov  cl,4
+    shl  ah,cl
+    pop  cx
+    or   al,ah
+    mov  [cs:f_byte],al
+    mov  ah,al
+    mov  al,0xDB
+    mov  [cs:f_word],ax
+    ; --- shadow fill, row by row ---
+    push cs
+    pop  es
+    mov  dx,[cs:f_y]
+.fr_row:
+    mov  cx,[cs:f_x]
+    call shadow_addr         ; SI = shadow ptr for (CX,DX)
+    mov  di,si
+    mov  bx,[cs:f_x2]
+    test cl,1                ; left partial pixel (odd x)?
+    jz   .fr_mid
+    mov  al,[es:di]
+    and  al,0xF0
+    or   al,[cs:f_col]
+    mov  [es:di],al
+    inc  di
+    inc  cx
+    cmp  cx,bx
+    jg   .fr_next
+.fr_mid:
+    mov  ax,bx
+    sub  ax,cx
+    inc  ax                  ; remaining pixel count
+    shr  ax,1                ; full bytes
+    push cx
+    mov  cx,ax
+    mov  al,[cs:f_byte]
+    rep  stosb
+    pop  cx
+    mov  ax,bx
+    sub  ax,cx
+    inc  ax
+    test al,1                ; trailing partial (even x2, odd count)?
+    jz   .fr_next
+    mov  al,[es:di]
+    and  al,0x0F
+    mov  ah,[cs:f_col]
+    push cx
+    mov  cl,4
+    shl  ah,cl
+    pop  cx
+    or   al,ah
+    mov  [es:di],al
+.fr_next:
+    inc  dx
+    cmp  dx,[cs:f_y2]
+    jle  .fr_row
+    ; --- cell pass ---
+    mov  ax,0xB800
+    mov  es,ax
+    mov  dx,[cs:f_y]
+    and  dl,0xFE             ; cell-top scanline
+.fc_row:
+    mov  di,dx               ; DI = (y>>1)*160 + (x & ~1)
+    shr  di,1
+    mov  ax,di
+    shl  ax,1
+    shl  ax,1
+    shl  ax,1
+    shl  ax,1
+    shl  ax,1                ; *32
+    push cx
+    mov  cl,7
+    shl  di,cl               ; *128
+    pop  cx
+    add  di,ax
+    mov  ax,[cs:f_x]
+    and  al,0xFE
+    add  di,ax
+    mov  cx,[cs:f_x]
+    and  cl,0xFE
+.fc_cell:
+    ; fully covered? y>=f_y, y+1<=f_y2, x>=f_x, x+1<=f_x2
+    cmp  dx,[cs:f_y]
+    jl   .fc_part
+    mov  ax,dx
+    inc  ax
+    cmp  ax,[cs:f_y2]
+    jg   .fc_part
+    cmp  cx,[cs:f_x]
+    jl   .fc_part
+    mov  ax,cx
+    inc  ax
+    cmp  ax,[cs:f_x2]
+    jg   .fc_part
+    mov  ax,[cs:f_word]
+    stosw
+    jmp  .fc_next
+.fc_part:
+    call encode_cell         ; partial: truth from shadow
+    add  di,2
+.fc_next:
+    add  cx,2
+    cmp  cx,[cs:f_x2]
+    jle  .fc_cell
+    add  dx,2
+    cmp  dx,[cs:f_y2]
+    jle  .fc_row
+.fr_done:
+    pop  es
+    pop  ds
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    iret
+
+; ---------------- pattern fill (AH=F9h, SCGA private) ----------------
+; AL = color A, BL = color B, BH = type (0 = 1px vstripes,
+; 1 = 1px hstripes, 2 = 1px checker), CX = x, DX = y, SI = w, DI = h.
+; Coordinates are cell-aligned (x,y,w,h even); odd bits are masked.
+; Each type has a constant cell word and constant per-row-parity shadow
+; bytes, so the whole region fills at rep-stos speed.
+.patfill:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    sti
+    cld
+    and  al,0x0F
+    mov  [cs:f_col],al       ; A
+    mov  al,bl
+    and  al,0x0F
+    mov  [cs:p_o],al         ; B (temporary home)
+    mov  [cs:attrtmp],bh     ; type
+    ; clip rect -> f_x/f_y/f_x2/f_y2, aligned to cells
+    cmp  cx,160
+    jae  .pf_done
+    cmp  dx,200
+    jae  .pf_done
+    and  cl,0xFE
+    and  dl,0xFE
+    mov  [cs:f_x],cx
+    mov  [cs:f_y],dx
+    mov  bx,cx
+    add  bx,si
+    dec  bx
+    cmp  bx,160
+    jb   .pfx
+    mov  bx,159
+.pfx:
+    or   bl,1                ; x2 odd: whole cells
+    mov  [cs:f_x2],bx
+    cmp  bx,cx
+    jl   .pf_done
+    mov  bx,dx
+    add  bx,di
+    dec  bx
+    cmp  bx,200
+    jb   .pfy
+    mov  bx,199
+.pfy:
+    or   bl,1                ; y2 odd: whole cells
+    mov  [cs:f_y2],bx
+    cmp  bx,dx
+    jl   .pf_done
+    ; build per-parity shadow bytes and the constant cell word
+    mov  al,[cs:f_col]       ; A
+    mov  ah,al
+    push cx
+    mov  cl,4
+    shl  ah,cl               ; AH = A<<4
+    pop  cx
+    mov  bl,[cs:p_o]         ; B
+    mov  bh,bl
+    push cx
+    mov  cl,4
+    shl  bh,cl               ; BH = B<<4
+    pop  cx
+    mov  dl,[cs:attrtmp]     ; type
+    cmp  dl,1
+    je   .pf_h
+    cmp  dl,2
+    je   .pf_c
+    ; type 0: vertical stripes -- bytes AB/AB, cell 0xDD attr (B<<4)|A
+    mov  dh,ah
+    or   dh,bl
+    mov  [cs:p_e],dh
+    mov  [cs:p_o],dh
+    mov  dh,bh
+    or   dh,al
+    mov  dl,0xDD
+    jmp  .pf_w
+.pf_h:
+    ; type 1: horizontal stripes -- bytes AA/BB, cell 0x1F attr (A<<4)|B
+    mov  dh,ah
+    or   dh,al
+    mov  [cs:p_e],dh
+    mov  dh,bh
+    or   dh,bl
+    mov  [cs:p_o],dh
+    mov  dh,ah
+    or   dh,bl
+    mov  dl,0x1F
+    jmp  .pf_w
+.pf_c:
+    ; type 2: checker -- bytes AB/BA, cell 0xB1 attr (B<<4)|A
+    mov  dh,ah
+    or   dh,bl
+    mov  [cs:p_e],dh
+    mov  dh,bh
+    or   dh,al
+    mov  [cs:p_o],dh
+    mov  dh,bh
+    or   dh,al
+    mov  dl,0xB1
+.pf_w:
+    mov  al,dl
+    mov  ah,dh
+    mov  [cs:f_word],ax
+    ; shadow fill
+    push cs
+    pop  es
+    mov  dx,[cs:f_y]
+.pf_row:
+    mov  cx,[cs:f_x]
+    call shadow_addr
+    mov  di,si
+    mov  ax,[cs:f_x2]
+    sub  ax,cx
+    inc  ax
+    shr  ax,1                ; bytes per row
+    mov  cx,ax
+    mov  al,[cs:p_e]
+    test dl,1
+    jz   .pf_even
+    mov  al,[cs:p_o]
+.pf_even:
+    rep  stosb
+    inc  dx
+    cmp  dx,[cs:f_y2]
+    jle  .pf_row
+    ; cell fill
+    mov  ax,0xB800
+    mov  es,ax
+    mov  dx,[cs:f_y]
+.pf_crow:
+    mov  di,dx               ; DI = (y>>1)*160 + x
+    shr  di,1
+    mov  ax,di
+    shl  ax,1
+    shl  ax,1
+    shl  ax,1
+    shl  ax,1
+    shl  ax,1                ; *32
+    push cx
+    mov  cl,7
+    shl  di,cl               ; *128
+    pop  cx
+    add  di,ax
+    add  di,[cs:f_x]
+    mov  ax,[cs:f_x2]
+    sub  ax,[cs:f_x]
+    inc  ax
+    shr  ax,1                ; words per cell row
+    mov  cx,ax
+    mov  ax,[cs:f_word]
+    rep  stosw
+    add  dx,2
+    cmp  dx,[cs:f_y2]
+    jle  .pf_crow
+.pf_done:
+    pop  es
+    pop  ds
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    iret
+
+; ---------------- AGI blit (AH=FAh, SCGA private) ----------------
+; Blit a rect of an AGI-style source buffer (1 byte/px, low nibble =
+; color, 160 bytes/row) into the mode-8 screen.
+;   ES = source segment, DL = x (0-159), DH = vertical offset added to
+;   y (AGI picReloc), AL = bottom y, BL = width, BH = height.
+; Phase 1 packs source pixels into the shadow; phase 2 encodes every
+; touched cell from shadow (edges compose with existing content).
+.agiblit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    sti
+    cld
+    mov  [cs:ab_seg],es
+    test dl,1                ; align left edge / width to even
+    jz   .ab_x
+    dec  dl
+    inc  bl
+.ab_x:
+    inc  bl
+    and  bl,0xFE
+    mov  cl,dl
+    xor  ch,ch
+    mov  [cs:ab_x],cx
+    mov  cl,bl
+    mov  [cs:ab_w],cx
+    add  cx,[cs:ab_x]
+    dec  cx
+    mov  [cs:ab_x2],cx       ; x + w - 1
+    mov  cl,dh
+    xor  ch,ch
+    mov  [cs:ab_p],cx
+    mov  cl,al
+    mov  [cs:ab_yb],cx       ; bottom y (buffer coords)
+    xor  ah,ah               ; AX = bottom y (word)
+    mov  dl,bh
+    xor  dh,dh               ; DX = h (P already stashed)
+    sub  ax,dx
+    inc  ax                  ; word math: 167-168+1 = 0, not 256
+    mov  [cs:ab_y],ax        ; top y
+    ; --- phase 1: pack source rows into shadow ---
+    mov  dx,[cs:ab_y]
+.ab_row:
+    ; SI = src: y*160 + x
+    mov  si,dx
+    shl  si,1
+    shl  si,1
+    shl  si,1
+    shl  si,1
+    shl  si,1                ; y*32
+    mov  ax,si
+    shl  ax,1
+    shl  ax,1                ; y*128
+    add  si,ax               ; y*160
+    add  si,[cs:ab_x]
+    ; DI = shadow + (y+p)*80 + x/2
+    mov  ax,dx
+    add  ax,[cs:ab_p]
+    mov  di,ax
+    shl  di,1
+    shl  di,1
+    shl  di,1
+    shl  di,1                ; *16
+    mov  ax,di
+    shl  ax,1
+    shl  ax,1                ; *64
+    add  di,ax               ; *80
+    mov  ax,[cs:ab_x]
+    shr  ax,1
+    add  di,ax
+    add  di,shadow
+    mov  cx,[cs:ab_w]
+    shr  cx,1                ; output bytes
+    mov  ds,[cs:ab_seg]
+    push cs
+    pop  es
+.ab_pack:
+    lodsw                    ; AL = left px, AH = right px
+    and  ax,0x0F0F
+    push cx
+    mov  cl,4
+    shl  al,cl
+    pop  cx
+    or   al,ah               ; hi = left, lo = right
+    stosb
+    loop .ab_pack
+    inc  dx
+    cmp  dx,[cs:ab_yb]
+    jle  .ab_row
+    ; --- phase 2: encode touched cells ---
+    mov  dx,[cs:ab_y]
+    add  dx,[cs:ab_p]
+    and  dl,0xFE             ; top cell scanline
+    mov  bx,[cs:ab_yb]
+    add  bx,[cs:ab_p]        ; bottom screen row
+.ab_crow:
+    mov  cx,[cs:ab_x]
+.ab_cell:
+    call encode_cell
+    add  cx,2
+    cmp  cx,[cs:ab_x2]
+    jle  .ab_cell
+    add  dx,2
+    cmp  dx,bx
+    jle  .ab_crow
     pop  es
     pop  ds
     pop  di

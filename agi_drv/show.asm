@@ -103,22 +103,23 @@ puts:
 
 ; ================= screen 1: 16 color bars =================
 scr_bars:
-    xor  cx,cx               ; x
-.bx:
-    mov  ax,cx
-    mov  bl,10
-    div  bl                  ; AL = x/10 = color
-    mov  bl,al
-    xor  dx,dx               ; y
-.by:
-    mov  al,bl
-    call pixel
-    inc  dx
-    cmp  dx,200
-    jb   .by
-    inc  cx
-    cmp  cx,160
-    jb   .bx
+    xor  bp,bp               ; bar index
+.bar:
+    mov  ax,bp
+    mov  cx,bp               ; x = i*10
+    shl  cx,1
+    mov  dx,cx
+    shl  cx,1
+    shl  cx,1                ; 8i
+    add  cx,dx               ; 10i
+    xor  dx,dx               ; y = 0
+    mov  si,10               ; w
+    mov  di,200              ; h
+    mov  ah,0xF8             ; SCGA fill rect
+    int  0x10
+    inc  bp
+    cmp  bp,16
+    jb   .bar
     ; XOR hex labels centered on each bar at row 12
     xor  si,si               ; i
 .lb:
@@ -159,55 +160,52 @@ pairA db 1,2,3,4,5,6,7,8
 pairB db 9,10,11,12,13,14,15,0
 
 scr_zoo:
-    xor  dx,dx               ; y
-.y:
-    xor  cx,cx               ; x
-.x:
-    ; band p = y/50, group g = x/20
-    mov  ax,dx
-    mov  bl,50
-    div  bl
-    mov  bh,al               ; BH = band
+    xor  bp,bp               ; group 0..7
+.g:
+    mov  cx,bp               ; x = g*20
+    shl  cx,1
+    shl  cx,1                ; 4g
     mov  ax,cx
-    mov  bl,20
-    div  bl                  ; AL = group
-    push bx
-    mov  bx,ax
-    and  bx,7
-    mov  ah,[pairA+bx]       ; AH = color A
-    mov  al,[pairB+bx]       ; AL = color B
-    pop  bx
-    ; select by class
-    cmp  bh,0
-    je   .useA
-    cmp  bh,1
-    jne  .n1
-    test cl,1                ; vertical stripes
-    jz   .useA
-    jmp  .useB
-.n1:
-    cmp  bh,2
-    jne  .n2
-    test dl,1                ; horizontal stripes
-    jz   .useA
-    jmp  .useB
-.n2:
-    mov  bl,cl               ; checker
-    xor  bl,dl
-    test bl,1
-    jz   .useA
-.useB:
-    jmp  .plot
-.useA:
-    mov  al,ah
-.plot:
-    call pixel
-    inc  cx
-    cmp  cx,160
-    jb   .x
-    inc  dx
-    cmp  dx,200
-    jb   .y
+    shl  cx,1
+    shl  cx,1                ; 16g
+    add  cx,ax               ; 20g
+    mov  bx,bp
+    mov  al,[pairA+bx]       ; solid band, rows 0-49
+    xor  dx,dx
+    mov  si,20
+    mov  di,50
+    mov  ah,0xF8
+    int  0x10
+    mov  bx,bp               ; vstripes, rows 50-99
+    mov  al,[pairA+bx]
+    mov  bl,[pairB+bx]
+    xor  bh,bh
+    mov  dx,50
+    mov  si,20
+    mov  di,50
+    mov  ah,0xF9
+    int  0x10
+    mov  bx,bp               ; hstripes, rows 100-149
+    mov  al,[pairA+bx]
+    mov  bl,[pairB+bx]
+    mov  bh,1
+    mov  dx,100
+    mov  si,20
+    mov  di,50
+    mov  ah,0xF9
+    int  0x10
+    mov  bx,bp               ; checker, rows 150-199
+    mov  al,[pairA+bx]
+    mov  bl,[pairB+bx]
+    mov  bh,2
+    mov  dx,150
+    mov  si,20
+    mov  di,50
+    mov  ah,0xF9
+    int  0x10
+    inc  bp
+    cmp  bp,8
+    jb   .g
     ret
 
 ; ================= screen 3: concentric circles =================
