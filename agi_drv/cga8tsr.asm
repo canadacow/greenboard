@@ -319,9 +319,19 @@ handler:
     jmp  .tty_store
 .tty_notcr:
     cmp  al,0x0A
-    jne  .tty_char
+    jne  .tty_notlf
     inc  dh
     jmp  .tty_wrap
+.tty_notlf:
+    cmp  al,0x08             ; backspace: cursor left, no draw
+    jne  .tty_notbs
+    or   dl,dl
+    jz   .tty_store
+    dec  dl
+    jmp  .tty_store
+.tty_notbs:
+    cmp  al,0x07             ; BEL: ignore
+    je   .tty_store
 .tty_char:
     push dx
     call render_at
@@ -334,15 +344,8 @@ handler:
 .tty_wrap:
     cmp  dh,25
     jb   .tty_store
-    mov  dh,24
-    push dx
-    mov  byte [cs:sdown],0
-    mov  al,1                ; scroll whole screen up one text row
-    xor  bh,bh
-    xor  cx,cx
-    mov  dx,0x1827
-    call scroll_core
-    pop  dx
+    mov  dh,24               ; Sierra PutChar semantics: never scroll,
+                             ; clamp at the bottom row
 .tty_store:
     push ax
     mov  ax,0x40
@@ -969,10 +972,10 @@ render_at:
     mov  [cs:s_col],dl
     mov  [cs:s_row],dh
     mov  bh,bl
-    and  bh,0x0F
+    and  bh,0x7F             ; full attr: bg (bits 4-6) << 4 | fg
     mov  [cs:attrtmp],bh
     mov  bh,bl
-    and  bh,0x80
+    and  bh,0x80             ; bit 7 = XOR draw
     mov  [cs:xorflag],bh
     push ax
     mov  al,dh               ; t = row*640
@@ -1085,38 +1088,50 @@ render_xor:
     ret
 
 ; sh_row: AL = glyph row byte; writes the coarse 4-px approximation
-; (fg where either glyph dot of the pair is set, else 0) as 2 shadow
+; (fg where either glyph dot of the pair is set, else bg) as 2 shadow
 ; bytes at [cs:shptr]; shptr += 80.  Preserves registers.
 sh_row:
     push ax
     push bx
     push cx
     push dx
-    mov  bl,[cs:attrtmp]
-    mov  bh,bl
     mov  cl,4
+    mov  bl,[cs:attrtmp]
+    and  bl,0x0F             ; fg
+    mov  bh,bl
     shl  bh,cl               ; fg<<4
-    xor  dh,dh               ; byte 0
+    mov  dl,[cs:attrtmp]
+    shr  dl,cl               ; bg
+    mov  dh,dl
+    shl  dh,cl
+    or   dl,dh               ; DL = bg | bg<<4 (default byte)
+    ; byte 0 in AH
+    mov  ah,dl
     test al,0xC0
-    jz   .p1
-    or   dh,bh
-.p1:
+    jz   .q1
+    and  ah,0x0F
+    or   ah,bh
+.q1:
     test al,0x30
-    jz   .p2
-    or   dh,bl
-.p2:
-    xor  dl,dl               ; byte 1
+    jz   .q2
+    and  ah,0xF0
+    or   ah,bl
+.q2:
+    ; byte 1 in DH
+    mov  dh,dl
     test al,0x0C
-    jz   .p3
-    or   dl,bh
-.p3:
+    jz   .q3
+    and  dh,0x0F
+    or   dh,bh
+.q3:
     test al,0x03
-    jz   .p4
-    or   dl,bl
-.p4:
+    jz   .q4
+    and  dh,0xF0
+    or   dh,bl
+.q4:
     mov  bx,[cs:shptr]
-    mov  [cs:bx],dh
-    mov  [cs:bx+1],dl
+    mov  [cs:bx],ah
+    mov  [cs:bx+1],dh
     add  bx,80
     mov  [cs:shptr],bx
     pop  dx
@@ -1133,6 +1148,7 @@ xr_row:
     push cx
     push di
     mov  bl,[cs:attrtmp]
+    and  bl,0x0F             ; XOR uses fg only
     mov  bh,bl
     mov  cl,4
     shl  bh,cl               ; fg<<4
@@ -1269,14 +1285,29 @@ scroll_core:
     pop  bp
     ret
 
+; effective fill color from s_fill: text-attr background nibble if
+; present (0xFF -> 15, 0x70 -> 7), else the plain low-nibble color
+fill_color:
+    mov  al,[cs:s_fill]
+    mov  ah,al
+    and  al,0x0F
+    push cx
+    mov  cl,4
+    shr  ah,cl
+    pop  cx
+    and  ah,0x0F
+    jz   .fg
+    mov  al,ah
+.fg:
+    ret
+
 ; fill BL cell rows at ES:DI, DH words each, with solid fill color
 fill_rows:
     push ax
     push bx
     push cx
     push di
-    mov  al,[cs:s_fill]
-    and  al,0x0F
+    call fill_color
     mov  ah,al
     mov  cl,4
     shl  ah,cl
@@ -1397,8 +1428,7 @@ scroll_shadow:
 .dfill:
     mov  di,bx               ; fill at window top
 .fill:
-    mov  al,[cs:s_fill]      ; fill DL px rows at DI
-    and  al,0x0F
+    call fill_color          ; fill DL px rows at DI
     mov  ah,al
     mov  cl,4
     shl  ah,cl
