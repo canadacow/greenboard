@@ -111,7 +111,7 @@ initgrfx:
     dec  dx
     loop .crtc
     mov  word [HSYNC_GFX],0x5A5A   ; R2 base for 80-col (gfx+txt bytes)
-    call hook_int10
+    ; call hook_int10        ; text hook disabled (known-good hookless build)
     ; identity-fill CGA dither tables (interpreter may read them directly)
     xor  bx,bx
 .tbl:
@@ -155,7 +155,7 @@ textscrn:
     push si
     push di
     push bp
-    call unhook_int10
+    ; call unhook_int10      ; text hook disabled (known-good hookless build)
     mov  ax,0x0001
     int  0x10
     push ds
