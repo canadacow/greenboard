@@ -125,8 +125,8 @@ public:
         // Store evals list for on-demand solve_perm().
         evals_.assign(evals.begin(), evals.end());
         wave_plans_.clear();
-        last_perm_ = ~0ull;
-        last_flat_ = nullptr;
+        for (auto& s : perm_cache_)
+            s = PermSlot{};
 
         unified_resolved_ = true;
     }
@@ -318,21 +318,27 @@ public:
             mul *= 3;
         }
 
-        if (perm != last_perm_) [[unlikely]] {
+        // Perm -> plan cache. A single-entry cache misses constantly: the
+        // permutation CYCLES through a small set as bus cycles walk their
+        // T-states (AD/245 directions flip per T-state), so cache the last
+        // plan per hash slot. 16 direct-mapped entries capture the whole
+        // rotation; misses fall through to the map.
+        PermSlot& slot = perm_cache_[perm & (PERM_CACHE_SIZE - 1)];
+        if (slot.flat == nullptr || slot.perm != perm) [[unlikely]] {
             auto it = wave_plans_.find(perm);
             if (it == wave_plans_.end()) {
                 auto plan = solve_perm(perm);
                 plan.flatten();
                 it = wave_plans_.emplace(perm, std::move(plan)).first;
             }
-            last_perm_ = perm;
-            last_flat_ = &it->second.flat;
-            current_perm_ = perm;
+            slot.perm = perm;
+            slot.flat = &it->second.flat;
         }
+        current_perm_ = perm;
 
         // Flattened eval: single contiguous array, plain index loop.
         // No double indirection through vector<vector<Component*>>.
-        const auto& flat = *last_flat_;
+        const auto& flat = *slot.flat;
         const int plan_size = static_cast<int>(flat.size());
         Component* const* plan = flat.data();
         for (int i = 0; i < plan_size; ++i) {
@@ -552,12 +558,16 @@ private:
     std::unordered_map<uint64_t, WavePlan> wave_plans_;
     uint64_t current_perm_ = 0;
 
-    // Last-perm plan cache: the permutation repeats for long runs of
-    // cycles, so evaluate() skips the hash lookup while it is unchanged.
-    // unordered_map is node-based, so the cached pointer stays valid
-    // across emplace. Invalidated in resolve() with wave_plans_.
-    uint64_t last_perm_ = ~0ull;
-    const std::vector<Component*>* last_flat_ = nullptr;
+    // Direct-mapped perm -> plan cache (see evaluate()). unordered_map is
+    // node-based, so cached pointers stay valid across emplace. flat ==
+    // nullptr marks an empty slot (perm 0 is a valid permutation).
+    // Invalidated in resolve() with wave_plans_.
+    static constexpr int PERM_CACHE_SIZE = 16;
+    struct PermSlot {
+        uint64_t perm = 0;
+        const std::vector<Component*>* flat = nullptr;
+    };
+    PermSlot perm_cache_[PERM_CACHE_SIZE] = {};
 public:
     uint64_t current_perm() const { return current_perm_; }
 private:
