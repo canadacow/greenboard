@@ -105,8 +105,8 @@ struct DxState {
     ComPtr<ID3D11ShaderResourceView> tube_srv;
     static constexpr int TUBE_W = 2048, TUBE_H = 1536;
     // Tuner values (exported from the web console session)
-    float bz_hsize = 0.875f, bz_vsize = 0.875f, bz_hpos = 0.0f, bz_vpos = 0.0f;
-    float bz_bright = 0.004f, bz_contrast = 1.0f, bz_gain = 1.6f;
+    float bz_hsize = 1.188f, bz_vsize = 1.188f, bz_hpos = -0.015f, bz_vpos = 0.030f;
+    float bz_bright = 0.000f, bz_contrast = 1.0f, bz_gain = 1.0f;
     float bz_glow = 1.0f, bz_bench = 0.5f;
     bool bz_power = true;
     bool load_bezel_pack(const char* path);
