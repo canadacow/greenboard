@@ -108,6 +108,7 @@ struct DxState {
     float bz_hsize = 1.188f, bz_vsize = 1.188f, bz_hpos = -0.015f, bz_vpos = 0.030f;
     float bz_bright = 0.000f, bz_contrast = 1.0f, bz_gain = 1.0f;
     float bz_glow = 1.0f, bz_bench = 0.5f;
+    float bz_zoom = 1.14f;   // overscan crop: trims dead plate margin
     bool bz_power = true;
     bool load_bezel_pack(const char* path);
 
@@ -426,6 +427,14 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
 
                 float3 col = c0 * w0 + c1 * w1;
 
+                // mask_scale < 0 is the bezel signal: emit the CLEAN beam-
+                // scanned image (beam spot + scanline profile only). The
+                // aperture grille is a property of the physical glass, so
+                // the bezel composite applies it in screen space, after the
+                // warp -- not baked into this source and then resampled.
+                if (crt0.w < 0.0)
+                    return float4(sqrt(saturate(col)), 1);
+
                 // Aperture grille (RGB stripes) in physical pixels.
                 float mscale = max(crt0.w, 1.0);
                 uint stripe = (uint)floor(pin.pos.x / mscale) % 3u;
@@ -529,6 +538,7 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                 float4 vid;      // brightness, contrast, screen_gain, bench_light
                 float4 win;      // screen-UV visible window u0,u1,v0,v1 (v up)
                 float4 misc;     // glow_gain, power, tube_w, tube_h
+                float4 mask;     // triad_pitch_px, leakage, mask_enable, unused
             };
             struct VS_OUT { float4 pos : SV_Position; float2 uv : TEXCOORD; };
             VS_OUT VS(uint id : SV_VertexID) {
@@ -558,6 +568,25 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                 return float2(xf, yf);
             }
             float3 shade(float3 content) { return (content * vid.y + vid.x) * vid.z; }
+
+            // Aperture grille -- cgwg's magenta/green subpixel pattern,
+            // locked to the PHYSICAL output-pixel grid (SV_Position). Even
+            // output columns get magenta (R+B), odd get green (G); on any RGB
+            // LCD this drives the actual subpixels into three evenly spaced
+            // R,G,B lines -- a real aperture grille at 1080p, finer at 4K --
+            // with no arbitrary-width tiling to beat against the panel grid
+            // and produce moire/rainbows. mask.y = off-phosphor leakage,
+            // mask.x = triad scale (physical px per mask cell, >=1).
+            float3 aperture(float3 col, float screen_x) {
+                float ml = mask.y;
+                uint cell = (uint)floor(screen_x / max(mask.x, 1.0)) & 1u;
+                // magenta = (1, ml, 1), green = (ml, 1, ml)
+                float3 m = (cell == 0u) ? float3(1.0, ml, 1.0)
+                                        : float3(ml, 1.0, ml);
+                // energy compensation: pattern averages (1+2ml)/... per
+                // channel over the 2-cell period -> normalize APL.
+                return col * m * (2.0 / (1.0 + ml));
+            }
 
             // Per-lobe measured transport: mean footprint + covariance ->
             // 5-tap anisotropic gather over the live tube, times baked weight.
@@ -604,7 +633,11 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                     float3 content = float3(0, 0, 0);
                     if (all(fb >= 0.0) && all(fb <= 1.0))
                         content = lin3(tube.SampleLevel(sLin, fb, 0).rgb);
-                    c += shade(content) * misc.y;
+                    content = shade(content);
+                    // aperture grille on the glass, in screen space
+                    if (mask.z > 0.5)
+                        content = aperture(content, i.pos.x);
+                    c += content * misc.y;
                 } else {
                     c += (lobe(dmean, dcov, dw, uv) + lobe(gmean, gcov, gw, uv))
                          * misc.x * misc.y;
@@ -621,7 +654,7 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                                       ps_blob->GetBufferSize(), nullptr, &bezel_ps);
 
         D3D11_BUFFER_DESC cbd = {};
-        cbd.ByteWidth = 80;  // 5 x float4
+        cbd.ByteWidth = 96;  // 6 x float4
         cbd.Usage = D3D11_USAGE_DYNAMIC;
         cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -820,7 +853,7 @@ void DxState::render_display() {
                     uint32_t hsw = cr[ISA_CGA::CRTC_SYNC_WIDTH] & 0x0F;
                     painted_u1 = 1.0f - (float)(hsw * dpc) / 912.0f;
                 }
-                mask_scale = (std::max)(1.0f, std::floor(TUBE_H / 1080.0f + 0.5f));
+                mask_scale = -1.0f;  // clean signal: no aperture mask in the tube
                 upload_cb(0, 0, painted_u1, 1, 0.0f, 2.0f,
                           (float)TUBE_W, (float)TUBE_H);
                 ctx->OMSetRenderTargets(1, tube_rtv.GetAddressOf(), nullptr);
@@ -838,13 +871,19 @@ void DxState::render_display() {
                 {
                     D3D11_MAPPED_SUBRESOURCE mapped;
                     ctx->Map(bezel_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-                    float bcb[20] = {
+                    // Aperture cell = 1 physical output pixel (the magenta/
+                    // green subpixel trick needs to drive the panel's actual
+                    // RGB subpixels), stepping to 2px only past ~1440p so the
+                    // grille doesn't vanish on very high-DPI panels.
+                    float triad_px = (dst_h * bz_zoom > 1600.0f) ? 2.0f : 1.0f;
+                    float bcb[24] = {
                         0, 0, 1, 1,
                         bz_hsize, bz_vsize, bz_hpos, bz_vpos,
                         bz_bright, bz_contrast, bz_gain, bz_bench,
                         0.008f, 0.970f, 0.079f, 0.956f,   // visible tube UV window
                         bz_glow, bz_power ? 1.0f : 0.0f,
-                        (float)TUBE_W, (float)TUBE_H
+                        (float)TUBE_W, (float)TUBE_H,
+                        triad_px, 0.45f, crt_scaler ? 1.0f : 0.0f, 0.0f
                     };
                     memcpy(mapped.pData, bcb, sizeof(bcb));
                     ctx->Unmap(bezel_cb.Get(), 0);
@@ -855,7 +894,15 @@ void DxState::render_display() {
                 ID3D11SamplerState* samps[2] = { blit_sampler.Get(), bezel_samp_lin.Get() };
                 ctx->PSSetSamplers(0, 2, samps);
                 ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
-                ctx->RSSetViewports(1, &dst_vp);
+                // Overscan: enlarge the 4:3 dest viewport about its center so
+                // the case fills more of the frame, cropping dead plate margin
+                // equally on all sides. Rasterizer clips the off-screen part.
+                D3D11_VIEWPORT bez_vp = dst_vp;
+                bez_vp.Width  = dst_vp.Width  * bz_zoom;
+                bez_vp.Height = dst_vp.Height * bz_zoom;
+                bez_vp.TopLeftX = dst_vp.TopLeftX - (bez_vp.Width  - dst_vp.Width)  * 0.5f;
+                bez_vp.TopLeftY = dst_vp.TopLeftY - (bez_vp.Height - dst_vp.Height) * 0.5f;
+                ctx->RSSetViewports(1, &bez_vp);
                 ID3D11ShaderResourceView* p3_srvs[10] = {
                     bezel_srv[0].Get(), bezel_srv[1].Get(), bezel_srv[2].Get(),
                     bezel_srv[3].Get(), bezel_srv[4].Get(), bezel_srv[5].Get(),
@@ -1892,6 +1939,7 @@ void DxState::render_system_window() {
                 ImGui::SliderFloat("Screen gain", &bz_gain, 0.2f, 4.0f, "%.2f");
                 ImGui::SliderFloat("Glow spill", &bz_glow, 0.0f, 3.0f, "%.2f");
                 ImGui::SliderFloat("Bench light", &bz_bench, 0.1f, 2.0f, "%.2f");
+                ImGui::SliderFloat("Zoom", &bz_zoom, 1.0f, 1.4f, "%.3f");
                 ImGui::TreePop();
             }
         } else {
