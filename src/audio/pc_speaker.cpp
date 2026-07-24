@@ -34,7 +34,21 @@ struct PCSpeaker::Impl {
 
     float coil_state  = 0.0f;   // lowpass filter state (speaker coil current)
     float last_output = 0.0f;   // last produced audio sample (for underrun hold)
+
+    // Dynamic rate control state
+    float    consume_acc    = 0.0f;  // fractional entries carried between frames
+    uint64_t starved_frames = 0;     // frames with an empty ring
+    uint64_t callbacks      = 0;
+    uint64_t last_starved   = 0;     // stats deltas for periodic logging
+    uint64_t last_drops     = 0;
 };
+
+// Dynamic rate control (Near/byuu): keep the ring near a target fill by
+// bending entries-consumed-per-sample up to +/-0.5%. Host hitches and
+// clock drift become inaudible pitch wobble instead of starvation gaps
+// (music slowdown) or ring overrun (torn audio).
+static constexpr float DRC_TARGET   = SpeakerRing::SIZE / 4.0f;  // ~27 ms backlog
+static constexpr float DRC_MAX_SKEW = 0.005f;
 
 // -----------------------------------------------------------------------
 // Audio callback -- analog modeling happens here
@@ -46,23 +60,49 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
     auto* impl = static_cast<PCSpeaker::Impl*>(device->pUserData);
     auto* out  = static_cast<float*>(output);
 
+    // Dynamic rate control: derive this callback's consumption rate from
+    // the ring backlog. error < 0 = draining (consume slower), error > 0 =
+    // filling (consume faster).
+    float error = ((float)impl->ring->available() - DRC_TARGET) / DRC_TARGET;
+    error = (error < -1.0f) ? -1.0f : (error > 1.0f) ? 1.0f : error;
+    const float per_sample = CLK_PER_AUDIO_SAMPLE * (1.0f + DRC_MAX_SKEW * error);
+
     for (ma_uint32 i = 0; i < frame_count; ++i) {
-        // Consume CLK_PER_AUDIO_SAMPLE (100) digital samples from the ring.
-        // Apply the speaker coil lowpass to each one.
+        impl->consume_acc += per_sample;
+        uint32_t want = (uint32_t)impl->consume_acc;
+        impl->consume_acc -= (float)want;
+
+        // Consume the ring entries for this frame, applying the speaker
+        // coil lowpass to each one.
         uint8_t val;
         uint32_t consumed = 0;
-        while (consumed < CLK_PER_AUDIO_SAMPLE && impl->ring->pop(val)) {
+        while (consumed < want && impl->ring->pop(val)) {
             float target = val ? 1.0f : 0.0f;
             impl->coil_state += LP_ALPHA * (target - impl->coil_state);
             ++consumed;
         }
 
         // If we got samples, use the final filtered value.
-        // If ring was empty (debugger pause), hold last output.
+        // If ring was empty (sim stalled / debugger pause), hold last output.
         if (consumed > 0)
             impl->last_output = impl->coil_state * SPKR_VOLUME;
+        else
+            impl->starved_frames++;
 
         out[i] = impl->last_output;
+    }
+
+    // Periodic health report -- only logs when something went wrong.
+    if ((++impl->callbacks & 0xFF) == 0) {
+        uint64_t drops = impl->ring->drops.load(std::memory_order_relaxed);
+        uint64_t d_starve = impl->starved_frames - impl->last_starved;
+        uint64_t d_drops  = drops - impl->last_drops;
+        if (d_starve || d_drops)
+            std::printf("[PCSpeaker] ring=%u starved=%llu dropped=%llu (last interval)\n",
+                        impl->ring->available(),
+                        (unsigned long long)d_starve, (unsigned long long)d_drops);
+        impl->last_starved = impl->starved_frames;
+        impl->last_drops   = drops;
     }
 }
 

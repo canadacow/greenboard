@@ -2,8 +2,10 @@
 // PC speaker audio -- raw digital ring buffer + miniaudio playback.
 //
 // SpeakerDriver pushes raw 0/1 digital state at system CLK rate (~4.77 MHz)
-// into a large SPSC ring buffer.  The audio callback consumes 100 entries per
+// into a large SPSC ring buffer.  The audio callback consumes ~100 entries per
 // output sample (47,727 Hz), applying the speaker coil L/R lowpass filter.
+// Dynamic rate control bends the consumption rate +/-0.5% around the ring's
+// target fill so host jitter never starves or overruns the ring.
 // All analog modeling happens in the audio thread -- zero float math in the DAG.
 //
 // Usage:
@@ -30,7 +32,9 @@ struct SpeakerRing {
 
     uint8_t* buf = nullptr;
     alignas(64) std::atomic<uint32_t> write{0};
+    uint32_t cached_read = 0;                 // producer-local copy of read
     alignas(64) std::atomic<uint32_t> read{0};
+    alignas(64) std::atomic<uint64_t> drops{0};    // entries dropped (ring full)
 
     SpeakerRing()  { buf = new uint8_t[SIZE](); }
     ~SpeakerRing() { delete[] buf; }
@@ -40,8 +44,15 @@ struct SpeakerRing {
 
     void push(uint8_t val) {
         uint32_t w = write.load(std::memory_order_relaxed);
-        // No overflow check -- if sim outruns audio, oldest samples
-        // are silently overwritten.  The audio thread will catch up.
+        if (w - cached_read >= SIZE) {
+            cached_read = read.load(std::memory_order_acquire);
+            if (w - cached_read >= SIZE) {
+                // Ring full: drop rather than lap the reader -- overwriting
+                // in place tears the stream the audio thread is consuming.
+                drops.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
         buf[w & (SIZE - 1)] = val;
         write.store(w + 1, std::memory_order_release);
     }

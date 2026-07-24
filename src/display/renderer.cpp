@@ -1100,11 +1100,14 @@ void DxState::render_overlay() {
 
     if (ImGui::BeginPopup("MainMenu")) {
         if (ImGui::MenuItem("System"))        system_open = !system_open;
-        if (ImGui::MenuItem("Board"))         board_view.toggle();
+        // Board view temporarily disabled -- broken, pending fix.
+        ImGui::MenuItem("Board", nullptr, false, false);
         if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
         if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
         if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
         if (cga && ImGui::MenuItem("CGA"))   cga_debug_open = !cga_debug_open;
+        if (clk_gen && ImGui::MenuItem("Throttle 4.77 MHz", nullptr, clk_gen->throttle()))
+            clk_gen->set_throttle(!clk_gen->throttle());
         ImGui::EndPopup();
     }
 
@@ -1135,11 +1138,14 @@ void DxState::render_overlay() {
 
             if (ImGui::BeginPopup("MainMenu")) {
                 if (ImGui::MenuItem("System"))        system_open = !system_open;
-                if (ImGui::MenuItem("Board"))         board_view.toggle();
+                // Board view temporarily disabled -- broken, pending fix.
+                ImGui::MenuItem("Board", nullptr, false, false);
                 if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
                 if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
                 if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
                 if (cga && ImGui::MenuItem("CGA"))   cga_debug_open = !cga_debug_open;
+                if (clk_gen && ImGui::MenuItem("Throttle 4.77 MHz", nullptr, clk_gen->throttle()))
+                    clk_gen->set_throttle(!clk_gen->throttle());
                 ImGui::EndPopup();
             }
         }

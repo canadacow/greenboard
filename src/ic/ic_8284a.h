@@ -39,6 +39,11 @@ public:
     uint64_t clk_cycles() const { return clk_cycles_; }
     const uint64_t& clk_cycles_ref() const { return clk_cycles_; }
 
+    // Real-time throttle: pace the oscillator to the authentic 4.7727 MHz
+    // crystal rate (14.31818 MHz / 3). Off = run flat out.
+    void set_throttle(bool on) { throttle_.store(on, std::memory_order_relaxed); }
+    bool throttle() const { return throttle_.load(std::memory_order_relaxed); }
+
     // --- Mock PSU (driven from main thread, acted on by clock thread) ---
     void psu_power_on()  { psu_cmd_ = PsuCmd::PowerOn; }
     void psu_power_off() { psu_cmd_ = PsuCmd::PowerOff; }
@@ -80,6 +85,7 @@ private:
     Scheduler* scheduler_ = nullptr;
     IC_8288* bus_ctrl_ = nullptr;
     uint64_t clk_cycles_ = 0;
+    std::atomic<bool> throttle_{true};
 
     // --- PSU state ---
     enum class PsuCmd : int { None, PowerOn, PowerOff, Reset };

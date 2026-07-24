@@ -4,6 +4,7 @@
 #include "host_platform/fiber.h"
 #include "host_platform/thread_util.h"
 #include <spdlog/spdlog.h>
+#include <chrono>
 #include <thread>
 
 namespace bench {
@@ -89,6 +90,14 @@ void IC_8284A::run(std::stop_token stop) {
     Level pclk_level = Level::Low;
     bool nmi_state = false;
 
+    // Real-time pacing. The spin loop already burns a core; when the
+    // throttle is on we spin until the wall clock catches up to the
+    // authentic crystal rate every 1024 cycles (~215 us quantum).
+    using wall_clock = std::chrono::steady_clock;
+    constexpr double kClkHz = 14318181.0 / 3.0;  // 4.7727 MHz
+    auto pace_anchor = wall_clock::now();
+    uint64_t pace_base = clk_cycles_;
+
     // --- Spin loop: one iteration = one full CLK cycle (rise + fall) ---
     // The real 8284A divides a 14.318 MHz crystal by 3 to produce CLK,
     // toggling OSC each tick and only changing CLK every 3rd toggle.
@@ -144,6 +153,19 @@ void IC_8284A::run(std::stop_token stop) {
         }
 
         ++clk_cycles_;
+
+        if ((clk_cycles_ & 0x3FF) == 0 && throttle_.load(std::memory_order_relaxed)) {
+            auto target = pace_anchor + std::chrono::duration_cast<wall_clock::duration>(
+                std::chrono::duration<double>((clk_cycles_ - pace_base) / kClkHz));
+            auto now = wall_clock::now();
+            if (now < target) {
+                while (wall_clock::now() < target) { /* spin */ }
+            } else if (now - target > std::chrono::milliseconds(50)) {
+                // Fell far behind (debugger pause, heavy scene, throttle
+                // just re-enabled) -- forgive the debt instead of sprinting.
+                pace_anchor += now - target;
+            }
+        }
     }
 
     // Power down: release all outputs, then power off all components.
