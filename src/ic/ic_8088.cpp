@@ -563,20 +563,24 @@ EUTask<void> IC_8088::eu_run() {
     if (rep_override_en_) rep_override_en_--;
 
     if (i_mod_size_) {
-        FETCH_WORD_(1, i_data0_);
+        // Fetch exactly the bytes the instruction encodes. The 8086tiny
+        // ancestor speculatively read words at offsets 1 and 2 for every
+        // ModRM instruction (free on its flat memory); on a real bus that
+        // taxed register-form instructions with up to 3 phantom fetches
+        // (12 CLK) each.
+        i_data0_ = co_await fetch_byte(1);   // ModRM byte
         i_mod_ = (i_data0_ & 0xFF) >> 6;
         i_rm_ = i_data0_ & 7;
         i_reg_ = (i_data0_ >> 3) & 7;
 
         if ((!i_mod_ && i_rm_ == 6) || (i_mod_ == 2)) {
-            FETCH_WORD_(2, i_data1_);
+            FETCH_WORD_(2, i_data1_);        // disp16
             i_imm_offset_ = 4;
         } else if (i_mod_ == 1) {
-            i_data1_ = (int8_t)(i_data0_ >> 8);
+            i_data1_ = (int8_t)(co_await fetch_byte(2));  // disp8
             i_imm_offset_ = 3;
         } else {
-            FETCH_WORD_(2, i_data1_);
-            i_imm_offset_ = 2;
+            i_imm_offset_ = 2;               // no displacement
         }
 
         decode_rm_reg();

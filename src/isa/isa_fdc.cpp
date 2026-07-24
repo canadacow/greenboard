@@ -25,12 +25,12 @@ void ISA_FloppyController::detect_protection(int drive) {
     Drive& d = drives_[drive];
     d.ms_prot = false;
     // MicroProse booter disks (Pirates!) carry their volume label at
-    // offset 0x20E ("0-PIRATE GAME DISK"). Track 4 head 0 on the original
+    // offset 0x200 ("0-PIRATE GAME DISK"). Track 4 head 0 on the original
     // media is misformatted as copy protection: the game reads C=4 H=0 S=1
     // with DBT sector-size code patched to 4 and requires the read to fail
     // with "sector not found" while gap filler lands in the buffer.
     if (d.image.size() >= 0x220 &&
-        std::memcmp(d.image.data() + 0x20E, "0-PIRATE", 8) == 0) {
+        std::memcmp(d.image.data() + 0x200, "0-PIRATE", 8) == 0) {
         d.ms_prot = true;
         spdlog::info("[{}] drive {}: MicroProse protected booter detected, "
                      "emulating bad sector at C=4 H=0 S=1", name_, drive);
