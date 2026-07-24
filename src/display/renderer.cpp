@@ -16,6 +16,8 @@
 #pragma comment(lib, "dxgi.lib")
 
 #include <cstring>
+#include <cstdio>
+#include <vector>
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
@@ -85,6 +87,29 @@ struct DxState {
     ComPtr<ID3D11RenderTargetView> crt_src_rtv;
     ComPtr<ID3D11ShaderResourceView> crt_src_srv;
     bool crt_scaler = true;
+
+    // Bezel monitor composite (fullscreen only): studio plate + LED layer +
+    // warp-mapped tube + measured per-lobe moment glow, all Cycles-baked
+    // (assets/crt_composite/bezel_pack.bin, built by scratch/webtune/pack_dx.py).
+    // The tube shows the FULL painted scan -- border/overscan from the real
+    // 3D9 register data in the dot stream -- so H/V size scale deflection
+    // like the real pots, not an active-area crop.
+    bool bezel_mode = true;
+    bool bezel_loaded = false;
+    ComPtr<ID3D11PixelShader> bezel_ps;
+    ComPtr<ID3D11Buffer> bezel_cb;
+    ComPtr<ID3D11SamplerState> bezel_samp_lin;
+    ComPtr<ID3D11ShaderResourceView> bezel_srv[9];  // plate led warp dmean dcov dw gmean gcov gw
+    ComPtr<ID3D11Texture2D> tube_tex;                // CRT-scaled scan, mipped
+    ComPtr<ID3D11RenderTargetView> tube_rtv;
+    ComPtr<ID3D11ShaderResourceView> tube_srv;
+    static constexpr int TUBE_W = 2048, TUBE_H = 1536;
+    // Tuner values (exported from the web console session)
+    float bz_hsize = 0.875f, bz_vsize = 0.875f, bz_hpos = 0.0f, bz_vpos = 0.0f;
+    float bz_bright = 0.004f, bz_contrast = 1.0f, bz_gain = 1.6f;
+    float bz_glow = 1.0f, bz_bench = 0.5f;
+    bool bz_power = true;
+    bool load_bezel_pack(const char* path);
 
     // Fullscreen (borderless) state -- Alt+Enter toggle.
     bool fullscreen = false;
@@ -471,6 +496,142 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         device->CreateShaderResourceView(crt_src_tex.Get(), nullptr, &crt_src_srv);
     }
 
+    // Bezel monitor composite: tube RT (mipped), shader, samplers, bake pack.
+    {
+        D3D11_TEXTURE2D_DESC td = {};
+        td.Width = TUBE_W;
+        td.Height = TUBE_H;
+        td.MipLevels = 0;  // full chain
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        td.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        device->CreateTexture2D(&td, nullptr, &tube_tex);
+        D3D11_RENDER_TARGET_VIEW_DESC rtd = {};
+        rtd.Format = td.Format;
+        rtd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        device->CreateRenderTargetView(tube_tex.Get(), &rtd, &tube_rtv);
+        device->CreateShaderResourceView(tube_tex.Get(), nullptr, &tube_srv);
+
+        D3D11_SAMPLER_DESC sd = {};
+        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sd.MaxLOD = D3D11_FLOAT32_MAX;
+        device->CreateSamplerState(&sd, &bezel_samp_lin);
+
+        // Composite shader: exact port of the tuner's moment-transport model.
+        static const char bezel_hlsl[] = R"(
+            cbuffer BezelCB : register(b0) {
+                float4 uv_rect;  // VS compatibility (0,0,1,1)
+                float4 geo;      // hsize, vsize, hpos, vpos
+                float4 vid;      // brightness, contrast, screen_gain, bench_light
+                float4 win;      // screen-UV visible window u0,u1,v0,v1 (v up)
+                float4 misc;     // glow_gain, power, tube_w, tube_h
+            };
+            struct VS_OUT { float4 pos : SV_Position; float2 uv : TEXCOORD; };
+            VS_OUT VS(uint id : SV_VertexID) {
+                VS_OUT o;
+                float2 t = float2((id << 1) & 2, id & 2);
+                o.uv = uv_rect.xy + t * (uv_rect.zw - uv_rect.xy);
+                o.pos = float4(t * float2(2, -2) + float2(-1, 1), 0, 1);
+                return o;
+            }
+            Texture2D plate : register(t0);
+            Texture2D led   : register(t1);
+            Texture2D<float4> warp  : register(t2);
+            Texture2D<float4> dmean : register(t3);
+            Texture2D<float4> dcov  : register(t4);
+            Texture2D<float4> dw    : register(t5);
+            Texture2D<float4> gmean : register(t6);
+            Texture2D<float4> gcov  : register(t7);
+            Texture2D<float4> gw    : register(t8);
+            Texture2D tube : register(t9);
+            SamplerState sPoint : register(s0);
+            SamplerState sLin   : register(s1);
+
+            float3 lin3(float3 c) { return pow(max(c, 0.0), 2.2); }
+            float2 fbmap(float u, float v) {
+                float xf = ((u - win.x) / (win.y - win.x) - 0.5 - geo.z) / geo.x + 0.5;
+                float yf = ((win.w - v) / (win.w - win.z) - 0.5 - geo.w) / geo.y + 0.5;
+                return float2(xf, yf);
+            }
+            float3 shade(float3 content) { return (content * vid.y + vid.x) * vid.z; }
+
+            // Per-lobe measured transport: mean footprint + covariance ->
+            // 5-tap anisotropic gather over the live tube, times baked weight.
+            float3 lobe(Texture2D<float4> tmean, Texture2D<float4> tcov,
+                        Texture2D<float4> tw, float2 uv) {
+                float4 m = tmean.SampleLevel(sPoint, uv, 0);
+                if (m.z < 0.5) return float3(0, 0, 0);
+                float4 C = tcov.SampleLevel(sPoint, uv, 0);
+                float jx = 1.0 / ((win.y - win.x) * geo.x);
+                float jy = 1.0 / ((win.w - win.z) * geo.y);
+                float cuu = C.x * jx * jx, cvv = C.y * jy * jy, cuv = C.z * jx * jy;
+                float tr = cuu + cvv, df = cuu - cvv;
+                float disc = sqrt(df * df * 0.25 + cuv * cuv);
+                float l1 = max(tr * 0.5 + disc, 1e-12);
+                float l2 = max(tr * 0.5 - disc, 1e-12);
+                float2 ax = (abs(cuv) > 1e-12) ? normalize(float2(cuv, l1 - cuu))
+                          : ((cuu >= cvv) ? float2(1, 0) : float2(0, 1));
+                float sMaj = sqrt(l1), sMin = sqrt(l2);
+                float2 fb0 = fbmap(m.x, m.y);
+                float px = sMin * length(float2(misc.z, misc.w) * ax.yx);
+                float lod = clamp(log2(max(px, 1.0)), 0.0, 11.0);
+                const float W[5] = { 0.13, 0.23, 0.28, 0.23, 0.13 };
+                const float T[5] = { -1.6, -0.8, 0.0, 0.8, 1.6 };
+                float3 acc = float3(0, 0, 0);
+                [unroll] for (int i = 0; i < 5; i++) {
+                    float2 f2 = fb0 + ax * sMaj * T[i];
+                    float3 ct = float3(0, 0, 0);
+                    if (all(f2 >= 0.0) && all(f2 <= 1.0))
+                        ct = lin3(tube.SampleLevel(sLin, f2, lod).rgb);
+                    acc += ct * W[i];
+                }
+                return tw.SampleLevel(sPoint, uv, 0).rgb * shade(acc);
+            }
+
+            float4 PS(VS_OUT i) : SV_Target {
+                float2 uv = i.uv;
+                float4 w = warp.SampleLevel(sPoint, uv, 0);
+                // additive layers: studio plate rides bench light; the LED's
+                // own emission only obeys the power switch
+                float3 c = lin3(plate.Sample(sLin, uv).rgb) * vid.w
+                         + lin3(led.Sample(sLin, uv).rgb) * misc.y;
+                if (w.z > 0.5) {
+                    float2 fb = fbmap(w.x, w.y);
+                    float3 content = float3(0, 0, 0);
+                    if (all(fb >= 0.0) && all(fb <= 1.0))
+                        content = lin3(tube.SampleLevel(sLin, fb, 0).rgb);
+                    c += shade(content) * misc.y;
+                } else {
+                    c += (lobe(dmean, dcov, dw, uv) + lobe(gmean, gcov, gw, uv))
+                         * misc.x * misc.y;
+                }
+                return float4(pow(max(c, 0.0), 1.0 / 2.2), 1);
+            }
+        )";
+        ComPtr<ID3DBlob> vs_blob, ps_blob, err;
+        D3DCompile(bezel_hlsl, sizeof(bezel_hlsl), "bezel_ps", nullptr, nullptr,
+                   "PS", "ps_5_0", 0, 0, &ps_blob, &err);
+        if (err) spdlog::warn("[Bezel] shader: {}", (const char*)err->GetBufferPointer());
+        if (ps_blob)
+            device->CreatePixelShader(ps_blob->GetBufferPointer(),
+                                      ps_blob->GetBufferSize(), nullptr, &bezel_ps);
+
+        D3D11_BUFFER_DESC cbd = {};
+        cbd.ByteWidth = 80;  // 5 x float4
+        cbd.Usage = D3D11_USAGE_DYNAMIC;
+        cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        device->CreateBuffer(&cbd, nullptr, &bezel_cb);
+
+        bezel_loaded = load_bezel_pack("assets/crt_composite/bezel_pack.bin");
+        if (!bezel_loaded)
+            spdlog::info("[Bezel] pack not found; bezel mode unavailable");
+    }
+
     // ImGui -- scale font + style for high-DPI.
     // Load the font at the scaled pixel size (not FontGlobalScale, which
     // just stretches the already-rasterized atlas and looks blurry).
@@ -496,6 +657,60 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
     if (!board_view.init(device.Get(), "assets/board_traces.json"))
         return false;
 
+    return true;
+}
+
+// Load the Cycles-baked composite maps (see scratch/webtune/pack_dx.py).
+// 'CRTB' v2: full-fidelity float32 transport data + 16-bit plates.
+bool DxState::load_bezel_pack(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return false;
+    char magic[4];
+    uint32_t version = 0, ntex = 0;
+    if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "CRTB", 4) != 0 ||
+        fread(&version, 4, 1, f) != 1 || version != 2 ||
+        fread(&ntex, 4, 1, f) != 1 || ntex > 16) {
+        spdlog::warn("[Bezel] bad pack header in {}", path);
+        fclose(f);
+        return false;
+    }
+    // pack order matches shader registers t0..t8
+    static const char* expect[9] = { "plate", "led", "warp",
+        "diff_mean", "diff_cov", "diff_w", "gloss_mean", "gloss_cov", "gloss_w" };
+    std::vector<uint8_t> data;
+    for (uint32_t i = 0; i < ntex && i < 9; i++) {
+        char name[17] = {};
+        uint32_t w = 0, h = 0, fmt = 0, bytes = 0;
+        if (fread(name, 1, 16, f) != 16 || fread(&w, 4, 1, f) != 1 ||
+            fread(&h, 4, 1, f) != 1 || fread(&fmt, 4, 1, f) != 1 ||
+            fread(&bytes, 4, 1, f) != 1) { fclose(f); return false; }
+        if (strcmp(name, expect[i]) != 0) {
+            spdlog::warn("[Bezel] unexpected texture '{}' (wanted '{}')", name, expect[i]);
+            fclose(f); return false;
+        }
+        DXGI_FORMAT dxfmt;
+        uint32_t bpp;
+        if (fmt == 2)       { dxfmt = DXGI_FORMAT_R32G32B32A32_FLOAT; bpp = 16; }
+        else if (fmt == 11) { dxfmt = DXGI_FORMAT_R16G16B16A16_UNORM; bpp = 8; }
+        else { fclose(f); return false; }
+        if (bytes != w * h * bpp) { fclose(f); return false; }
+        data.resize(bytes);
+        if (fread(data.data(), 1, bytes, f) != bytes) { fclose(f); return false; }
+
+        D3D11_TEXTURE2D_DESC td = {};
+        td.Width = w; td.Height = h;
+        td.MipLevels = 1; td.ArraySize = 1;
+        td.Format = dxfmt;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_IMMUTABLE;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA sd = { data.data(), w * bpp, 0 };
+        ComPtr<ID3D11Texture2D> tex;
+        if (FAILED(device->CreateTexture2D(&td, &sd, &tex))) { fclose(f); return false; }
+        device->CreateShaderResourceView(tex.Get(), nullptr, &bezel_srv[i]);
+    }
+    fclose(f);
+    spdlog::info("[Bezel] loaded {} ({} textures)", path, ntex);
     return true;
 }
 
@@ -540,6 +755,9 @@ void DxState::render_display() {
             };
 
             bool crt_on = crt_scaler && crt_src_rtv;
+            // Bezel monitor: fullscreen (Alt+Enter) ONLY.
+            bool bezel_on = fullscreen && bezel_mode && bezel_loaded &&
+                            bezel_ps && crt_src_rtv;
             // Mask scale: keep phosphor triads ~1/360 of picture height.
             // 1px stripes up to 1080p-class, 2px at 1440p, 3px at 4K UHD.
             float mask_scale = (std::max)(1.0f, std::floor(dst_h / 1080.0f + 0.5f));
@@ -573,7 +791,86 @@ void DxState::render_display() {
                 ctx->Unmap(blit_cb.Get(), 0);
             };
 
-            if (crt_on) {
+            if (bezel_on) {
+                // ---- Bezel monitor composite (fullscreen) ----
+                // P1: decode the full scan 1:1 into the dot intermediate.
+                upload_cb(0, 0, 1, 1, composite_on ? 1.0f : 0.0f, 0.0f,
+                          (float)CgaRasterizer::OUT_W, (float)CgaRasterizer::OUT_H);
+                ctx->OMSetRenderTargets(1, crt_src_rtv.GetAddressOf(), nullptr);
+                D3D11_VIEWPORT src_vp = { 0, 0,
+                    (float)CgaRasterizer::OUT_W, (float)CgaRasterizer::OUT_H, 0, 1 };
+                ctx->RSSetViewports(1, &src_vp);
+                ID3D11ShaderResourceView* p1_srvs[3] = {
+                    srv, comp_table_srv.Get(), rasterizer->index_srv()
+                };
+                ctx->PSSetShaderResources(0, 3, p1_srvs);
+                ctx->Draw(3, 0);
+                ID3D11ShaderResourceView* null3[3] = {};
+                ctx->PSSetShaderResources(0, 3, null3);
+
+                // P2: CRT-scale the PAINTED scan (border included, hsync
+                // columns trimmed) into the mipped tube texture. The beam
+                // paints everything between blanking; the border color is
+                // live 3D9 data already present in the dot stream.
+                float painted_u1 = 1.0f;
+                if (cga) {
+                    const uint8_t* cr = cga->crtc_regs();
+                    uint32_t htot = (uint32_t)cr[ISA_CGA::CRTC_HTOTAL] + 1;
+                    uint32_t dpc = htot ? (912u / htot) : 8u;
+                    uint32_t hsw = cr[ISA_CGA::CRTC_SYNC_WIDTH] & 0x0F;
+                    painted_u1 = 1.0f - (float)(hsw * dpc) / 912.0f;
+                }
+                mask_scale = (std::max)(1.0f, std::floor(TUBE_H / 1080.0f + 0.5f));
+                upload_cb(0, 0, painted_u1, 1, 0.0f, 2.0f,
+                          (float)TUBE_W, (float)TUBE_H);
+                ctx->OMSetRenderTargets(1, tube_rtv.GetAddressOf(), nullptr);
+                D3D11_VIEWPORT tube_vp = { 0, 0, (float)TUBE_W, (float)TUBE_H, 0, 1 };
+                ctx->RSSetViewports(1, &tube_vp);
+                ID3D11ShaderResourceView* p2_srvs[1] = { crt_src_srv.Get() };
+                ctx->PSSetShaderResources(0, 1, p2_srvs);
+                ctx->Draw(3, 0);
+                ID3D11ShaderResourceView* null1[1] = {};
+                ctx->PSSetShaderResources(0, 1, null1);
+                ctx->OMSetRenderTargets(0, nullptr, nullptr);
+                ctx->GenerateMips(tube_srv.Get());
+
+                // P3: composite plate + LED + warped tube + moment glow.
+                {
+                    D3D11_MAPPED_SUBRESOURCE mapped;
+                    ctx->Map(bezel_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+                    float bcb[20] = {
+                        0, 0, 1, 1,
+                        bz_hsize, bz_vsize, bz_hpos, bz_vpos,
+                        bz_bright, bz_contrast, bz_gain, bz_bench,
+                        0.008f, 0.970f, 0.079f, 0.956f,   // visible tube UV window
+                        bz_glow, bz_power ? 1.0f : 0.0f,
+                        (float)TUBE_W, (float)TUBE_H
+                    };
+                    memcpy(mapped.pData, bcb, sizeof(bcb));
+                    ctx->Unmap(bezel_cb.Get(), 0);
+                }
+                ctx->VSSetConstantBuffers(0, 1, bezel_cb.GetAddressOf());
+                ctx->PSSetShader(bezel_ps.Get(), nullptr, 0);
+                ctx->PSSetConstantBuffers(0, 1, bezel_cb.GetAddressOf());
+                ID3D11SamplerState* samps[2] = { blit_sampler.Get(), bezel_samp_lin.Get() };
+                ctx->PSSetSamplers(0, 2, samps);
+                ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+                ctx->RSSetViewports(1, &dst_vp);
+                ID3D11ShaderResourceView* p3_srvs[10] = {
+                    bezel_srv[0].Get(), bezel_srv[1].Get(), bezel_srv[2].Get(),
+                    bezel_srv[3].Get(), bezel_srv[4].Get(), bezel_srv[5].Get(),
+                    bezel_srv[6].Get(), bezel_srv[7].Get(), bezel_srv[8].Get(),
+                    tube_srv.Get()
+                };
+                ctx->PSSetShaderResources(0, 10, p3_srvs);
+                ctx->Draw(3, 0);
+                ID3D11ShaderResourceView* null10[10] = {};
+                ctx->PSSetShaderResources(0, 10, null10);
+                // restore blit shader/CB for any later passes this frame
+                ctx->PSSetShader(blit_ps.Get(), nullptr, 0);
+                ctx->VSSetConstantBuffers(0, 1, blit_cb.GetAddressOf());
+                ctx->PSSetConstantBuffers(0, 1, blit_cb.GetAddressOf());
+            } else if (crt_on) {
                 // Pass 1: decode source (composite or raw) 1:1 into the
                 // dot-resolution intermediate.
                 upload_cb(0, 0, 1, 1, composite_on ? 1.0f : 0.0f, 0.0f,
@@ -1578,6 +1875,28 @@ void DxState::render_system_window() {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Scanline beam + aperture grille phosphor mask.\n"
                               "Mask scales with output resolution (4K-aware).");
+        if (bezel_loaded) {
+            ImGui::Checkbox("Bezel monitor (fullscreen only)", &bezel_mode);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Cycles-baked IBM 5151 bezel composite:\n"
+                                  "warped tube, measured glow spill, LED.\n"
+                                  "Active only after Alt+Enter.");
+            if (bezel_mode && ImGui::TreeNode("Bezel adjustment")) {
+                ImGui::Checkbox("Power", &bz_power);
+                ImGui::SliderFloat("H size", &bz_hsize, 0.70f, 1.30f, "%.3f");
+                ImGui::SliderFloat("V size", &bz_vsize, 0.70f, 1.30f, "%.3f");
+                ImGui::SliderFloat("H center", &bz_hpos, -0.12f, 0.12f, "%+.3f");
+                ImGui::SliderFloat("V center", &bz_vpos, -0.12f, 0.12f, "%+.3f");
+                ImGui::SliderFloat("Brightness", &bz_bright, 0.0f, 0.25f, "%.3f");
+                ImGui::SliderFloat("Contrast", &bz_contrast, 0.2f, 2.5f, "%.2f");
+                ImGui::SliderFloat("Screen gain", &bz_gain, 0.2f, 4.0f, "%.2f");
+                ImGui::SliderFloat("Glow spill", &bz_glow, 0.0f, 3.0f, "%.2f");
+                ImGui::SliderFloat("Bench light", &bz_bench, 0.1f, 2.0f, "%.2f");
+                ImGui::TreePop();
+            }
+        } else {
+            ImGui::TextColored(dim, "Bezel pack not found (crt_composite)");
+        }
         ImGui::TextColored(dim, "Alt+Enter: fullscreen");
     }
 
