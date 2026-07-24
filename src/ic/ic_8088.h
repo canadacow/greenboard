@@ -113,7 +113,7 @@ struct BIUTask {
 
 // Bus operation descriptor shared between EU and BIU.
 struct BusOp {
-    enum Kind : uint8_t { NONE, MEM_READ, MEM_WRITE, IO_READ, IO_WRITE, INTA, FETCH };
+    enum Kind : uint8_t { NONE, MEM_READ, MEM_WRITE, IO_READ, IO_WRITE, INTA, FETCH, IDLE };
     Kind kind = NONE;
     uint32_t addr = 0;
     uint8_t write_data = 0;
@@ -201,6 +201,21 @@ public:
         void await_resume() noexcept {}
     };
 
+    // Idle awaiter: suspends EU to the BIU to burn N CLK cycles with the
+    // bus passive. Models EU-internal execution time that has no bus
+    // activity (e.g. per-iteration REP overhead).
+    struct IdleAwaiter {
+        IC_8088& cpu;
+        uint32_t cycles;
+        bool await_ready() noexcept { return cycles == 0; }
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> h) noexcept {
+            cpu.bus_op_ = {BusOp::IDLE, cycles, 0, 0};
+            cpu.eu_resume_ = h;
+            return std::noop_coroutine();
+        }
+        void await_resume() noexcept {}
+    };
+
     // rmem8 awaiter: register shortcut (no suspend) or bus read (1 suspend).
     struct Rmem8Awaiter {
         IC_8088& cpu;
@@ -257,6 +272,9 @@ public:
     }
     BusReadAwaiter fetch_byte(int offset) {
         return {*this, BusOp::FETCH, prefetch_base_ + (uint32_t)offset};
+    }
+    IdleAwaiter eu_idle(uint32_t cycles) {
+        return {*this, cycles};
     }
 
     // --- Debugger read-only access (safe to call from any thread while paused) ---

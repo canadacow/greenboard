@@ -57,6 +57,7 @@ static constexpr uint8_t kind_to_bus[] = {
     BUS_IOW,      // IO_WRITE
     BUS_INTA,     // INTA
     BUS_FETCH,    // FETCH
+    BUS_PASSIVE,  // IDLE
 };
 
 // ========================================================================
@@ -421,6 +422,14 @@ BIUTask IC_8088::biu_run() {
             check_nmi();
             co_await std::suspend_always{};
             t_state_ = TState::Ti;
+
+        } else if (kind == BusOp::IDLE) {
+            // ---- EU-internal execution time: bus stays passive ----
+            t_state_ = TState::Ti;
+            for (uint32_t n = bus_op_.addr; n; --n) {
+                check_nmi();
+                co_await std::suspend_always{};
+            }
         }
     }
 
@@ -867,9 +876,17 @@ EUTask<void> IC_8088::eu_run() {
     case 12: { // ROL|ROR|RCL|RCR|SHL|SHR|???|SAR reg/mem, 1/CL/imm
         uint32_t val; RMEM_(rm_addr_, val);
         scratch2_uint_ = sign_of(val);
-        scratch_uint_ = extra_ ? (++reg_ip_, (int8_t)(i_data1_ & 0xFF))
-                               : i_d_ ? regs8()[REG_CL]  // 8088: no 5-bit mask (186+ masks to 31)
-                                       : 1;
+        if (extra_) {
+            // imm8 count form: fetch the count byte after ModRM+disp.
+            // (Previously read from i_data1_, which only held this byte by
+            // accident of the speculative decode fetch -- and held the
+            // displacement instead for mod==1 forms.)
+            scratch_uint_ = (int8_t) co_await fetch_byte(i_imm_offset_);
+            ++reg_ip_;
+        } else {
+            scratch_uint_ = i_d_ ? regs8()[REG_CL]  // 8088: no 5-bit mask (186+ masks to 31)
+                                 : 1;
+        }
         if (scratch_uint_) {
             if (i_reg_ < 4) {
                 scratch_uint_ %= i_reg_ / 2 + top_bit();
@@ -1000,8 +1017,11 @@ EUTask<void> IC_8088::eu_run() {
     }
     case 17: { // MOVSx|STOSx|LODSx
         scratch2_uint_ = seg_override_en_ ? seg_override_ : REG_DS;
+        // Real 8088 REP cost per iteration (total incl. bus): MOVS 17,
+        // STOS 10, LODS 13. The bus transfers cost 8/4/4 CLK, so pad the
+        // remainder as EU-internal idle time.
         for (scratch_uint_ = rep_override_en_ ? regs16()[REG_CX] : 1;
-             scratch_uint_; scratch_uint_--) {
+             scratch_uint_; ) {
             uint32_t src_addr = (extra_ & 1)
                 ? REGS_BASE
                 : 16u * regs16()[scratch2_uint_] + regs16()[REG_SI];
@@ -1013,8 +1033,24 @@ EUTask<void> IC_8088::eu_run() {
             WMEM_(dst_addr, val);
             if (!(extra_ & 1)) index_inc(REG_SI);
             if (!(extra_ & 2)) index_inc(REG_DI);
+            scratch_uint_--;
+            if (rep_override_en_) {
+                co_await eu_idle(extra_ == 1 ? 6 : 9);
+                regs16()[REG_CX] = (uint16_t)scratch_uint_;
+                // Real 8088: REP is interruptible between iterations. On a
+                // pending interrupt, resume at the immediately preceding
+                // prefix after the ISR (faithful to the 8088 quirk of
+                // dropping all but the last prefix). Condition must mirror
+                // the dispatch gate at instruction end or we rewind forever.
+                if (scratch_uint_ &&
+                    regs8()[FLAG_IF] && pin_intr_.level() == Level::High) {
+                    reg_ip_ -= 1;
+                    advanceIp = false;
+                    rep_override_en_ = 0;  // permit dispatch at instruction end
+                    break;
+                }
+            }
         }
-        if (rep_override_en_) regs16()[REG_CX] = 0;
         break;
     }
     case 18: { // CMPSx|SCASx
@@ -1035,6 +1071,19 @@ EUTask<void> IC_8088::eu_run() {
                 index_inc(REG_DI);
                 if (rep_override_en_ && !(--regs16()[REG_CX] && (!op_result_ == rep_mode_)))
                     scratch_uint_ = 0;
+                if (rep_override_en_) {
+                    // Real 8088 REP cost per iteration: CMPS 22, SCAS 15
+                    // (bus transfers are 8/4 CLK of that).
+                    co_await eu_idle(extra_ ? 11 : 14);
+                    // Interruptible between iterations -- see case 17.
+                    if (scratch_uint_ &&
+                        regs8()[FLAG_IF] && pin_intr_.level() == Level::High) {
+                        reg_ip_ -= 1;
+                        advanceIp = false;
+                        rep_override_en_ = 0;
+                        break;
+                    }
+                }
             }
             set_flags_type_ = FLAGS_UPDATE_SZP | FLAGS_UPDATE_AO_ARITH;
             set_CF(i_w_ ? (uint16_t)op_dest_ < (uint16_t)op_source_
