@@ -101,8 +101,11 @@ public:
     // VRAM row the beam read at that moment.  The shader renders from
     // this accumulated buffer, not from live VRAM.
     static constexpr uint32_t FRAME_LINES = 262;
-    static constexpr uint32_t SCANLINE_ROW_BYTES = 160;  // max 80 chars * 2 bytes
-    static constexpr uint32_t SCANLINE_ROW_U32S  = SCANLINE_ROW_BYTES / 4;  // 40
+    // Max 128 chars * 2 bytes. R1 can legally exceed 80 (Area5150's wide
+    // modes); the 6845 can't display more than R0+1 chars per line and
+    // CGA's 80-col R0 is 113, so 128 covers everything reachable.
+    static constexpr uint32_t SCANLINE_ROW_BYTES = 256;
+    static constexpr uint32_t SCANLINE_ROW_U32S  = SCANLINE_ROW_BYTES / 4;  // 64
 
     struct ScanlineRegs {
         // Register state + counters (12 uint32s)
@@ -117,10 +120,10 @@ public:
         uint32_t hsync_width;   // R3 low nibble
         uint32_t h_total;       // R0
         uint32_t _pad[2];
-        // VRAM row captured by the beam (40 uint32s = 160 bytes)
+        // VRAM row captured by the beam (64 uint32s = 256 bytes)
         uint32_t vram_row[SCANLINE_ROW_U32S];
     };
-    static_assert(sizeof(ScanlineRegs) == (12 + 40) * 4);  // 208 bytes
+    static_assert(sizeof(ScanlineRegs) == (12 + 64) * 4);  // 304 bytes
 
     const ScanlineRegs* scanline_regs() const { return scanline_regs_; }
 

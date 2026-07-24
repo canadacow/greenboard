@@ -43,10 +43,11 @@ Buffer<uint> vram : register(t0);          // 16KB VRAM (4096 uint32s)
 Buffer<uint> font_buf : register(t1);      // 2048-byte 8x8 font ROM (512 uint32s)
 Buffer<uint> palette : register(t2);       // 16 RGBA colors
 
-Buffer<uint> scanline_buf : register(t3);  // 262 scanlines x 52 uint32s (12 header + 40 vram row)
+Buffer<uint> scanline_buf : register(t3);  // 262 scanlines x 76 uint32s (12 header + 64 vram row)
 
 // Stride per scanline in the scanline buffer (uint32s).
-#define SL_STRIDE 52
+// Must match ISA_CGA::ScanlineRegs layout (12 + SCANLINE_ROW_U32S).
+#define SL_STRIDE 76
 #define SL_VRAM_OFFSET 12  // vram_row starts at uint32 index 12
 
 RWTexture2D<float4> output_tex : register(u0);  // 912x262 full NTSC frame
@@ -73,7 +74,7 @@ uint vram_byte(uint addr) {
 
 // Read a byte from a scanline's captured VRAM row.
 // `sl_base` is the scanline's base index in scanline_buf.
-// `byte_idx` is the byte offset within the row (0..159).
+// `byte_idx` is the byte offset within the row (0..255).
 uint sl_vram_byte(uint sl_base, uint byte_idx) {
     uint word_idx = sl_base + SL_VRAM_OFFSET + (byte_idx >> 2);
     uint word = scanline_buf[word_idx];
@@ -137,7 +138,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     // Per-scanline register state (beam-racing support).
     // Programs that switch modes mid-frame also reprogram R9, R1, R6,
     // so ALL rendering-critical registers are captured per-scanline.
-    uint sl_base = py * SL_STRIDE;  // 52 uint32s per scanline
+    uint sl_base = py * SL_STRIDE;  // SL_STRIDE uint32s per scanline
     uint sl_mode          = scanline_buf[sl_base + 0];
     uint sl_color         = scanline_buf[sl_base + 1];
     uint sl_ma            = scanline_buf[sl_base + 2];  // MA: linear address
