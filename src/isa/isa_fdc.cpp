@@ -10,6 +10,7 @@ ISA_FloppyController::ISA_FloppyController(std::vector<uint8_t> disk_image,
     drives_[0].image = std::move(disk_image);
     drives_[0].spt = sectors_per_track;
     drives_[0].heads = heads;
+    detect_protection(0);
 }
 
 void ISA_FloppyController::load_image(std::vector<uint8_t> img, int spt, int hds, int drive) {
@@ -17,6 +18,23 @@ void ISA_FloppyController::load_image(std::vector<uint8_t> img, int spt, int hds
     drives_[drive].image = std::move(img);
     drives_[drive].spt = spt;
     drives_[drive].heads = hds;
+    detect_protection(drive);
+}
+
+void ISA_FloppyController::detect_protection(int drive) {
+    Drive& d = drives_[drive];
+    d.ms_prot = false;
+    // MicroProse booter disks (Pirates!) carry their volume label at
+    // offset 0x20E ("0-PIRATE GAME DISK"). Track 4 head 0 on the original
+    // media is misformatted as copy protection: the game reads C=4 H=0 S=1
+    // with DBT sector-size code patched to 4 and requires the read to fail
+    // with "sector not found" while gap filler lands in the buffer.
+    if (d.image.size() >= 0x220 &&
+        std::memcmp(d.image.data() + 0x20E, "0-PIRATE", 8) == 0) {
+        d.ms_prot = true;
+        spdlog::info("[{}] drive {}: MicroProse protected booter detected, "
+                     "emulating bad sector at C=4 H=0 S=1", name_, drive);
+    }
 }
 
 int ISA_FloppyController::num_drives() const {
@@ -40,6 +58,7 @@ void ISA_FloppyController::on_power_on() {
     eot_ = 0;
     std::memset(pcn_, 0, sizeof(pcn_));
     pio_mode_ = false;
+    prot_read_ = false;
     irq_pending_ = false;
     reset_sense_ = false;
     reset_sense_drive_ = 0;
@@ -105,6 +124,18 @@ uint8_t ISA_FloppyController::on_io_read(uint16_t port) {
             // PIO execution phase: return next sector byte.
             if (phase_ == Phase::Execution && pio_mode_) {
                 uint8_t val = 0x00;
+                if (prot_read_) {
+                    if (xfer_ptr_ < 512 && sector_offset_ + xfer_ptr_ < active().image.size())
+                        val = active().image[sector_offset_ + xfer_ptr_];
+                    else
+                        val = 0x43;
+                    xfer_ptr_++;
+                    if (xfer_ptr_ >= sector_size_) {
+                        prot_read_ = false;
+                        build_result_error(0x04);
+                    }
+                    return val;
+                }
                 if (sector_offset_ + xfer_ptr_ < active().image.size())
                     val = active().image[sector_offset_ + xfer_ptr_];
                 xfer_ptr_++;
@@ -365,10 +396,30 @@ void ISA_FloppyController::execute_read_data() {
     sector_offset_ = chs_to_offset(cyl, head, sector);
     xfer_ptr_ = 0;
     dma_bytes_transferred_ = 0;
+    prot_read_ = false;
 
     spdlog::info("[{}] READ DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X} imgsize=0x{:05X}",
                  name_, cyl, head, sector, n, eot_, sector_size_, sector_offset_,
                  active().image.size());
+
+    // Media is a raw image of 512-byte sectors (N=2). A command with any
+    // other N never matches a sector ID on the track: the real uPD765
+    // returns ND (no data) and transfers nothing.
+    if (n != 2) {
+        if (active().ms_prot && cyl == 4 && head == 0 && sector == 1) {
+            // Protection sector: the original disk streams the sector's
+            // data then format gap filler ('C') into the DMA buffer before
+            // the FDC reports the error. The game verifies the filler.
+            spdlog::info("[{}] protection read C=4 H=0 S=1 N={}: streaming "
+                         "gap fill then reporting ND error", name_, n);
+            prot_read_ = true;
+        } else {
+            spdlog::info("[{}] READ DATA: N={} does not match media (N=2), ND error",
+                         name_, n);
+            build_result_error(0x04);  // ST1: no data
+            return;
+        }
+    }
     // Dump first 16 bytes at that offset
     if (sector_offset_ + 16 <= active().image.size()) {
         const uint8_t* p = active().image.data() + sector_offset_;
@@ -378,15 +429,9 @@ void ISA_FloppyController::execute_read_data() {
                      p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
     }
 
-    if (sector_offset_ + sector_size_ > active().image.size()) {
+    if (!prot_read_ && sector_offset_ + sector_size_ > active().image.size()) {
         spdlog::error("[{}] READ DATA: sector beyond image end", name_);
-        // Set error in result and skip to result phase.
-        std::memset(result_buf_, 0, sizeof(result_buf_));
-        result_buf_[0] = 0x40;  // ST0: abnormal termination
-        result_buf_[1] = 0x04;  // ST1: no data
-        result_len_ = 7;
-        result_pos_ = 0;
-        phase_ = Phase::Result;
+        build_result_error(0x04);  // ST1: no data
         return;
     }
 
@@ -415,18 +460,21 @@ void ISA_FloppyController::execute_write_data() {
     sector_offset_ = chs_to_offset(cyl, head, sector);
     xfer_ptr_ = 0;
     format_mode_ = false;
+    prot_read_ = false;
 
     spdlog::info("[{}] WRITE DATA: C={} H={} R={} N={} EOT={} size={} offset=0x{:05X}",
                  name_, cyl, head, sector, n, eot_, sector_size_, sector_offset_);
 
+    if (n != 2) {
+        spdlog::info("[{}] WRITE DATA: N={} does not match media (N=2), ND error",
+                     name_, n);
+        build_result_error(0x04);
+        return;
+    }
+
     if (sector_offset_ + sector_size_ > active().image.size()) {
         spdlog::error("[{}] WRITE DATA: sector beyond image end", name_);
-        std::memset(result_buf_, 0, sizeof(result_buf_));
-        result_buf_[0] = 0x40;
-        result_buf_[1] = 0x04;
-        result_len_ = 7;
-        result_pos_ = 0;
-        phase_ = Phase::Result;
+        build_result_error(0x04);
         return;
     }
 
@@ -483,6 +531,16 @@ uint8_t ISA_FloppyController::on_dma_read() {
                       name_, (int)phase_, dma_bytes_transferred_);
     }
     uint8_t byte = 0x00;
+    if (prot_read_) {
+        // Protection sector: 512 bytes of sector data, then format gap
+        // filler for the remainder of the oversized (N!=2) transfer.
+        if (xfer_ptr_ < 512 && sector_offset_ + xfer_ptr_ < active().image.size())
+            byte = active().image[sector_offset_ + xfer_ptr_];
+        else
+            byte = 0x43;
+        xfer_ptr_++;
+        return byte;
+    }
     if (sector_offset_ + xfer_ptr_ < active().image.size())
         byte = active().image[sector_offset_ + xfer_ptr_];
     xfer_ptr_++;
@@ -529,6 +587,11 @@ void ISA_FloppyController::on_dma_write(uint8_t val) {
 void ISA_FloppyController::on_dma_complete(int /*channel*/) {
     spdlog::info("[{}] DMA complete after {} bytes", name_, dma_bytes_transferred_);
     format_mode_ = false;
+    if (prot_read_) {
+        prot_read_ = false;
+        build_result_error(0x04);  // protection sector: always ND after transfer
+        return;
+    }
     build_result_ok();
 }
 
@@ -575,15 +638,38 @@ void ISA_FloppyController::build_result_ok() {
     }
 }
 
+void ISA_FloppyController::build_result_error(uint8_t st1) {
+    // Abnormal termination result (7 bytes): ST0, ST1, ST2, C, H, R, N
+    result_buf_[0] = 0x40 | ((cmd_buf_[3] & 1) << 2) | (active_drive_ & 0x03);
+    result_buf_[1] = st1;
+    result_buf_[2] = 0x00;
+    result_buf_[3] = cmd_buf_[2];  // C
+    result_buf_[4] = cmd_buf_[3];  // H
+    result_buf_[5] = cmd_buf_[4];  // R
+    result_buf_[6] = cmd_buf_[5];  // N
+    result_len_ = 7;
+    result_pos_ = 0;
+    phase_ = Phase::Result;
+
+    spdlog::info("[{}] error result: ST0={:02X} ST1={:02X} C={} H={} R={} N={}",
+                 name_, result_buf_[0], result_buf_[1], result_buf_[3],
+                 result_buf_[4], result_buf_[5], result_buf_[6]);
+
+    if (dor_ & 0x08)
+        bus_->raise_irq(6);
+}
+
 // =========================================================================
 // CHS -> offset
 // =========================================================================
 
 uint32_t ISA_FloppyController::chs_to_offset(int cyl, int head, int sector) const {
     // Sector numbering is 1-based. Uses active drive geometry.
+    // The raw image always stores 512-byte sectors regardless of the N
+    // requested in the command.
     const auto& d = drives_[active_drive_ & 1];
     uint32_t lba = (cyl * d.heads + head) * d.spt + (sector - 1);
-    return lba * sector_size_;
+    return lba * 512u;
 }
 
 } // namespace bench

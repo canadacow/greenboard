@@ -34,7 +34,11 @@ public:
     int num_drives() const;  // number of drives with media inserted
 
     void card_save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
-    void card_load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
+    void card_load(cereal::BinaryInputArchive& ar) override {
+        serialize(ar);
+        for (int i = 0; i < MAX_DRIVES; ++i)
+            detect_protection(i);
+    }
     template <class Archive> void serialize(Archive& ar) {
         for (int i = 0; i < MAX_DRIVES; ++i)
             ar(drives_[i].image, drives_[i].spt, drives_[i].heads);
@@ -43,7 +47,7 @@ public:
            cmd_len_, cmd_expected_,
            cereal::binary_data(result_buf_, sizeof(result_buf_)),
            result_len_, result_pos_, sector_offset_, sector_size_,
-           xfer_ptr_, pio_mode_, cur_sector_, eot_,
+           xfer_ptr_, pio_mode_, cur_sector_, eot_, prot_read_,
            format_mode_, format_fill_, format_spt_, format_n_,
            format_fields_received_,
            cereal::binary_data(pcn_, sizeof(pcn_)),
@@ -73,6 +77,11 @@ private:
         std::vector<uint8_t> image;
         int spt = 9;
         int heads = 2;
+        // MicroProse booter protection: track 4 head 0 sector 1 on the
+        // original disk is misformatted so reads fail with "no data" while
+        // still streaming gap filler (0x43) into the DMA buffer. Detected
+        // from the image at load time, not serialized.
+        bool ms_prot = false;
         bool has_media() const { return !image.empty(); }
     };
     Drive drives_[MAX_DRIVES];
@@ -101,6 +110,7 @@ private:
     // Execution state (sector read/write -- shared by DMA and PIO)
     uint32_t sector_offset_ = 0;
     uint16_t sector_size_ = 512;
+    bool prot_read_ = false;  // active read is a protection-sector read
     uint16_t xfer_ptr_ = 0;
     bool pio_mode_ = false;
     int cur_sector_ = 1;
@@ -134,7 +144,9 @@ private:
     void execute_write_data();
     void execute_format_track();
     void build_result_ok();
+    void build_result_error(uint8_t st1);
     bool advance_sector();
+    void detect_protection(int drive);
 
     // CHS -> byte offset (uses active drive geometry)
     uint32_t chs_to_offset(int cyl, int head, int sector) const;
