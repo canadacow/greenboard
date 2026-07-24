@@ -9,7 +9,8 @@ def b64(name, mime):
         return f"data:{mime};base64," + base64.b64encode(f.read()).decode()
 
 ASSETS = {
-    "@@PLATE@@": b64("plate.jpg", "image/jpeg"),
+    "@@PLATE@@": b64("plate_on.jpg", "image/jpeg"),
+    "@@LED@@": b64("led_layer.jpg", "image/jpeg"),
     "@@WARP_A@@": b64("warp_a.png", "image/png"),
     "@@WARP_B@@": b64("warp_b.png", "image/png"),
     "@@D_MA@@": b64("diff_mean_a.png", "image/png"),
@@ -81,6 +82,13 @@ HTML = r"""<title>5151 Adjustment Console</title>
   <div class="tube"><canvas id="crt" width="1600" height="1200"></canvas></div>
   <div class="rack">
 
+    <div class="grp"><div class="lg">Power</div>
+      <div class="chips" id="pwr" role="group" aria-label="Power">
+        <button data-w="on" aria-pressed="true">&#9679; ON</button>
+        <button data-w="off" aria-pressed="false">OFF</button>
+      </div>
+    </div>
+
     <div class="grp"><div class="lg">Geometry <button data-reset="geo">reset</button></div>
       <div class="ctl"><label for="hsize">H size</label><input type="range" id="hsize" min="0.70" max="1.30" step="0.005" value="1.0"><output for="hsize">1.000</output></div>
       <div class="ctl"><label for="vsize">V size</label><input type="range" id="vsize" min="0.70" max="1.30" step="0.005" value="1.0"><output for="vsize">1.000</output></div>
@@ -136,7 +144,7 @@ HTML = r"""<title>5151 Adjustment Console</title>
 "use strict";
 const $=id=>document.getElementById(id);
 const P={hsize:1,vsize:1,hpos:0,vpos:0,bright:0.02,contrast:1,gain:1.6,glow:1,plate:1,
-         phosphor:"color",pattern:"sq2"};
+         power:"on",phosphor:"color",pattern:"sq2"};
 const DEF=JSON.parse(JSON.stringify(P));
 const WIN={u0:0.008,u1:0.970,v0:0.079,v1:0.956};   // visible tube UV window (Blender v: 0=bottom)
 
@@ -146,8 +154,9 @@ in vec2 p;out vec2 tc;
 void main(){tc=vec2(p.x*0.5+0.5,1.0-(p.y*0.5+0.5));gl_Position=vec4(p,0.,1.);}`;
 const FS=`#version 300 es
 precision highp float;in vec2 tc;out vec4 fragColor;
-uniform sampler2D uPlate,uWarpA,uWarpB,uFrame,uFrameMip;
+uniform sampler2D uPlate,uLed,uWarpA,uWarpB,uFrame,uFrameMip;
 uniform sampler2D uDMa,uDMb,uDCv,uDW,uGMa,uGMb,uGCv,uGW;
+uniform float uPower;
 uniform vec4 uGeo;      // hsize, vsize, hpos, vpos
 uniform vec4 uVid;      // bright, contrast, gain, plateExp
 uniform vec4 uWin;      // u0,u1,v0,v1 (Blender v)
@@ -200,16 +209,18 @@ vec3 lobe(sampler2D ma,sampler2D mb,sampler2D cv,sampler2D wt){
 void main(){
   vec3 a=texture(uWarpA,tc).rgb;
   float cov=step(0.5,a.b);
-  vec3 c=lin(texture(uPlate,tc).rgb)*uVid.w;
+  // additive layers: studio plate scales with bench light; the LED's own
+  // emission does not -- it only obeys the power switch
+  vec3 c=lin(texture(uPlate,tc).rgb)*uVid.w+lin(texture(uLed,tc).rgb)*uPower;
   if(cov>0.5){
     float u=dec(a),v=dec(texture(uWarpB,tc).rgb);
     vec2 fb=fbmap(u,v);
     vec3 content=vec3(0.0);
     if(all(greaterThanEqual(fb,vec2(0.0)))&&all(lessThanEqual(fb,vec2(1.0))))
       content=lin(texture(uFrame,fb).rgb);
-    c+=shade(content);
+    c+=shade(content)*uPower;
   }else{
-    c+=(lobe(uDMa,uDMb,uDCv,uDW)+lobe(uGMa,uGMb,uGCv,uGW))*uGlowGain;
+    c+=(lobe(uDMa,uDMb,uDCv,uDW)+lobe(uGMa,uGMb,uGCv,uGW))*uGlowGain*uPower;
   }
   fragColor=vec4(pow(max(c,vec3(0.0)),vec3(1.0/2.2)),1.0);
 }`;
@@ -241,7 +252,8 @@ const UNITS=[["uPlate",0,gl.LINEAR,false],["uWarpA",1,gl.NEAREST,false],
   ["uDMa",5,gl.NEAREST,false],["uDMb",6,gl.NEAREST,false],
   ["uDCv",7,gl.NEAREST,false],["uDW",8,gl.LINEAR,false],
   ["uGMa",9,gl.NEAREST,false],["uGMb",10,gl.NEAREST,false],
-  ["uGCv",11,gl.NEAREST,false],["uGW",12,gl.LINEAR,false]];
+  ["uGCv",11,gl.NEAREST,false],["uGW",12,gl.LINEAR,false],
+  ["uLed",13,gl.LINEAR,false]];
 for(const [n,u,f,m] of UNITS){tex(u,f,m);gl.uniform1i(gl.getUniformLocation(prog,n),u);}
 
 // ---- test patterns (800x600, CGA palette) ----
@@ -273,6 +285,7 @@ function draw(){
   gl.uniform4f(gl.getUniformLocation(prog,"uVid"),P.bright,P.contrast,P.gain,P.plate);
   gl.uniform4f(gl.getUniformLocation(prog,"uWin"),WIN.u0,WIN.u1,WIN.v0,WIN.v1);
   gl.uniform1f(gl.getUniformLocation(prog,"uGlowGain"),P.glow);
+  gl.uniform1f(gl.getUniformLocation(prog,"uPower"),P.power==="on"?1.0:0.0);
   const ph=PHOS[P.phosphor];
   gl.uniform4f(gl.getUniformLocation(prog,"uPhos"),ph[0],ph[1],ph[2],ph[3]);
   gl.viewport(0,0,1600,1200);
@@ -281,6 +294,7 @@ function draw(){
 }
 function exportJSON(){
   $("json").textContent=JSON.stringify({
+    power:P.power,
     geometry:{h_size:P.hsize,v_size:P.vsize,h_center:P.hpos,v_center:P.vpos},
     video:{brightness:P.bright,contrast:P.contrast,screen_gain:P.gain},
     room:{glow_gain:P.glow,plate_exposure:P.plate},
@@ -306,7 +320,10 @@ document.querySelectorAll("[data-reset]").forEach(b=>b.addEventListener("click",
   for(const id of g)P[id]=DEF[id];setSliders();draw();}));
 $("factory").addEventListener("click",()=>{Object.assign(P,DEF);setSliders();
   setChips("phos","data-p",P.phosphor);setChips("pat","data-t",P.pattern);
+  setChips("pwr","data-w",P.power);
   drawPattern(P.pattern);});
+$("pwr").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+  P.power=b.dataset.w;setChips("pwr","data-w",P.power);draw();});
 function setChips(group,attr,val){
   document.querySelectorAll(`#${group} button`).forEach(b=>
     b.setAttribute("aria-pressed",String(b.getAttribute(attr)===val)));}
@@ -318,10 +335,11 @@ $("copy").addEventListener("click",()=>{
   navigator.clipboard.writeText($("json").textContent).then(()=>{
     $("copy").textContent="COPIED";setTimeout(()=>$("copy").textContent="COPY JSON",900);});});
 // ---- asset loading ----
-let pending=11;
+let pending=12;
 function loaded(){if(--pending===0){drawPattern(P.pattern);}}
 function img(unit,src,mip){const i=new Image();i.onload=()=>{upload(unit,i,mip);loaded()};i.src=src;return i;}
 img(0,"@@PLATE@@",false);
+img(13,"@@LED@@",false);
 img(1,"@@WARP_A@@",false);
 img(2,"@@WARP_B@@",false);
 img(5,"@@D_MA@@",false);
