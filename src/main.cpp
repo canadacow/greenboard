@@ -47,7 +47,38 @@ struct SystemConfig {
     std::string hostfs_root = "D:/dos";
     bool use_cga = true;
     uint32_t expansion_kb = 384;
+    int rom_set = 0;
 };
+
+// ROM sets selectable from the System window. U33 is the BIOS; U29-U32
+// hold Cassette BASIC (IBM set only -- GLABIOS has no companion ROMs).
+struct RomSet {
+    const char* name;
+    const char* u33;
+    const char* u29, * u30, * u31, * u32;
+};
+static const RomSet ROM_SETS[] = {
+    { "GLABIOS 0.4.1",
+      "assets/GLABIOS_0.4.1_8P.ROM",
+      "", "", "", "" },
+    { "IBM 27OCT82 + BASIC C1.10",
+      "assets/BIOS_IBM5150_27OCT82_1501476_U33.BIN",
+      "assets/IBM 5150 - Cassette BASIC version C1.10 - U29 - 5000019.bin",
+      "assets/IBM 5150 - Cassette BASIC version C1.10 - U30 - 5000021.bin",
+      "assets/IBM 5150 - Cassette BASIC version C1.10 - U31 - 5000022.bin",
+      "assets/IBM 5150 - Cassette BASIC version C1.10 - U32 - 5000023.bin" },
+};
+
+static void apply_rom_set(SystemConfig& cfg, int idx) {
+    if (idx < 0 || idx >= (int)std::size(ROM_SETS)) return;
+    const RomSet& rs = ROM_SETS[idx];
+    cfg.rom_set   = idx;
+    cfg.bios_path = rs.u33;
+    cfg.basic_u29 = rs.u29;
+    cfg.basic_u30 = rs.u30;
+    cfg.basic_u31 = rs.u31;
+    cfg.basic_u32 = rs.u32;
+}
 
 struct System {
     std::unique_ptr<Board> board;
@@ -259,6 +290,9 @@ static void start_renderer(Renderer& renderer, System& sys) {
         if (auto* c = sys.isa_bus->card(i))
             sys_info.slots[i].card = c->card_name();
     }
+    for (const auto& rs : ROM_SETS)
+        sys_info.rom_sets.push_back(rs.name);
+    sys_info.rom_set = sys.config.rom_set;
 
     if (sys.cga) {
         renderer.start(nullptr, &sys.board->clk_gen->clk_cycles_ref(),
@@ -286,6 +320,7 @@ int main() {
     spdlog::info("bench -- IBM PC 5150 motherboard simulator");
 
     SystemConfig cfg;
+    apply_rom_set(cfg, 0);
 #ifdef DISPLAY_CGA
     cfg.use_cga = true;
 #else
@@ -312,6 +347,31 @@ int main() {
     sys.board->clk_gen->power_on();
     sys.board->clk_gen->psu_power_on();
 
+    // Tear down the running system and rebuild it from cfg (optionally from
+    // a save-state archive). Shared by save-state load and ROM swap.
+    auto rebuild = [&](cereal::BinaryInputArchive* ar) {
+        renderer.stop();
+        sys.power_off();
+
+        // Reset signal pool (slot 0 is the null/dummy slot, keep it)
+        for (int i = 1; i < SignalPool::count; ++i)
+            SignalPool::levels[i] = Level::HiZ;
+        SignalPool::count = 1;
+
+        sys = build_system(cfg, ar);
+        bind_debug(sys);
+
+        // Restart renderer with new pointers
+        renderer.~Renderer();
+        new (&renderer) Renderer{};
+        renderer.set_disk_a_path(cfg.dos_disk);
+        start_renderer(renderer, sys);
+
+        sys.scheduler->pause();
+        sys.board->clk_gen->power_on();
+        sys.board->clk_gen->psu_power_on();
+    };
+
     // Run until the display window is closed.
     while (renderer.running()) {
         // Check for load request from renderer
@@ -319,37 +379,25 @@ int main() {
         if (!load_path.empty()) {
             spdlog::info("[SaveState] load requested: {}", load_path);
 
-            // Stop everything
-            renderer.stop();
-            sys.power_off();
-
-            // Reset signal pool (slot 0 is the null/dummy slot, keep it)
-            for (int i = 1; i < SignalPool::count; ++i)
-                SignalPool::levels[i] = Level::HiZ;
-            SignalPool::count = 1;
-
-            // Rebuild from archive
             std::ifstream ifs(load_path, std::ios::binary);
             cereal::BinaryInputArchive ar(ifs);
-            sys = build_system(cfg, &ar);
-            bind_debug(sys);
+            rebuild(&ar);
 
-            // Restart renderer with new pointers
-            renderer.~Renderer();
-            new (&renderer) Renderer{};
-            renderer.set_disk_a_path(cfg.dos_disk);
-            start_renderer(renderer, sys);
-
-            // Power on (resets all ICs to defaults), wait for clock thread
-            // to finish power_on_all() and park, then overwrite with saved state.
-            sys.scheduler->pause();
-            sys.board->clk_gen->power_on();
-            sys.board->clk_gen->psu_power_on();
+            // Clock thread resets all ICs to defaults; wait for it to park,
+            // then overwrite with saved state.
             sys.scheduler->wait_until_parked();
-
-            // Overwrite defaults with saved state
             bench::load_remaining(ar, *sys.scheduler, sys.board->cpu);
             sys.board->restore_signal_pool();
+            continue;
+        }
+
+        // Check for ROM set change from renderer (chip swap + cold boot)
+        int rom_choice = renderer.take_pending_rom_set();
+        if (rom_choice >= 0) {
+            spdlog::info("[System] ROM set change: {} -> {}",
+                         ROM_SETS[cfg.rom_set].name, ROM_SETS[rom_choice].name);
+            apply_rom_set(cfg, rom_choice);
+            rebuild(nullptr);
             continue;
         }
 

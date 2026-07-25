@@ -1907,7 +1907,27 @@ void DxState::render_system_window() {
     else
         ImGui::TextColored(dim, "RAM: 256 KB planar DRAM");
     ImGui::TextColored(dim, "Display: %s", cga ? "CGA" : "MDA");
-    ImGui::TextColored(dim, "ROM: GLABIOS 0.4.1");
+
+    // ROM set selector -- picking a different set swaps the chips and
+    // power-cycles the machine (chip swap on a live board is bad form).
+    if (!sys_info.rom_sets.empty()) {
+        ImGui::TextColored(dim, "ROM:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
+        int cur = sys_info.rom_set;
+        if (ImGui::BeginCombo("##romset", sys_info.rom_sets[cur].c_str())) {
+            for (int i = 0; i < (int)sys_info.rom_sets.size(); ++i) {
+                if (ImGui::Selectable(sys_info.rom_sets[i].c_str(), i == cur) &&
+                    i != cur && renderer_owner) {
+                    renderer_owner->rom_set_choice_ = i;
+                    renderer_owner->rom_change_requested_.store(true, std::memory_order_release);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Swap BIOS ROMs and cold-boot the machine.");
+    }
 
     // --- Monitor (CGA only): composite vs RGBI ---
     if (cga) {
@@ -2598,6 +2618,12 @@ std::string Renderer::take_pending_load() {
     if (!load_requested_.load(std::memory_order_acquire)) return {};
     load_requested_.store(false, std::memory_order_release);
     return std::move(load_path_);
+}
+
+int Renderer::take_pending_rom_set() {
+    if (!rom_change_requested_.load(std::memory_order_acquire)) return -1;
+    rom_change_requested_.store(false, std::memory_order_release);
+    return rom_set_choice_;
 }
 
 void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,

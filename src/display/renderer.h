@@ -18,6 +18,7 @@
 #include <latch>
 #include <unordered_map>
 #include <string>
+#include <vector>
 
 namespace bench {
 
@@ -41,6 +42,10 @@ struct SystemInfo {
     };
     SlotInfo slots[5] = {};
     int expansion_kb = 0;
+    // ROM set selection: display names + active index. Selecting a
+    // different set in the System window requests a chip swap + cold boot.
+    std::vector<std::string> rom_sets;
+    int rom_set = 0;
 };
 
 // Pool indices for bus analyzer display.
@@ -97,6 +102,10 @@ public:
     // Returns empty string if no request. Clears the request.
     std::string take_pending_load();
 
+    // Poll for pending ROM set change (set by System window combo).
+    // Returns -1 if no request. Clears the request.
+    int take_pending_rom_set();
+
 private:
     std::jthread thread_;
     std::atomic<bool> running_{false};
@@ -123,6 +132,9 @@ public:
     // Load request (render thread -> main thread)
     std::atomic<bool> load_requested_{false};
     std::string load_path_;
+    // ROM set change request (render thread -> main thread)
+    std::atomic<bool> rom_change_requested_{false};
+    int rom_set_choice_ = -1;
 private:
 
     // Pending board signal binding (set from main thread, consumed by render thread).
