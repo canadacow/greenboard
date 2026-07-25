@@ -86,6 +86,14 @@ struct DxState {
     ComPtr<ID3D11Texture2D> crt_src_tex;
     ComPtr<ID3D11RenderTargetView> crt_src_rtv;
     ComPtr<ID3D11ShaderResourceView> crt_src_srv;
+
+    // P22 phosphor persistence (ping-pong, dot resolution, linear light).
+    ComPtr<ID3D11Texture2D> phos_tex[2];
+    ComPtr<ID3D11RenderTargetView> phos_rtv[2];
+    ComPtr<ID3D11ShaderResourceView> phos_srv[2];
+    ComPtr<ID3D11PixelShader> phos_ps;
+    int phos_cur = 0;
+    uint64_t phos_clk = 0;
     bool crt_scaler = true;
 
     // Bezel monitor composite (fullscreen only): studio plate + LED layer +
@@ -137,6 +145,7 @@ struct DxState {
     float bz_hsize = 1.075f, bz_vsize = 1.229f, bz_hpos = 0.022f, bz_vpos = 0.030f;
     float bz_hv_droop = 1.0f;  // HV droop strength (0 = perfectly regulated supply)
     float bz_vhold = 59.92f;   // V-HOLD: 59.92 = locked; lower = rolls
+    float bz_persist = 1.0f;   // phosphor persistence scale (1 = P22 spec)
     float bz_bright = 0.000f, bz_contrast = 1.0f, bz_gain = 1.0f;
     float bz_glow = 1.0f, bz_bench = 0.5f;
     float bz_zoom = 1.14f;   // overscan crop: trims dead plate margin
@@ -414,8 +423,11 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
             //
             // Source is the decoded dot-resolution image (composite or
             // RGBI), so scanline geometry is exact: 200 visible lines.
+            // comp1.w != 0 signals the source is the LINEAR persistence
+            // buffer (already light-linear); otherwise it is gamma-encoded.
             float3 crt_fetch(float2 uv) {
                 float3 c = tex.SampleLevel(samp, uv, 0).rgb;
+                if (comp1.w > 0.5) return c;
                 return c * c;  // approximate CRT gamma 2.2 with 2.0 (fast, stable)
             }
 
@@ -485,6 +497,39 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                 if (params.x > 0.5) return PS_composite(i);
                 return tex.Sample(samp, i.uv);
             }
+
+            // ----- P22 phosphor persistence ---------------------------
+            // The beam excites each dot once per field; the phosphor then
+            // decays. Screen light is the sum of the fresh excitation and
+            // what remains of previous fields. This is the TEMPORAL half
+            // of the beam model (the spatial half is PS_crt above), and
+            // it is what keeps single-field events -- the BIOS blanking a
+            // scroll, blink attributes, a mode-change gap -- from hitting
+            // as hard-edged strobes the way a sample-and-hold LCD shows
+            // them.
+            //
+            // P22 components decay at different rates, which is why CRT
+            // motion trails tint: blue (ZnS:Ag) is fastest, green
+            // (ZnS:Cu,Au,Al) slowest, red (Y2O2S:Eu) in between. Times to
+            // 10% are sub-millisecond to a few ms; the persistence that
+            // actually reaches the eye is the long tail of the decay.
+            // crt0.y = frame dt in seconds, crt0.z = persistence scale.
+            Texture2D prev_tex : register(t1);
+            float4 PS_phosphor(VS_OUT i) : SV_Target {
+                // Fresh excitation arrives gamma-encoded; the persistence
+                // buffer holds LINEAR light (decay is multiplicative, and
+                // the float target keeps the tail from quantizing away).
+                float3 fresh = tex.SampleLevel(samp, i.uv, 0).rgb;
+                fresh *= fresh;  // to linear light (gamma 2.0 approx)
+                float3 prev = prev_tex.SampleLevel(samp, i.uv, 0).rgb;
+                // Per-component decay constants (seconds to 1/e).
+                const float3 tau = float3(0.0022, 0.0038, 0.0011);
+                float3 k = exp(-crt0.y / (tau * max(crt0.z, 0.001)));
+                // Excitation is instantaneous vs the field period, so the
+                // new field's light replaces the decayed remainder where
+                // it is brighter, and the tail shows through where it is not.
+                return float4(max(fresh, prev * k), 1);
+            }
         )";
         ComPtr<ID3DBlob> vs_blob, ps_blob, err;
         D3DCompile(blit_hlsl, sizeof(blit_hlsl), "blit_vs", nullptr, nullptr,
@@ -493,6 +538,16 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                    "PS", "ps_5_0", 0, 0, &ps_blob, &err);
         if (vs_blob) device->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), nullptr, &blit_vs);
         if (ps_blob) device->CreatePixelShader(ps_blob->GetBufferPointer(), ps_blob->GetBufferSize(), nullptr, &blit_ps);
+        {
+            ComPtr<ID3DBlob> ph_blob, ph_err;
+            D3DCompile(blit_hlsl, sizeof(blit_hlsl), "phos_ps", nullptr, nullptr,
+                       "PS_phosphor", "ps_5_0", 0, 0, &ph_blob, &ph_err);
+            if (ph_err)
+                spdlog::error("[CRT] phosphor shader: {}", (char*)ph_err->GetBufferPointer());
+            if (ph_blob)
+                device->CreatePixelShader(ph_blob->GetBufferPointer(),
+                                          ph_blob->GetBufferSize(), nullptr, &phos_ps);
+        }
 
         D3D11_SAMPLER_DESC sd = {};
         sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
@@ -534,6 +589,16 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         device->CreateTexture2D(&td, nullptr, &crt_src_tex);
         device->CreateRenderTargetView(crt_src_tex.Get(), nullptr, &crt_src_rtv);
         device->CreateShaderResourceView(crt_src_tex.Get(), nullptr, &crt_src_srv);
+
+        // Phosphor persistence ping-pong. Float format: decay is
+        // multiplicative and 8-bit would quantize the tail to nothing.
+        D3D11_TEXTURE2D_DESC pd = td;
+        pd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        for (int i = 0; i < 2; ++i) {
+            device->CreateTexture2D(&pd, nullptr, &phos_tex[i]);
+            device->CreateRenderTargetView(phos_tex[i].Get(), nullptr, &phos_rtv[i]);
+            device->CreateShaderResourceView(phos_tex[i].Get(), nullptr, &phos_srv[i]);
+        }
     }
 
     // Bezel monitor composite: tube RT (mipped), shader, samplers, bake pack.
@@ -856,6 +921,9 @@ void DxState::render_display() {
             ctx->PSSetConstantBuffers(0, 1, blit_cb.GetAddressOf());
             ctx->PSSetSamplers(0, 1, blit_sampler.GetAddressOf());
 
+            // linear_src: sampling the linear-light persistence buffer
+            // (set for the pass that consumes it, cleared elsewhere).
+            float linear_src = 0.0f;
             auto upload_cb = [&](float u0, float v0, float u1, float v1,
                                  float comp_flag, float crt_mode, float vw, float vh) {
                 D3D11_MAPPED_SUBRESOURCE mapped;
@@ -867,7 +935,7 @@ void DxState::render_display() {
                     (float)CgaRasterizer::OUT_H,
                     comp_grayscale ? 1.0f : 0.0f,
                     comp_ri, comp_rq, comp_gi, comp_gq,
-                    comp_bi, comp_bq, 0.0f /* sharpness */, 0.0f,
+                    comp_bi, comp_bq, 0.0f /* sharpness */, linear_src,
                     crt_mode, vw, vh, mask_scale
                 };
                 memcpy(mapped.pData, cb_data, sizeof(cb_data));
@@ -891,6 +959,36 @@ void DxState::render_display() {
                 ID3D11ShaderResourceView* null3[3] = {};
                 ctx->PSSetShaderResources(0, 3, null3);
 
+                // P1b: phosphor persistence. The decoded field excites the
+                // screen; previous excitation decays into it. Runs at dot
+                // resolution in linear light, ping-ponged frame to frame.
+                ID3D11ShaderResourceView* phos_out = crt_src_srv.Get();
+                if (phos_ps && phos_rtv[0]) {
+                    uint64_t pnow = clk_cycles ? *clk_cycles : 0;
+                    float pdt = (phos_clk && pnow > phos_clk)
+                        ? (float)((double)(pnow - phos_clk) / 4772727.0)
+                        : 1.0f / 59.92f;
+                    phos_clk = pnow;
+                    if (pdt > 0.25f) pdt = 0.25f;   // paused/stepped sim
+                    int psrc = phos_cur, pdst = phos_cur ^ 1;
+                    // crt0.y = dt seconds, crt0.z = persistence scale
+                    upload_cb(0, 0, 1, 1, 0.0f, 3.0f, pdt, bz_persist);
+                    ctx->PSSetShader(phos_ps.Get(), nullptr, 0);
+                    ctx->OMSetRenderTargets(1, phos_rtv[pdst].GetAddressOf(), nullptr);
+                    ctx->RSSetViewports(1, &src_vp);
+                    ID3D11ShaderResourceView* ph_srvs[2] = {
+                        crt_src_srv.Get(), phos_srv[psrc].Get()
+                    };
+                    ctx->PSSetShaderResources(0, 2, ph_srvs);
+                    ctx->Draw(3, 0);
+                    ID3D11ShaderResourceView* null2[2] = {};
+                    ctx->PSSetShaderResources(0, 2, null2);
+                    ctx->PSSetShader(blit_ps.Get(), nullptr, 0);
+                    phos_cur = pdst;
+                    phos_out = phos_srv[pdst].Get();
+                    linear_src = 1.0f;  // P2 now samples linear light
+                }
+
                 // P2: CRT-scale the PAINTED scan (border included) into the
                 // mipped tube texture. The monitor's horizontal sweep is a
                 // property of the MONITOR, not the signal: retrace takes the
@@ -909,13 +1007,14 @@ void DxState::render_display() {
                 ctx->OMSetRenderTargets(1, tube_rtv.GetAddressOf(), nullptr);
                 D3D11_VIEWPORT tube_vp = { 0, 0, (float)TUBE_W, (float)TUBE_H, 0, 1 };
                 ctx->RSSetViewports(1, &tube_vp);
-                ID3D11ShaderResourceView* p2_srvs[1] = { crt_src_srv.Get() };
+                ID3D11ShaderResourceView* p2_srvs[1] = { phos_out };
                 ctx->PSSetShaderResources(0, 1, p2_srvs);
                 ctx->Draw(3, 0);
                 ID3D11ShaderResourceView* null1[1] = {};
                 ctx->PSSetShaderResources(0, 1, null1);
                 ctx->OMSetRenderTargets(0, nullptr, nullptr);
                 ctx->GenerateMips(tube_srv.Get());
+                linear_src = 0.0f;  // later passes read gamma-encoded sources
 
                 // ---- HV supply droop under beam load ----
                 // The tube's smallest mip is the frame's average luminance =
@@ -2184,6 +2283,13 @@ void DxState::render_system_window() {
                                       "bright pictures swell, dim, and bloom, then\n"
                                       "settle over a few hundred ms as the supply\n"
                                       "recovers. 0 = perfectly regulated supply.");
+                ImGui::SliderFloat("Phosphor", &bz_persist, 0.1f, 6.0f, "%.2fx");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("P22 phosphor persistence. 1.0 = spec decay\n"
+                                      "(blue fastest, green slowest -- moving edges\n"
+                                      "trail green). Softens single-field events the\n"
+                                      "way real phosphor does, instead of the hard\n"
+                                      "strobe a sample-and-hold LCD would show.");
                 ImGui::SliderFloat("V-hold", &bz_vhold, 50.0f, 59.92f, "%.2f Hz");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Vertical oscillator free-run rate. Below the\n"
