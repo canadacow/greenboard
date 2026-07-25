@@ -150,7 +150,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     uint sl_hsync_width   = scanline_buf[sl_base + 8];
     uint h_total          = scanline_buf[sl_base + 9];
 
-    uint border_idx = sl_color & 0xF;
+    // 640x200 (hi-res) graphics mode doesn't route the color select
+    // register to the border at all -- real CGA hardware hardwires the
+    // border to black in this mode (3D9h bits 0-3 become the foreground
+    // color instead). Text modes and 320x200 graphics use 3D9h bits 0-3
+    // as the border color normally.
+    bool hires_gfx = (sl_mode & MODE_GRAPHICS) && (sl_mode & MODE_HIRES_GFX);
+    uint border_idx = hires_gfx ? 0 : (sl_color & 0xF);
 
     // Character width in dots -- fixed by dot clock divider.
     bool hires = (sl_mode & MODE_GRAPHICS) ? (sl_mode & MODE_HIRES_GFX) != 0
