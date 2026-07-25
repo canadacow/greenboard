@@ -193,6 +193,10 @@ public:
     // Bind to the 8284A's CLK cycle counter for status register timing.
     void set_clk_counter(const uint64_t* clk) { clk_cycles_ = clk; }
 
+    // Emulated CLK of the most recent vsync leading edge (for the
+    // renderer's monitor vertical-oscillator model). Not serialized.
+    uint64_t last_vsync_clk() const { return last_vsync_clk_; }
+
     void card_save(cereal::BinaryOutputArchive& ar) override { serialize(ar); }
     void card_load(cereal::BinaryInputArchive& ar) override { serialize(ar); }
     template <class Archive> void serialize(Archive& ar) {
@@ -234,6 +238,7 @@ private:
 
     // CLK cycle counter (from 8284A, for status register timing)
     const uint64_t* clk_cycles_ = nullptr;
+    uint64_t last_vsync_clk_ = 0;  // transient, not serialized
 
     // Blink timing: QPC wall clock, independent of frame rate.
     // CGA frame rate: 14.318 MHz / (912 * 262) = ~59.92 Hz.

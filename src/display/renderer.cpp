@@ -104,8 +104,39 @@ struct DxState {
     ComPtr<ID3D11RenderTargetView> tube_rtv;
     ComPtr<ID3D11ShaderResourceView> tube_srv;
     static constexpr int TUBE_W = 2048, TUBE_H = 1536;
+
+    // HV supply droop under beam load: the tube's 1x1 mip is the frame's
+    // average beam current; a staging ring reads it back without stalling,
+    // and a first-order lag models the high-voltage rail drooping as the
+    // beam draws more current (bright pictures load it harder).
+    ComPtr<ID3D11Texture2D> beam_ring[3];
+    uint64_t beam_ring_n = 0;
+    float hv_load = 0.0f;                            // filtered beam current 0..1
+    std::chrono::steady_clock::time_point hv_load_t{};
+    // Vertical hold: injection-locked oscillator model. The sweep free-runs
+    // below the 59.92 Hz field rate and the signal's vsync re-triggers it
+    // only near ramp end, so a vsync phase jump (mode change) makes the
+    // picture roll up into lock at the beat rate. 56.25 Hz default derived
+    // from frame-stepped video of a real 5153 mode change (half a screen
+    // of roll in 8 fields). At exactly the field rate: instant lock.
+    double vosc_phase = 0.0;       // top-of-picture offset (0 = locked)
+    double vosc_period = 0.0;      // entrained field period (oscillator locks
+                                   // to the SIGNAL's rate, not an absolute Hz)
+    uint64_t vosc_last_vsync = 0;  // last processed signal vsync CLK
+    float v_roll = 0.0f;           // displayed roll (offset applied to tube)
+
+    // Cathode thermionics: heater temperature state (0 = cold, 1 = operating).
+    // Light output follows Richardson-Dushman emission, so the tube is dark
+    // below ~70% temperature -- cold starts fade in over seconds, quick power
+    // blips barely dim.
+    float cathode_temp = 0.0f;
+    uint64_t cath_clk = 0;
+    bool prev_bz_power = true;
+
     // Tuner values (exported from the web console session)
     float bz_hsize = 1.075f, bz_vsize = 1.229f, bz_hpos = 0.022f, bz_vpos = 0.030f;
+    float bz_hv_droop = 1.0f;  // HV droop strength (0 = perfectly regulated supply)
+    float bz_vhold = 59.92f;   // V-HOLD: 59.92 = locked; lower = rolls
     float bz_bright = 0.000f, bz_contrast = 1.0f, bz_gain = 1.0f;
     float bz_glow = 1.0f, bz_bench = 0.5f;
     float bz_zoom = 1.14f;   // overscan crop: trims dead plate margin
@@ -530,6 +561,19 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         sd.MaxLOD = D3D11_FLOAT32_MAX;
         device->CreateSamplerState(&sd, &bezel_samp_lin);
 
+        // HV droop: 1x1 staging ring for beam-current readback.
+        D3D11_TEXTURE2D_DESC bsd = {};
+        bsd.Width = 1;
+        bsd.Height = 1;
+        bsd.MipLevels = 1;
+        bsd.ArraySize = 1;
+        bsd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        bsd.SampleDesc.Count = 1;
+        bsd.Usage = D3D11_USAGE_STAGING;
+        bsd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        for (auto& t : beam_ring)
+            device->CreateTexture2D(&bsd, nullptr, &t);
+
         // Composite shader: exact port of the tuner's moment-transport model.
         static const char bezel_hlsl[] = R"(
             cbuffer BezelCB : register(b0) {
@@ -538,7 +582,7 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                 float4 vid;      // brightness, contrast, screen_gain, bench_light
                 float4 win;      // screen-UV visible window u0,u1,v0,v1 (v up)
                 float4 misc;     // glow_gain, power, tube_w, tube_h
-                float4 mask;     // triad_pitch_px, leakage, mask_enable, unused
+                float4 mask;     // triad_pitch_px, emission, mask_enable, v_roll
             };
             struct VS_OUT { float4 pos : SV_Position; float2 uv : TEXCOORD; };
             VS_OUT VS(uint id : SV_VertexID) {
@@ -575,10 +619,10 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
             // LCD this drives the actual subpixels into three evenly spaced
             // R,G,B lines -- a real aperture grille at 1080p, finer at 4K --
             // with no arbitrary-width tiling to beat against the panel grid
-            // and produce moire/rainbows. mask.y = off-phosphor leakage,
-            // mask.x = triad scale (physical px per mask cell, >=1).
+            // and produce moire/rainbows. mask.x = triad scale (physical
+            // px per mask cell, >=1); off-phosphor leakage is fixed.
             float3 aperture(float3 col, float screen_x) {
-                float ml = mask.y;
+                const float ml = 0.45;
                 uint cell = (uint)floor(screen_x / max(mask.x, 1.0)) & 1u;
                 // magenta = (1, ml, 1), green = (ml, 1, ml)
                 float3 m = (cell == 0u) ? float3(1.0, ml, 1.0)
@@ -614,8 +658,11 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                 [unroll] for (int i = 0; i < 5; i++) {
                     float2 f2 = fb0 + ax * sMaj * T[i];
                     float3 ct = float3(0, 0, 0);
+                    // mask.w = vertical roll (monitor V-hold phase error):
+                    // the scan is a cylinder, so the content wraps.
                     if (all(f2 >= 0.0) && all(f2 <= 1.0))
-                        ct = lin3(tube.SampleLevel(sLin, f2, lod).rgb);
+                        ct = lin3(tube.SampleLevel(sLin,
+                                float2(f2.x, frac(f2.y + mask.w)), lod).rgb);
                     acc += ct * W[i];
                 }
                 return tw.SampleLevel(sPoint, uv, 0).rgb * shade(acc);
@@ -632,15 +679,18 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                     float2 fb = fbmap(w.x, w.y);
                     float3 content = float3(0, 0, 0);
                     if (all(fb >= 0.0) && all(fb <= 1.0))
-                        content = lin3(tube.SampleLevel(sLin, fb, 0).rgb);
+                        content = lin3(tube.SampleLevel(sLin,
+                                float2(fb.x, frac(fb.y + mask.w)), 0).rgb);
                     content = shade(content);
                     // aperture grille on the glass, in screen space
                     if (mask.z > 0.5)
                         content = aperture(content, i.pos.x);
-                    c += content * misc.y;
+                    // mask.y = cathode emission: tube light needs both the
+                    // power switch (misc.y, gates EHT) and a hot cathode.
+                    c += content * misc.y * mask.y;
                 } else {
                     c += (lobe(dmean, dcov, dw, uv) + lobe(gmean, gcov, gw, uv))
-                         * misc.x * misc.y;
+                         * misc.x * misc.y * mask.y;
                 }
                 return float4(pow(max(c, 0.0), 1.0 / 2.2), 1);
             }
@@ -867,6 +917,169 @@ void DxState::render_display() {
                 ctx->OMSetRenderTargets(0, nullptr, nullptr);
                 ctx->GenerateMips(tube_srv.Get());
 
+                // ---- HV supply droop under beam load ----
+                // The tube's smallest mip is the frame's average luminance =
+                // average beam current. Copy it out now, read the 2-frame-old
+                // copy (latency is nothing against the supply time constant),
+                // and low-pass it: the high-voltage rail droops under beam
+                // load, and deflection sensitivity rises as it droops, so
+                // bright pictures swell slightly and dim; the supply recovers
+                // over a few hundred ms.
+                float hv_size = 1.0f, hv_gain = 1.0f, hv_glow = 1.0f;
+                float emission = 0.0f;
+                {
+                    UINT last_mip = 0;
+                    for (int d = (std::max)(TUBE_W, TUBE_H); d > 1; d >>= 1)
+                        ++last_mip;
+                    int w = (int)(beam_ring_n % 3);
+                    int r = (int)((beam_ring_n + 1) % 3);  // oldest in ring
+                    ctx->CopySubresourceRegion(beam_ring[w].Get(), 0, 0, 0, 0,
+                                               tube_tex.Get(), last_mip, nullptr);
+                    if (beam_ring_n >= 2) {
+                        D3D11_MAPPED_SUBRESOURCE bm;
+                        if (SUCCEEDED(ctx->Map(beam_ring[r].Get(), 0,
+                                               D3D11_MAP_READ, 0, &bm))) {
+                            const uint8_t* px = (const uint8_t*)bm.pData;
+                            float luma = (0.2126f * px[0] + 0.7152f * px[1] +
+                                          0.0722f * px[2]) / 255.0f;
+                            ctx->Unmap(beam_ring[r].Get(), 0);
+                            // Beam current tracks LINEAR light, not encoded
+                            // values: square the gamma-space average so dark
+                            // text screens (~0.08 encoded) barely load the
+                            // supply while a paper-white page (~0.75) does.
+                            float beam = luma * luma;
+                            // No cathode emission (or no EHT) = no beam, no
+                            // load on the supply. Uses last frame's cathode
+                            // temperature; one frame of lag is nothing.
+                            float egate = (bz_power && cathode_temp > 1e-4f)
+                                ? cathode_temp * cathode_temp *
+                                  std::exp(11.0f * (1.0f - 1.0f / cathode_temp))
+                                : 0.0f;
+                            beam *= egate;
+                            auto bnow = std::chrono::steady_clock::now();
+                            float bdt = (hv_load_t.time_since_epoch().count() != 0)
+                                ? std::chrono::duration<float>(bnow - hv_load_t).count()
+                                : 1.0f / 60.0f;
+                            hv_load_t = bnow;
+                            if (bdt > 0.1f) bdt = 0.1f;
+                            // Asymmetric response: the HV rail collapses fast
+                            // when beam load jumps, then the regulation loop
+                            // pulls it back slowly. This fast-collapse/slow-
+                            // recover shape is physically defensible (supplies
+                            // sag faster than they recover) but the specific
+                            // 60/350 ms constants are a plausible choice, not
+                            // measured from a 5153 -- tune to taste.
+                            float tau = (beam > hv_load) ? 0.06f : 0.35f;
+                            hv_load += (beam - hv_load) *
+                                       (1.0f - std::exp(-bdt / tau));
+                        }
+                    }
+                    beam_ring_n++;
+
+                    // ---- Vertical hold (injection-locked oscillator) ----
+                    // A locked monitor shows a steady, centered picture: each
+                    // signal vsync arrives one nominal field apart and resets
+                    // the sweep to the same point, so there is NO steady offset.
+                    // A picture roll happens only on a DISTURBANCE -- a field
+                    // whose vsync arrives early or late (the CRTC reprogram on a
+                    // mode change emits one short/long field). That timing error
+                    // displaces the sweep; the weak injection lock then pulls it
+                    // back over several fields. vosc_phase = current offset.
+                    if (cga && clk_cycles) {
+                        const double kClkHz = 4772727.0;
+                        uint64_t vnow = *clk_cycles;
+                        uint64_t vs = cga->last_vsync_clk();
+                        if (vosc_last_vsync == 0 || vs < vosc_last_vsync)
+                            vosc_last_vsync = vs;  // init / sim reset
+                        if (vs != vosc_last_vsync && vs > 0 && vs <= vnow) {
+                            double signal_dt = (double)(vs - vosc_last_vsync)
+                                               / kClkHz;
+                            vosc_last_vsync = vs;
+                            // The oscillator entrains to the SIGNAL's field
+                            // rate -- a locked monitor has zero standing error
+                            // at ANY stable rate (it never compares against an
+                            // absolute 59.92 Hz). Only a CHANGE in field timing
+                            // -- the short/long field of a CRTC reprogram, or a
+                            // mode with different frame length -- disturbs it,
+                            // and the disturbance decays as it re-entrains.
+                            if (vosc_period <= 0.0 ||
+                                std::fabs(signal_dt / vosc_period - 1.0) > 0.5)
+                                vosc_period = signal_dt;  // init / wild glitch
+                            double err = (signal_dt - vosc_period) / vosc_period;
+                            vosc_period += (signal_dt - vosc_period) * 0.10;
+                            // V-hold detune: 0 at 59.92 (locked); lower it and
+                            // a constant beat rolls the picture continuously.
+                            double beat = (double)bz_vhold / 59.92 - 1.0;
+                            // Weak injection lock: pull-in 0.75/field (gain
+                            // 0.25) matches frame-stepped 5153 video -- a big
+                            // jump climbs back over ~8 fields, settles in ~3.
+                            vosc_phase = (vosc_phase + err + beat) * 0.75;
+                            v_roll = (float)vosc_phase;
+                        }
+                    }
+
+                    // ---- Cathode thermionics + power switching ----
+                    // The heater drags the cathode to operating temperature
+                    // with a ~6 s first-order lag (cooling ~25 s when off).
+                    // Light output follows Richardson-Dushman emission,
+                    // J ~ T^2 exp(-W/kT), normalized at the operating point:
+                    // oxide cathode W ~= 1.0 eV at T_op ~= 1050 K gives
+                    // W/(k T_op) ~= 11. Result: essentially dark below ~70%
+                    // temperature -- a cold CRT shows nothing for seconds,
+                    // then fades in; a quick power blip barely dims. Power
+                    // OFF is dark immediately (no EHT accelerating voltage)
+                    // but the cathode stays warm, so a fast off-on comes
+                    // right back -- rolling, because the restarted vertical
+                    // oscillator has no memory of the signal's phase.
+                    {
+                        uint64_t cnow = clk_cycles ? *clk_cycles : 0;
+                        if (cath_clk == 0 || cath_clk > cnow) cath_clk = cnow;
+                        float cdt = (float)((double)(cnow - cath_clk) / 4772727.0);
+                        cath_clk = cnow;
+                        if (cdt > 0.25f) cdt = 0.25f;
+                        // Time constants compressed ~10x from reality (real
+                        // heaters take 10-20 s to full brightness; nobody
+                        // wants to wait that out in an emulator). The
+                        // Richardson curve shape is preserved: brief black,
+                        // quick dim fade-in, full at ~2 s; short power blips
+                        // dim but come right back.
+                        float ctarget = bz_power ? 1.0f : 0.0f;
+                        float ctau = bz_power ? 0.45f : 8.0f;
+                        cathode_temp += (ctarget - cathode_temp) *
+                                        (1.0f - std::exp(-cdt / ctau));
+                        if (cathode_temp > 1e-4f) {
+                            float t = cathode_temp;
+                            emission = t * t * std::exp(11.0f * (1.0f - 1.0f / t));
+                        }
+                        // Power-on edge: the deflection oscillator restarts
+                        // with an arbitrary phase relative to the signal --
+                        // derived from where in the field the switch landed
+                        // (emulated time, no RNG). Entrainment was lost.
+                        if (bz_power && !prev_bz_power && cga) {
+                            double vfield = (vosc_period > 0.0)
+                                ? vosc_period : 1.0 / 59.92;
+                            double fpos = std::fmod(
+                                (double)(cnow - cga->last_vsync_clk())
+                                / 4772727.0, vfield) / vfield;
+                            vosc_phase = fpos - 0.5;  // +/- half a field
+                            v_roll = (float)vosc_phase;
+                            vosc_period = 0.0;
+                        }
+                        prev_bz_power = bz_power;
+                    }
+
+                    // Calibrated to a real IBM 5153: a VOGONS owner measured
+                    // ~1/16"-3/32" of breathing edge-to-edge on an ~8.3"-wide
+                    // tube = 0.75-1.1% black->white, and considered that
+                    // notable (i.e. slightly worn). So strength 1.0 = ~1.3%
+                    // total swell = a healthy-but-real 5153; 2.0 pushes toward
+                    // a tired flyback. The 5153 is known for bright=blurrier,
+                    // so the droop also softens focus (glow spill) and dims.
+                    hv_size = 1.0f + bz_hv_droop * 0.013f * hv_load;
+                    hv_gain = 1.0f - bz_hv_droop * 0.060f * hv_load;
+                    hv_glow = 1.0f + bz_hv_droop * 0.400f * hv_load;
+                }
+
                 // P3: composite plate + LED + warped tube + moment glow.
                 {
                     D3D11_MAPPED_SUBRESOURCE mapped;
@@ -878,12 +1091,13 @@ void DxState::render_display() {
                     float triad_px = (dst_h * bz_zoom > 1600.0f) ? 2.0f : 1.0f;
                     float bcb[24] = {
                         0, 0, 1, 1,
-                        bz_hsize, bz_vsize, bz_hpos, bz_vpos,
-                        bz_bright, bz_contrast, bz_gain, bz_bench,
+                        bz_hsize * hv_size, bz_vsize * hv_size,
+                        bz_hpos, bz_vpos,
+                        bz_bright, bz_contrast, bz_gain * hv_gain, bz_bench,
                         0.008f, 0.970f, 0.079f, 0.956f,   // visible tube UV window
-                        bz_glow, bz_power ? 1.0f : 0.0f,
+                        bz_glow * hv_glow, bz_power ? 1.0f : 0.0f,
                         (float)TUBE_W, (float)TUBE_H,
-                        triad_px, 0.45f, crt_scaler ? 1.0f : 0.0f, 0.0f
+                        triad_px, emission, crt_scaler ? 1.0f : 0.0f, v_roll
                     };
                     memcpy(mapped.pData, bcb, sizeof(bcb));
                     ctx->Unmap(bezel_cb.Get(), 0);
@@ -1964,7 +2178,20 @@ void DxState::render_system_window() {
                 ImGui::SliderFloat("Contrast", &bz_contrast, 0.2f, 2.5f, "%.2f");
                 ImGui::SliderFloat("Screen gain", &bz_gain, 0.2f, 4.0f, "%.2f");
                 ImGui::SliderFloat("Glow spill", &bz_glow, 0.0f, 3.0f, "%.2f");
-                ImGui::SliderFloat("Bench light", &bz_bench, 0.1f, 2.0f, "%.2f");
+                ImGui::SliderFloat("HV droop", &bz_hv_droop, 0.0f, 2.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("High-voltage rail drooping under beam load:\n"
+                                      "bright pictures swell, dim, and bloom, then\n"
+                                      "settle over a few hundred ms as the supply\n"
+                                      "recovers. 0 = perfectly regulated supply.");
+                ImGui::SliderFloat("V-hold", &bz_vhold, 50.0f, 59.92f, "%.2f Hz");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Vertical oscillator free-run rate. Below the\n"
+                                      "59.92 Hz field rate the picture rolls up into\n"
+                                      "lock on a mode change (like a real 5153); at\n"
+                                      "59.92 it snaps instantly. Too low = perpetual\n"
+                                      "roll, the classic misadjusted-V-hold look.");
+                ImGui::SliderFloat("Bench light", &bz_bench, 0.0f, 1.0f, "%.2f");
                 ImGui::SliderFloat("Zoom", &bz_zoom, 1.0f, 1.4f, "%.3f");
                 ImGui::TreePop();
             }

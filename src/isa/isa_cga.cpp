@@ -339,6 +339,10 @@ void ISA_CGA::on_cycle(Fiber) {
         in_vsync_ = true;
         vsync_counter_ = 0;
         active_start_set_ = false;  // reset: next VCC=0 is the active start
+        // Timestamp for the monitor's vertical oscillator model: the
+        // renderer needs the emulated time of each vsync leading edge.
+        if (clk_cycles_)
+            last_vsync_clk_ = *clk_cycles_;
     }
     if (in_vsync_) {
         vsync_counter_++;
