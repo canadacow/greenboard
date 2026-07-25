@@ -1413,8 +1413,7 @@ void DxState::render_overlay() {
 
     if (ImGui::BeginPopup("MainMenu")) {
         if (ImGui::MenuItem("System"))        system_open = !system_open;
-        // Board view temporarily disabled -- broken, pending fix.
-        ImGui::MenuItem("Board", nullptr, false, false);
+        if (ImGui::MenuItem("Board"))         board_view.toggle();
         if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
         if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
         if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
@@ -1451,8 +1450,7 @@ void DxState::render_overlay() {
 
             if (ImGui::BeginPopup("MainMenu")) {
                 if (ImGui::MenuItem("System"))        system_open = !system_open;
-                // Board view temporarily disabled -- broken, pending fix.
-                ImGui::MenuItem("Board", nullptr, false, false);
+                if (ImGui::MenuItem("Board"))         board_view.toggle();
                 if (ImGui::MenuItem("Debugger"))      { if (dbg_visible) *dbg_visible = !*dbg_visible; }
                 if (ImGui::MenuItem("Bus"))           bus_view_open = !bus_view_open;
                 if (ImGui::MenuItem("Memory"))        mem_view_open = !mem_view_open;
@@ -1505,9 +1503,9 @@ void DxState::render_overlay() {
     if (cga_debug_open && cga)
         render_cga_debug();
 
-    // --- PCB board view (F2 toggle) ---
-    if (ImGui::IsKeyPressed(ImGuiKey_F2, false))
-        board_view.toggle();
+    // --- PCB board view ---
+    // No function-key shortcut: F1-F12 belong to the guest (DOS apps use
+    // them heavily). Toggle from the menu instead.
     board_view.imgui_window(ctx.Get());
 
     ImGui::Render();
@@ -1550,24 +1548,20 @@ void DxState::render_debugger() {
     bool paused = scheduler->is_paused();
 
     // --- Toolbar ---
-    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
-        if (paused) scheduler->resume(); else scheduler->pause();
-        paused = !paused;
-    }
+    // Buttons only, no function-key shortcuts: F1-F12 are reserved for the
+    // guest, which needs them for DOS applications.
     {
-        float btn_w = ImGui::CalcTextSize("Resume (F5)").x + ImGui::GetStyle().FramePadding.x * 2;
+        float btn_w = ImGui::CalcTextSize("Resume").x + ImGui::GetStyle().FramePadding.x * 2;
         if (paused) {
-            if (ImGui::Button("Resume (F5)", ImVec2(btn_w, 0))) scheduler->resume();
+            if (ImGui::Button("Resume", ImVec2(btn_w, 0))) scheduler->resume();
         } else {
-            if (ImGui::Button("Pause  (F5)", ImVec2(btn_w, 0))) scheduler->pause();
+            if (ImGui::Button("Pause ", ImVec2(btn_w, 0))) scheduler->pause();
         }
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!paused);
-    // F9: Step Over -- run until next instruction at same stack level
-    bool do_step_over = ImGui::Button("Over (F9)");
-    if (paused && ImGui::IsKeyPressed(ImGuiKey_F9, true))
-        do_step_over = true;
+    // Step Over -- run until next instruction at same stack level
+    bool do_step_over = ImGui::Button("Over");
     if (do_step_over && cpu && mem) {
         uint16_t cs = cpu->regs16_ro()[IC_8088::CS];
         uint16_t ip = cpu->ip();
@@ -1583,18 +1577,12 @@ void DxState::render_debugger() {
         scheduler->step_over(ip + len, sp);
     }
     ImGui::SameLine();
-    // F10: Step Into -- single instruction
-    bool do_step_instr = ImGui::Button("Into (F10)");
-    if (paused && ImGui::IsKeyPressed(ImGuiKey_F10, true))
-        do_step_instr = true;
-    if (do_step_instr)
+    // Step Into -- single instruction
+    if (ImGui::Button("Into"))
         scheduler->step_instruction();
     ImGui::SameLine();
-    // F11: Cycle -- single CLK cycle
-    bool do_step_cycle = ImGui::Button("Cycle (F11)");
-    if (paused && ImGui::IsKeyPressed(ImGuiKey_F11, true))
-        do_step_cycle = true;
-    if (do_step_cycle)
+    // Cycle -- single CLK cycle
+    if (ImGui::Button("Cycle"))
         scheduler->step_cycle();
     ImGui::EndDisabled();
 
@@ -2807,12 +2795,15 @@ public:
 };
 
 static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
+    // Function keys belong to the guest -- DOS applications lean on them
+    // heavily. Route F1-F12 straight to the emulated keyboard without
+    // letting ImGui see them (no UI shortcut uses a function key).
+    bool is_fkey = (wp >= VK_F1 && wp <= VK_F12) &&
+                   (msg == WM_KEYDOWN || msg == WM_KEYUP ||
+                    msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP);
+
+    if (!is_fkey && ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
         return true;
-    // F10 generates WM_SYSKEYDOWN -- don't let DefWindowProc eat it for
-    // menu activation, otherwise F10 requires two presses.
-    if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp == VK_F10)
-        return 0;
 
     // Alt+Enter: toggle borderless fullscreen. Swallow the key entirely
     // so it neither reaches the emulated keyboard nor beeps.
@@ -2832,8 +2823,10 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     }
 
     // Forward keyboard events to the emulated keyboard.
-    // Only when ImGui doesn't want keyboard input (not typing in a text field).
-    if (s_kbd && ImGui::GetCurrentContext() && !ImGui::GetIO().WantCaptureKeyboard
+    // Only when ImGui doesn't want keyboard input (not typing in a text
+    // field) -- except function keys, which are always the guest's.
+    if (s_kbd && ImGui::GetCurrentContext()
+        && (is_fkey || !ImGui::GetIO().WantCaptureKeyboard)
         && s_dx && s_dx->scheduler && !s_dx->scheduler->is_paused()) {
         if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
             uint8_t xt = TestKeyboard::vk_to_xt((int)wp);

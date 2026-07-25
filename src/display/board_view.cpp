@@ -109,34 +109,37 @@ float4 ps_main(VS_OUT input) : SV_Target {
     float box_dist = 1e9;
     uint  box_idx  = 0;
 
+    // No `continue` in this loop: fxc emits per-path counter shuffles for
+    // continue that newer driver JITs have miscompiled into infinite loops.
+    // Plain nested ifs keep the loop body a single straight-line path.
     for (uint i = 0; i < seg_count; i++) {
-        uint fl = segs[i].flags;
-        if (!layer_visible(fl)) continue;
-
-        if (fl == 4u) {
-            // Filled box: (x1,y1)=min, (x2,y2)=max.
-            float2 bmin = float2(segs[i].x1, segs[i].y1);
-            float2 bmax = float2(segs[i].x2, segs[i].y2);
-            // Quick AABB with margin for border.
-            float margin = px * 4.0;
-            if (p.x < bmin.x - margin || p.x > bmax.x + margin ||
-                p.y < bmin.y - margin || p.y > bmax.y + margin)
-                continue;
-            float d = sd_box(p, bmin, bmax);
-            if (d < box_dist) { box_dist = d; box_idx = i; }
-        } else {
-            // Line segment SDF (traces, vias, pads, board outline).
-            float margin = segs[i].half_w + px * 2.0;
-            float2 mn = min(float2(segs[i].x1, segs[i].y1),
-                            float2(segs[i].x2, segs[i].y2)) - margin;
-            float2 mx = max(float2(segs[i].x1, segs[i].y1),
-                            float2(segs[i].x2, segs[i].y2)) + margin;
-            if (p.x < mn.x || p.x > mx.x || p.y < mn.y || p.y > mx.y)
-                continue;
-            float d = sd_segment(p, float2(segs[i].x1, segs[i].y1),
-                                    float2(segs[i].x2, segs[i].y2));
-            d -= segs[i].half_w;
-            if (d < trace_dist) { trace_dist = d; trace_idx = i; }
+        Segment s = segs[i];
+        if (layer_visible(s.flags)) {
+            if (s.flags == 4u) {
+                // Filled box: (x1,y1)=min, (x2,y2)=max.
+                float2 bmin = float2(s.x1, s.y1);
+                float2 bmax = float2(s.x2, s.y2);
+                // Quick AABB with margin for border.
+                float margin = px * 4.0;
+                if (p.x >= bmin.x - margin && p.x <= bmax.x + margin &&
+                    p.y >= bmin.y - margin && p.y <= bmax.y + margin) {
+                    float d = sd_box(p, bmin, bmax);
+                    if (d < box_dist) { box_dist = d; box_idx = i; }
+                }
+            } else {
+                // Line segment SDF (traces, vias, pads, board outline).
+                float margin = s.half_w + px * 2.0;
+                float2 mn = min(float2(s.x1, s.y1),
+                                float2(s.x2, s.y2)) - margin;
+                float2 mx = max(float2(s.x1, s.y1),
+                                float2(s.x2, s.y2)) + margin;
+                if (p.x >= mn.x && p.x <= mx.x && p.y >= mn.y && p.y <= mx.y) {
+                    float d = sd_segment(p, float2(s.x1, s.y1),
+                                            float2(s.x2, s.y2));
+                    d -= s.half_w;
+                    if (d < trace_dist) { trace_dist = d; trace_idx = i; }
+                }
+            }
         }
     }
 
@@ -227,7 +230,10 @@ float4 ovl_ps(VS_OUT input) : SV_Target {
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
         return float4(0, 0, 0, 0);
 
-    float4 c = overlay_tex.Sample(samp, uv);
+    // SampleLevel, not Sample: implicit-derivative sampling after the divergent
+    // early return above is undefined behavior (dead quad lanes). Texture has
+    // no mips, so level 0 is identical.
+    float4 c = overlay_tex.SampleLevel(samp, uv, 0.0);
     c.a *= alpha;
     return c;
 }
@@ -609,134 +615,11 @@ void BoardView::render_to_texture(ID3D11DeviceContext* ctx, int w, int h) {
     ensure_rt(ctx, w, h);
     if (!rt_rtv_) return;
 
-    // Update constant buffer
-    float board_w = (bounds_[2] - bounds_[0]);
-    float board_h = (bounds_[3] - bounds_[1]);
-    float view_w = (float)w / zoom_;
-    float view_h = (float)h / zoom_;
-
-    ViewCB cb;
-    cb.view_min_x = pan_x_ - view_w * 0.5f;
-    cb.view_min_y = pan_y_ - view_h * 0.5f;
-    cb.view_size_x = view_w;
-    cb.view_size_y = view_h;
-    cb.screen_w = (float)w;
-    cb.screen_h = (float)h;
-    cb.seg_count = static_cast<uint32_t>(segments_.size());
-    cb.highlight_net = highlight_net_;
-    // Dark PCB green
-    cb.bg_r = 0.02f; cb.bg_g = 0.08f; cb.bg_b = 0.02f; cb.bg_a = 1.0f;
-    cb.layer_mask = layer_mask_;
-    cb.pad[0] = cb.pad[1] = cb.pad[2] = 0;
-
-    D3D11_MAPPED_SUBRESOURCE mapped;
-    ctx->Map(cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-    memcpy(mapped.pData, &cb, sizeof(cb));
-    ctx->Unmap(cb_.Get(), 0);
-
-    // Save current state
-    ComPtr<ID3D11RenderTargetView> old_rtv;
-    ComPtr<ID3D11DepthStencilView> old_dsv;
-    D3D11_VIEWPORT old_vp;
-    UINT num_vp = 1;
-    ctx->RSGetViewports(&num_vp, &old_vp);
-    ctx->OMGetRenderTargets(1, &old_rtv, &old_dsv);
-
-    // Bind our render target
-    ctx->OMSetRenderTargets(1, rt_rtv_.GetAddressOf(), nullptr);
-    D3D11_VIEWPORT vp = { 0, 0, (float)w, (float)h, 0, 1 };
-    ctx->RSSetViewports(1, &vp);
-
-    // Set shaders and resources
-    ctx->VSSetShader(vs_.Get(), nullptr, 0);
-    ctx->PSSetShader(ps_.Get(), nullptr, 0);
-    ctx->PSSetConstantBuffers(0, 1, cb_.GetAddressOf());
-    ID3D11ShaderResourceView* srvs[2] = { seg_srv_.Get(), lvl_srv_.Get() };
-    ctx->PSSetShaderResources(0, 2, srvs);
-    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ctx->IASetInputLayout(nullptr);
-
-    // Draw fullscreen triangle
-    ctx->Draw(3, 0);
-
-    // Unbind SRV (so texture can be used as ImGui image)
-    ID3D11ShaderResourceView* null_srvs[2] = { nullptr, nullptr };
-    ctx->PSSetShaderResources(0, 2, null_srvs);
-
-    // --- Overlay pass: composite component PNG on top ---
-    if (overlay_visible_ && overlay_srv_ && overlay_ps_) {
-        // Enable alpha blending.
-        D3D11_BLEND_DESC bld = {};
-        bld.RenderTarget[0].BlendEnable = TRUE;
-        bld.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
-        bld.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-        bld.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-        bld.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-        bld.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
-        bld.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-        bld.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-        ComPtr<ID3D11BlendState> blend;
-        device_->CreateBlendState(&bld, &blend);
-        ctx->OMSetBlendState(blend.Get(), nullptr, 0xFFFFFFFF);
-
-        // Update overlay constant buffer.
-        struct alignas(16) OverlayCB {
-            float view_min_x, view_min_y;
-            float view_size_x, view_size_y;
-            float screen_w, screen_h;
-            float scale_x, scale_y;
-            float off_x, off_y;
-            float svg_w, svg_h;
-            float alpha;
-            float _pad[3];
-        };
-        OverlayCB ocb;
-        float view_w = (float)w / zoom_;
-        float view_h = (float)h / zoom_;
-        ocb.view_min_x = pan_x_ - view_w * 0.5f;
-        ocb.view_min_y = pan_y_ - view_h * 0.5f;
-        ocb.view_size_x = view_w;
-        ocb.view_size_y = view_h;
-        ocb.screen_w = (float)w;
-        ocb.screen_h = (float)h;
-        ocb.scale_x = overlay_scale_x_;
-        ocb.scale_y = overlay_scale_y_;
-        ocb.off_x = overlay_off_x_;
-        ocb.off_y = overlay_off_y_;
-        ocb.svg_w = 3577.0f;
-        ocb.svg_h = 2534.0f;
-        ocb.alpha = overlay_alpha_;
-        ocb._pad[0] = ocb._pad[1] = ocb._pad[2] = 0;
-
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        ctx->Map(overlay_cb_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-        memcpy(mapped.pData, &ocb, sizeof(ocb));
-        ctx->Unmap(overlay_cb_.Get(), 0);
-
-        ctx->VSSetShader(vs_.Get(), nullptr, 0);  // reuse fullscreen tri VS
-        ctx->PSSetShader(overlay_ps_.Get(), nullptr, 0);
-        ctx->PSSetConstantBuffers(0, 1, overlay_cb_.GetAddressOf());
-        ctx->PSSetShaderResources(0, 1, overlay_srv_.GetAddressOf());
-
-        // Linear sampler for texture filtering.
-        D3D11_SAMPLER_DESC sd = {};
-        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-        ComPtr<ID3D11SamplerState> sampler;
-        device_->CreateSamplerState(&sd, &sampler);
-        ctx->PSSetSamplers(0, 1, sampler.GetAddressOf());
-
-        ctx->Draw(3, 0);
-
-        // Cleanup.
-        ID3D11ShaderResourceView* null_srv = nullptr;
-        ctx->PSSetShaderResources(0, 1, &null_srv);
-        ctx->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
-    }
-
-    // Restore state
-    ctx->OMSetRenderTargets(1, old_rtv.GetAddressOf(), old_dsv.Get());
-    ctx->RSSetViewports(1, &old_vp);
+    // Renderer gutted while bisecting the GPU hang: clear only, no draw
+    // calls. Rebuild the SDF/overlay passes one piece at a time from git
+    // history (see render_to_texture prior to this change).
+    const float bg[4] = { 0.02f, 0.08f, 0.02f, 1.0f };  // dark PCB green
+    ctx->ClearRenderTargetView(rt_rtv_.Get(), bg);
 }
 
 // ========================================================================
@@ -1024,42 +907,8 @@ void BoardView::imgui_window(ID3D11DeviceContext* ctx) {
             }
         }
 
-        // --- Component labels (draw on top of filled IC bodies) ---
-        if (zoom_ > 0.3f && (layer_mask_ & 16)) {
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            float font_scale = (std::min)(zoom_ * 8.0f, 14.0f);
-            if (font_scale >= 4.0f) {
-                for (auto& lbl : labels_) {
-                    float sx = cursor.x + (lbl.x - pan_x_) * zoom_ + w * 0.5f;
-                    float sy = cursor.y + (lbl.y - pan_y_) * zoom_ + h * 0.5f;
-                    if (sx < cursor.x || sx > cursor.x + w ||
-                        sy < cursor.y || sy > cursor.y + h)
-                        continue;
-
-                    // Shadow + text for ref designator.
-                    dl->AddText(nullptr, font_scale,
-                                ImVec2(sx + 1, sy + 1),
-                                IM_COL32(0, 0, 0, 200),
-                                lbl.ref.c_str());
-                    dl->AddText(nullptr, font_scale,
-                                ImVec2(sx, sy),
-                                IM_COL32(255, 255, 220, 240),
-                                lbl.ref.c_str());
-
-                    // Value (chip name) below ref when zoomed in more.
-                    if (font_scale >= 7.0f && !lbl.value.empty()) {
-                        dl->AddText(nullptr, font_scale * 0.75f,
-                                    ImVec2(sx + 1, sy + font_scale + 1),
-                                    IM_COL32(0, 0, 0, 160),
-                                    lbl.value.c_str());
-                        dl->AddText(nullptr, font_scale * 0.75f,
-                                    ImVec2(sx, sy + font_scale),
-                                    IM_COL32(180, 180, 255, 200),
-                                    lbl.value.c_str());
-                    }
-                }
-            }
-        }
+        // Component labels removed while bisecting the GPU hang (git history
+        // has the ImGui draw-list code).
     }
 
     ImGui::End();
