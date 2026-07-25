@@ -50,6 +50,11 @@ public:
 
     // Whether this rasterizer renders directly to the back buffer via D2D.
     virtual bool uses_d2d() const { return false; }
+
+    // Drop any views/targets derived from the swap chain back buffers.
+    // Must be called BEFORE ResizeBuffers -- the swap chain cannot be resized
+    // while anything still references its buffers.
+    virtual void release_backbuffer_refs() {}
 };
 
 } // namespace bench

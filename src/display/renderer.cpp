@@ -10,9 +10,15 @@
 #include <shellapi.h>
 #include <ole2.h>
 #include <d3d11.h>
+#include <d3d11on12.h>
+#include <d3d11sdklayers.h>   // ID3D11InfoQueue
+#include <d3d12.h>
+#include <d3d12sdklayers.h>   // ID3D12Debug, ID3D12InfoQueue
 #include <dxgi1_2.h>
+#include <dxgi1_4.h>   // IDXGISwapChain3::GetCurrentBackBufferIndex
 #include <wrl/client.h>
 #pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 
 #include <cstring>
@@ -71,8 +77,34 @@ struct DxState {
 
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> ctx;
-    ComPtr<IDXGISwapChain1> swapChain;
+    ComPtr<IDXGISwapChain3> swapChain;   // 3 for GetCurrentBackBufferIndex
+    // View of the CURRENT back buffer. Repointed each frame by begin_frame();
+    // all existing render code keeps using rtv without knowing about flipping.
     ComPtr<ID3D11RenderTargetView> rtv;
+
+    // D3D11On12: the D3D11 device above is a mapping layer on top of a real
+    // D3D12 device. All existing D3D11 rendering is unchanged; this exists so
+    // D3D12-only features (DXR) can be added later without a rewrite.
+    //
+    // The swap chain belongs to the D3D12 queue, so every back buffer must be
+    // wrapped via CreateWrappedResource -- with FLIP_DISCARD the buffer rotates
+    // each Present, so wrapping only buffer 0 corrupts 11on12's state tracking
+    // and removes the device.
+    static constexpr UINT kBackBufferCount = 2;
+    ComPtr<ID3D12Device> device12;
+    ComPtr<ID3D12CommandQueue> queue12;
+    ComPtr<ID3D11On12Device> device11on12;
+    ComPtr<ID3D11Resource> wrapped_bb[kBackBufferCount];
+    ComPtr<ID3D11RenderTargetView> bb_rtv[kBackBufferCount];
+    UINT frame_index = 0;      // current back buffer
+    bool frame_acquired = false;
+
+    // Fence for draining the GPU before destroying swap chain buffers:
+    // ctx->Flush() only submits work, it does not wait for completion.
+    ComPtr<ID3D12Fence> fence12;
+    UINT64 fence_value = 0;
+    HANDLE fence_event = nullptr;
+    void wait_for_gpu();
 
 
     // Fullscreen blit resources (for texture-based rasterizers like CGA)
@@ -162,6 +194,9 @@ struct DxState {
     void toggle_fullscreen();
     void request_resize(int w, int h) { resize_pending = true; resize_w = w; resize_h = h; }
     void apply_resize();
+    bool create_backbuffer_rtv();
+    void release_backbuffer_rtv();
+    void begin_frame();   // acquire current back buffer, point rtv at it
 
     // Active display rasterizer (MDA or CGA, owned by renderer)
     std::unique_ptr<Rasterizer> rasterizer;
@@ -254,6 +289,12 @@ struct DxState {
     static constexpr int MEM_ROWS = 16;
     static constexpr int MEM_COLS = 16;
 
+    ~DxState() {
+        // Drain the GPU before any D3D12 resource is final-released.
+        wait_for_gpu();
+        if (fence_event) CloseHandle(fence_event);
+    }
+
     bool init(HWND hwnd, int w, int h, const ISA_MDA* mda_card);
     void render_display();
     void render_overlay();
@@ -265,15 +306,242 @@ struct DxState {
     void present();
 };
 
+// Wrap EVERY D3D12 swap-chain back buffer so the D3D11 side can render to it,
+// and make an RTV over each. FLIP_DISCARD rotates the buffer on every Present,
+// so each one needs its own wrapper and view.
+bool DxState::create_backbuffer_rtv() {
+    D3D11_RESOURCE_FLAGS rf = {};
+    rf.BindFlags = D3D11_BIND_RENDER_TARGET;
+
+    for (UINT i = 0; i < kBackBufferCount; ++i) {
+        ComPtr<ID3D12Resource> bb12;
+        if (FAILED(swapChain->GetBuffer(i, IID_PPV_ARGS(&bb12)))) {
+            spdlog::error("[Renderer] GetBuffer({}) failed", i);
+            return false;
+        }
+        // InState is the state the resource is in RIGHT NOW, at wrap time --
+        // a fresh/resized swap chain buffer is in PRESENT (== COMMON), not
+        // RENDER_TARGET. OutState is what Release transitions it back to.
+        // Acquire then does PRESENT->RENDER_TARGET via the RTV bind flag.
+        if (FAILED(device11on12->CreateWrappedResource(
+                bb12.Get(), &rf,
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_PRESENT,
+                IID_PPV_ARGS(&wrapped_bb[i])))) {
+            spdlog::error("[Renderer] CreateWrappedResource({}) failed", i);
+            return false;
+        }
+        if (FAILED(device->CreateRenderTargetView(wrapped_bb[i].Get(), nullptr,
+                                                  &bb_rtv[i]))) {
+            spdlog::error("[Renderer] CreateRenderTargetView({}) failed", i);
+            return false;
+        }
+    }
+
+    // Wrapped resources start out released (matching InState = PRESENT), so
+    // begin_frame()'s acquire is a real PRESENT->RENDER_TARGET transition.
+    frame_acquired = false;
+    begin_frame();
+    return true;
+}
+
+// Block until the GPU has finished everything submitted so far. Required
+// before destroying resources the GPU may still be reading (swap chain
+// buffers on resize) -- ID3D11DeviceContext::Flush only submits, never waits.
+void DxState::wait_for_gpu() {
+    if (!queue12 || !fence12 || !fence_event) return;
+    const UINT64 target = ++fence_value;
+    if (FAILED(queue12->Signal(fence12.Get(), target))) return;
+    if (fence12->GetCompletedValue() < target) {
+        if (SUCCEEDED(fence12->SetEventOnCompletion(target, fence_event)))
+            WaitForSingleObject(fence_event, INFINITE);
+    }
+}
+
+// Acquire the current back buffer for D3D11 use and point rtv at its view.
+void DxState::begin_frame() {
+    if (frame_acquired) return;
+    frame_index = swapChain->GetCurrentBackBufferIndex();
+    ID3D11Resource* res[] = { wrapped_bb[frame_index].Get() };
+    device11on12->AcquireWrappedResources(res, 1);
+    rtv = bb_rtv[frame_index];
+    frame_acquired = true;
+}
+
+void DxState::release_backbuffer_rtv() {
+    ctx->OMSetRenderTargets(0, nullptr, nullptr);
+
+    // Give the currently acquired buffer back to D3D12 before tearing down.
+    if (frame_acquired && wrapped_bb[frame_index]) {
+        ID3D11Resource* res[] = { wrapped_bb[frame_index].Get() };
+        device11on12->ReleaseWrappedResources(res, 1);
+    }
+    frame_acquired = false;
+
+    // All views must go before the wrapped resources (deferred destruction
+    // then needs a Flush to actually release the D3D12 buffers).
+    rtv.Reset();
+    for (UINT i = 0; i < kBackBufferCount; ++i) bb_rtv[i].Reset();
+    for (UINT i = 0; i < kBackBufferCount; ++i) wrapped_bb[i].Reset();
+
+    // Submit the deferred destructions, then WAIT: the underlying D3D12 buffers
+    // must not be final-released while frames referencing them are in flight.
+    ctx->Flush();
+    wait_for_gpu();
+}
+
 bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
     hwnd = hw; winW = w; winH = h;
     cellW = (float)w / MDA_COLS;
     cellH = (float)h / MDA_ROWS;
 
+    // --- Debug layers (must be enabled BEFORE device creation) ---
+    // Temporary: set BENCH_D3D_DEBUG to 0 to turn off once 11on12 is stable.
+#define BENCH_D3D_DEBUG 1
+    // GPU-based validation patches every shader and can push time-to-first-frame
+    // into the minutes. Only worth it for chasing a specific GPU-side bug.
+#define BENCH_D3D_GPU_VALIDATION 0
+#if BENCH_D3D_DEBUG
+    {
+        ComPtr<ID3D12Debug> dbg12;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg12)))) {
+            dbg12->EnableDebugLayer();
+#if BENCH_D3D_GPU_VALIDATION
+            ComPtr<ID3D12Debug1> dbg12_1;
+            if (SUCCEEDED(dbg12.As(&dbg12_1)))
+                dbg12_1->SetEnableGPUBasedValidation(TRUE);
+            spdlog::info("[Renderer] D3D12 debug layer + GPU validation ON");
+#else
+            spdlog::info("[Renderer] D3D12 debug layer ON");
+#endif
+        } else {
+            spdlog::warn("[Renderer] D3D12 debug layer unavailable "
+                         "(install Graphics Tools optional feature)");
+        }
+    }
+#endif
+
+    // --- D3D12 device + queue (the real device) ---
+    // Highest feature level the hardware supports, best first.
+    static const D3D_FEATURE_LEVEL kLevels[] = {
+        D3D_FEATURE_LEVEL_12_2,
+        D3D_FEATURE_LEVEL_12_1,
+        D3D_FEATURE_LEVEL_12_0,
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+    };
+    D3D_FEATURE_LEVEL got12 = D3D_FEATURE_LEVEL_11_0;
+    for (D3D_FEATURE_LEVEL want : kLevels) {
+        if (SUCCEEDED(D3D12CreateDevice(nullptr, want, IID_PPV_ARGS(&device12)))) {
+            got12 = want;
+            break;
+        }
+    }
+    if (!device12) {
+        spdlog::error("[Renderer] D3D12CreateDevice failed");
+        return false;
+    }
+
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5 = {};
+        HRESULT hr5 = device12->CheckFeatureSupport(
+            D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof(o5));
+        spdlog::info("[Renderer] D3D12 feature level {:X}.{:X}, raytracing tier {}",
+                     (unsigned(got12) >> 12) & 0xF, (unsigned(got12) >> 8) & 0xF,
+                     SUCCEEDED(hr5) ? (unsigned)o5.RaytracingTier : 0u);
+    }
+
+#if BENCH_D3D_DEBUG
+    // Break into the debugger at the exact call that errors, instead of
+    // surfacing later as "Removing Device" / access violation.
+    // NOT on WARNING: D3D11On12 internally creates buffers with an initial
+    // state D3D12 ignores, which warns every time and is not actionable.
+    {
+        ComPtr<ID3D12InfoQueue> iq12;
+        if (SUCCEEDED(device12.As(&iq12))) {
+            iq12->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+            iq12->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+
+            // Silence known-benign messages produced by the 11on12 layer.
+            // Our passes are fullscreen blits with no depth buffer by design.
+            D3D12_MESSAGE_ID deny[] = {
+                D3D12_MESSAGE_ID_CREATERESOURCE_STATE_IGNORED,
+                D3D12_MESSAGE_ID_CREATEGRAPHICSPIPELINESTATE_DEPTHSTENCILVIEW_NOT_SET,
+            };
+            D3D12_INFO_QUEUE_FILTER filter = {};
+            filter.DenyList.NumIDs = _countof(deny);
+            filter.DenyList.pIDList = deny;
+            iq12->AddStorageFilterEntries(&filter);
+
+            spdlog::info("[Renderer] D3D12 info queue break-on-error ON");
+        }
+    }
+#endif
+
+    D3D12_COMMAND_QUEUE_DESC qd = {};
+    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    qd.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    if (FAILED(device12->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue12)))) {
+        spdlog::error("[Renderer] CreateCommandQueue failed");
+        return false;
+    }
+
+    // Fence used to drain the queue before releasing swap chain buffers.
+    if (FAILED(device12->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                                     IID_PPV_ARGS(&fence12)))) {
+        spdlog::error("[Renderer] CreateFence failed");
+        return false;
+    }
+    fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!fence_event) {
+        spdlog::error("[Renderer] CreateEvent failed");
+        return false;
+    }
+
+    // --- D3D11 device as a mapping layer on top of D3D12 ---
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-    D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
-    D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
-        &fl, 1, D3D11_SDK_VERSION, &device, nullptr, &ctx);
+#if BENCH_D3D_DEBUG
+    flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+    static const D3D_FEATURE_LEVEL k11Levels[] = {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+    };
+    D3D_FEATURE_LEVEL got11 = D3D_FEATURE_LEVEL_11_0;
+    IUnknown* queues[] = { queue12.Get() };
+    HRESULT hr11 = D3D11On12CreateDevice(device12.Get(), flags,
+                                         k11Levels, _countof(k11Levels),
+                                         queues, 1, 0, &device, &ctx, &got11);
+#if BENCH_D3D_DEBUG
+    if (FAILED(hr11)) {
+        // Debug layer missing -> retry without it rather than failing to start.
+        spdlog::warn("[Renderer] D3D11 debug layer unavailable (0x{:08X}), retrying",
+                     (unsigned)hr11);
+        flags &= ~D3D11_CREATE_DEVICE_DEBUG;
+        hr11 = D3D11On12CreateDevice(device12.Get(), flags,
+                                     k11Levels, _countof(k11Levels),
+                                     queues, 1, 0, &device, &ctx, &got11);
+    }
+#endif
+    if (FAILED(hr11)) {
+        spdlog::error("[Renderer] D3D11On12CreateDevice failed: 0x{:08X}",
+                      (unsigned)hr11);
+        return false;
+    }
+    device.As(&device11on12);
+    spdlog::info("[Renderer] D3D11On12 device at feature level {:X}.{:X}",
+                 (unsigned(got11) >> 12) & 0xF, (unsigned(got11) >> 8) & 0xF);
+
+#if BENCH_D3D_DEBUG
+    {
+        ComPtr<ID3D11InfoQueue> iq11;
+        if (SUCCEEDED(device.As(&iq11))) {
+            iq11->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+            iq11->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, TRUE);
+            spdlog::info("[Renderer] D3D11 info queue break-on-error ON");
+        }
+    }
+#endif
 
     ComPtr<IDXGIDevice1> dxgiDevice;
     device.As(&dxgiDevice);
@@ -287,17 +555,25 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
     scd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     scd.SampleDesc.Count = 1;
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    scd.BufferCount = 2;
+    scd.BufferCount = kBackBufferCount;
     scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    factory->CreateSwapChainForHwnd(device.Get(), hwnd, &scd, nullptr, nullptr, &swapChain);
+    // Swap chain is owned by the D3D12 queue, not the D3D11 device.
+    ComPtr<IDXGISwapChain1> sc1;
+    if (FAILED(factory->CreateSwapChainForHwnd(queue12.Get(), hwnd, &scd,
+                                               nullptr, nullptr, &sc1))) {
+        spdlog::error("[Renderer] CreateSwapChainForHwnd failed");
+        return false;
+    }
+    if (FAILED(sc1.As(&swapChain))) {
+        spdlog::error("[Renderer] IDXGISwapChain3 query failed");
+        return false;
+    }
     // Alt+Enter is handled by us (borderless fullscreen), not DXGI's
     // exclusive-mode transition.
     factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
     // RTV for ImGui (it renders via DX11 directly, not D2D).
-    ComPtr<ID3D11Texture2D> backBuf;
-    swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuf));
-    device->CreateRenderTargetView(backBuf.Get(), nullptr, &rtv);
+    if (!create_backbuffer_rtv()) return false;
 
     // D2D/DWrite now owned by MdaRasterizer (not created here).
 
@@ -2651,7 +2927,20 @@ void DxState::render_cga_debug() {
 }
 
 void DxState::present() {
+    // Documented 11on12 frame order: release the wrapped back buffer (this
+    // transitions it to PRESENT), flush the D3D11 context so its command list
+    // reaches the shared queue, then Present.
+    if (frame_acquired) {
+        ID3D11Resource* res[] = { wrapped_bb[frame_index].Get() };
+        device11on12->ReleaseWrappedResources(res, 1);
+        frame_acquired = false;
+    }
+    ctx->Flush();
+
     swapChain->Present(1, 0);
+
+    // Acquire whatever buffer the swap chain flipped to for the next frame.
+    begin_frame();
 }
 
 // Alt+Enter: borderless fullscreen on the window's current monitor.
@@ -2687,16 +2976,17 @@ void DxState::apply_resize() {
     int w = resize_w, h = resize_h;
     if (!swapChain || w <= 0 || h <= 0 || (w == winW && h == winH)) return;
 
-    ctx->OMSetRenderTargets(0, nullptr, nullptr);
-    rtv.Reset();
-    HRESULT hr = swapChain->ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, 0);
+    // Nothing may reference the back buffers when ResizeBuffers runs: drop the
+    // rasterizer's D2D target first, then our 11on12 wrappers and RTVs.
+    if (rasterizer) rasterizer->release_backbuffer_refs();
+    release_backbuffer_rtv();
+    HRESULT hr = swapChain->ResizeBuffers(kBackBufferCount, w, h,
+                                          DXGI_FORMAT_UNKNOWN, 0);
     if (FAILED(hr)) {
         spdlog::error("[Renderer] ResizeBuffers failed: 0x{:08X}", (unsigned)hr);
         return;
     }
-    ComPtr<ID3D11Texture2D> backBuf;
-    swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuf));
-    device->CreateRenderTargetView(backBuf.Get(), nullptr, &rtv);
+    if (!create_backbuffer_rtv()) return;
 
     winW = w; winH = h;
     cellW = (float)w / MDA_COLS;

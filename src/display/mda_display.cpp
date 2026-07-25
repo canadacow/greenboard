@@ -108,26 +108,29 @@ bool MdaRasterizer::init(const RenderContext& rc) {
 }
 
 void MdaRasterizer::render(const RenderContext& rc) {
-    // Bind D2D target to the swap chain back buffer (lazy, recreate if needed)
-    if (!d2dTarget_) {
-        ComPtr<IDXGISurface> backSurface;
-        // Get swap chain from the device's immediate context
-        ComPtr<IDXGIDevice> dxgiDev;
-        rc.device->QueryInterface(IID_PPV_ARGS(&dxgiDev));
-        // We need the swap chain surface -- get it from the RTV's resource
-        ComPtr<ID3D11Resource> rtvRes;
+    // Bind D2D to the CURRENT back buffer. With a flip-model swap chain the
+    // back buffer alternates every Present, so this must be re-derived each
+    // frame -- caching it draws to a buffer that is no longer being presented.
+    {
+        ComPtr<ID3D11Resource> cur_res;
         ComPtr<ID3D11RenderTargetView> rtv;
         rc.d3d_ctx->OMGetRenderTargets(1, &rtv, nullptr);
-        if (rtv) {
-            rtv->GetResource(&rtvRes);
-            rtvRes.As(&backSurface);
-        }
-        if (backSurface) {
-            D2D1_BITMAP_PROPERTIES1 bmpProps = D2D1::BitmapProperties1(
-                D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-            d2dCtx_->CreateBitmapFromDxgiSurface(backSurface.Get(), &bmpProps, &d2dTarget_);
-            d2dCtx_->SetTarget(d2dTarget_.Get());
+        if (rtv) rtv->GetResource(&cur_res);
+
+        if (cur_res && cur_res.Get() != d2d_target_res_.Get()) {
+            ComPtr<IDXGISurface> backSurface;
+            if (SUCCEEDED(cur_res.As(&backSurface))) {
+                d2dCtx_->SetTarget(nullptr);
+                d2dTarget_.Reset();
+                D2D1_BITMAP_PROPERTIES1 bmpProps = D2D1::BitmapProperties1(
+                    D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                    D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+                if (SUCCEEDED(d2dCtx_->CreateBitmapFromDxgiSurface(
+                        backSurface.Get(), &bmpProps, &d2dTarget_))) {
+                    d2dCtx_->SetTarget(d2dTarget_.Get());
+                    d2d_target_res_ = cur_res;
+                }
+            }
         }
     }
 

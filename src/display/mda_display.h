@@ -21,6 +21,14 @@ public:
     const ISA_Card* card() const override;
     bool uses_d2d() const override { return true; }
 
+    // d2dTarget_ wraps a swap chain back buffer; drop it (and the context's
+    // reference to it) so ResizeBuffers can succeed. render() recreates it.
+    void release_backbuffer_refs() override {
+        if (d2dCtx_) d2dCtx_->SetTarget(nullptr);
+        d2dTarget_.Reset();
+        d2d_target_res_.Reset();
+    }
+
 private:
     const ISA_MDA* mda_card_;
     const uint8_t* vram_;
@@ -30,6 +38,9 @@ private:
     Microsoft::WRL::ComPtr<ID2D1Device> d2dDevice_;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> d2dCtx_;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> d2dTarget_;
+    // Back buffer d2dTarget_ currently wraps -- flip-model rotates buffers,
+    // so this detects when the target must be rebuilt.
+    Microsoft::WRL::ComPtr<ID3D11Resource> d2d_target_res_;
     Microsoft::WRL::ComPtr<IDWriteFactory5> dwriteFactory_;
 
     Microsoft::WRL::ComPtr<IDWriteTextFormat> textFormat_;
