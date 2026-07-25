@@ -255,6 +255,37 @@ static int is_our_sft(struct sftstruct far *sft)
     return 1;
 }
 
+/* ---- DOS internal "Open Device And Set SFT Owner" (INT 2Fh AX=120Ch) ----
+ * Required after filling the SFT for an FCB-style open (SFT open_mode
+ * bit 15 set): DOS links the SFT to the caller's FCB and sets the owner
+ * PSP and true open mode. Without this, FCB-based programs (1980s
+ * compiled BASIC etc.) see garbage FCB fields after open and fail.
+ * EtherDFS never implemented it (its "TODO FIXME set_sft_owner").
+ *
+ * Per RBIL: entry requires DS = SS = DOS DS and the SDA "current SFT
+ * pointer" (SDA+27Eh on DOS 4+, +268h on 3.x) aimed at the SFT; it
+ * destroys ES, DI, AX. Inside the redirector call SS is already the
+ * DOS DS, so borrow it. Our own INT 2F hook chains AH != 11h through.
+ * MSCDEX makes this same call for its network-marked SFTs. */
+static unsigned short sda_cursft_off;  /* set at init: 0x27E / 0x268 */
+
+static void set_fcb_owner(struct sftstruct far *sft)
+{
+    *(struct sftstruct far * far *)(sda_ptr + sda_cursft_off) = sft;
+    _asm {
+        push ds
+        push es
+        push di
+        mov ax, ss
+        mov ds, ax
+        mov ax, 0x120C
+        int 0x2F
+        pop di
+        pop es
+        pop ds
+    };
+}
+
 /* ---- Fill SFT from card open/create result ---- */
 /* Card returns: handle(2), attr(1), time(2), date(2), size(4) */
 static void fill_sft(struct sftstruct far *sft, const char far *fn)
@@ -298,6 +329,10 @@ static void fill_sft(struct sftstruct far *sft, const char far *fn)
         for (i = 0; i < 3 && *p; i++)
             sft->file_name[8 + i] = *p++;
     }
+
+    /* FCB-style open: let DOS link this SFT to the caller's FCB. */
+    if (sft->open_mode & 0x8000u)
+        set_fcb_owner(sft);
 }
 
 /* far memcpy -- resident safe, no libc dependency */
@@ -909,6 +944,7 @@ void main(void)
         sda_fcbfn1_off   = 0x22B;
         sda_srchattr_off = 0x24D;
         sda_cds_off      = 0x282;
+        sda_cursft_off   = 0x27E;
     } else {
         sda_fn1_off      = 0x92;
         sda_fn2_off      = 0x112;
@@ -917,6 +953,7 @@ void main(void)
         sda_fcbfn1_off   = 0x218;
         sda_srchattr_off = 0x23A;
         sda_cds_off      = 0x26C;
+        sda_cursft_off   = 0x268;
     }
 
     /* Get SDA address: INT 21h/AX=5D06h */
