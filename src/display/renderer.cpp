@@ -105,7 +105,7 @@ struct DxState {
     ComPtr<ID3D11ShaderResourceView> tube_srv;
     static constexpr int TUBE_W = 2048, TUBE_H = 1536;
     // Tuner values (exported from the web console session)
-    float bz_hsize = 1.188f, bz_vsize = 1.188f, bz_hpos = -0.015f, bz_vpos = 0.030f;
+    float bz_hsize = 1.075f, bz_vsize = 1.229f, bz_hpos = 0.022f, bz_vpos = 0.030f;
     float bz_bright = 0.000f, bz_contrast = 1.0f, bz_gain = 1.0f;
     float bz_glow = 1.0f, bz_bench = 0.5f;
     float bz_zoom = 1.14f;   // overscan crop: trims dead plate margin
@@ -841,20 +841,20 @@ void DxState::render_display() {
                 ID3D11ShaderResourceView* null3[3] = {};
                 ctx->PSSetShaderResources(0, 3, null3);
 
-                // P2: CRT-scale the PAINTED scan (border included, hsync
-                // columns trimmed) into the mipped tube texture. The beam
-                // paints everything between blanking; the border color is
-                // live 3D9 data already present in the dot stream.
-                float painted_u1 = 1.0f;
-                if (cga) {
-                    const uint8_t* cr = cga->crtc_regs();
-                    uint32_t htot = (uint32_t)cr[ISA_CGA::CRTC_HTOTAL] + 1;
-                    uint32_t dpc = htot ? (912u / htot) : 8u;
-                    uint32_t hsw = cr[ISA_CGA::CRTC_SYNC_WIDTH] & 0x0F;
-                    painted_u1 = 1.0f - (float)(hsw * dpc) / 912.0f;
-                }
+                // P2: CRT-scale the PAINTED scan (border included) into the
+                // mipped tube texture. The monitor's horizontal sweep is a
+                // property of the MONITOR, not the signal: retrace takes the
+                // same fixed time in every mode, so the painted window is a
+                // fixed region of the sync-anchored canvas. 160 dots covers
+                // the widest standard sync (10 chars x 16 dots in 40-col
+                // timing); with active video at dot 192 in all modes, every
+                // mode paints identically: 32-dot left border, 640 active,
+                // 80-dot right border. This is what keeps the picture from
+                // shifting when programs switch text/graphics modes.
+                constexpr float kRetraceDots = 160.0f;
+                float painted_u0 = kRetraceDots / 912.0f;
                 mask_scale = -1.0f;  // clean signal: no aperture mask in the tube
-                upload_cb(0, 0, painted_u1, 1, 0.0f, 2.0f,
+                upload_cb(painted_u0, 0, 1.0f, 1, 0.0f, 2.0f,
                           (float)TUBE_W, (float)TUBE_H);
                 ctx->OMSetRenderTargets(1, tube_rtv.GetAddressOf(), nullptr);
                 D3D11_VIEWPORT tube_vp = { 0, 0, (float)TUBE_W, (float)TUBE_H, 0, 1 };
@@ -2280,8 +2280,9 @@ void DxState::render_cga_debug() {
                     uint32_t h_total_chars = (r[0] > 0) ? r[0] + 1 : 114;
                     uint32_t char_w = 912 / h_total_chars;
                     if (char_w == 0) char_w = 8;
-                    uint32_t left_porch = h_total_chars - s.hsync_pos - s.hsync_width;
-                    uint32_t left_dots = left_porch * char_w;
+                    // Canvas anchored at HSYNC start: active begins after
+                    // hsync + back porch = (R0+1 - R2) chars.
+                    uint32_t left_dots = (h_total_chars - s.hsync_pos) * char_w;
 
                     int active_x = mx - (int)left_dots;
                     int char_col = (active_x >= 0) ? active_x / (int)char_w : -1;

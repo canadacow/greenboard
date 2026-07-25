@@ -113,11 +113,15 @@ static const uint gfx_pal[6][4] = {
 // full 912x262 NTSC frame.  The MC6845 CRTC counters determine what the
 // beam produces at each dot:
 //
-//   Horizontal: char counter 0..R0.
-//     0..R1-1           = active display (VRAM fetch)
-//     R1..R2-1          = right overscan (border color)
-//     R2..R2+hsync_w-1  = hsync (blanked, black)
-//     R2+hsync_w..R0    = left overscan of next line (border color)
+//   Horizontal: char counter 0..R0, canvas anchored at HSYNC START --
+//   the monitor triggers its sweep on the sync leading edge, which is
+//   what keeps 80-col (8-dot chars) and 40-col/graphics (16-dot chars)
+//   modes aligned on a real CRT: IBM's mode tables make (R0+1 - R2)
+//   equal 192 hdots in both. Canvas layout:
+//     0..hsync_w-1      = hsync (blanked, black)
+//     ..back porch      = (R0+1 - R2 - R3) chars, border color
+//     ..active          = R1 chars, VRAM content
+//     ..front porch     = remainder, border color
 //
 //   Vertical: row counter 0..R4, scanline counter 0..R9 within each row.
 //     row 0..R6-1       = active display rows
@@ -186,12 +190,18 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
 
     uint h_disp = (sl_h_displayed > 0) ? sl_h_displayed : 40;
     uint active_dots = h_disp * dots_per_char;
-    uint right_porch = sl_hsync_pos - h_disp;
-    uint right_porch_dots = right_porch * dots_per_char;
     uint hsync_dots = sl_hsync_width * dots_per_char;
 
-    // Classify this pixel.
+    // Classify this pixel. Canvas is anchored at HSYNC leading edge so
+    // active video lands at (R0+1 - R2) dots in every mode, like a real
+    // monitor locking to the sync pulse.
     uint region_px = px;
+
+    if (region_px < hsync_dots) {
+        // HSYNC -- blanked (black).
+        EMIT(0);
+    }
+    region_px -= hsync_dots;
 
     if (region_px < left_porch_dots) {
         // Left overscan (back porch) -- border color.
@@ -268,13 +278,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     }
     region_px -= active_dots;
 
-    if (region_px < right_porch_dots) {
-        // Right overscan (front porch) -- border color.
-        EMIT(border_idx);
-    }
-
-    // HSYNC -- blanked (black).
-    EMIT(0);
+    // Right overscan (front porch) -- border color to end of line.
+    EMIT(border_idx);
 }
 )HLSL";
 
@@ -285,20 +290,21 @@ const ISA_Card* CgaRasterizer::card() const {
 Rasterizer::UVRect CgaRasterizer::output_uv_rect() const {
     // Crop to the active display area (where DE is active).
     // Vertically: starts at active_start_ (first VCC=0 after VSYNC).
-    // Horizontally: starts after left overscan (back porch).
+    // Horizontally: the canvas is anchored at HSYNC start, so active
+    // video begins after hsync + back porch = (R0+1 - R2) chars --
+    // the same 192 hdots in every standard mode, like a real monitor.
     const uint8_t* r = cga_card_->crtc_regs();
     uint32_t h_total_chars = r[ISA_CGA::CRTC_HTOTAL] + 1;
     uint32_t dots_per_char = (h_total_chars > 0) ? (912 / h_total_chars) : 8;
     uint32_t hsync_pos = r[ISA_CGA::CRTC_HSYNC_POS];
-    uint32_t hsync_width = r[ISA_CGA::CRTC_SYNC_WIDTH] & 0x0F;
-    uint32_t left_porch_dots = (h_total_chars - hsync_pos - hsync_width) * dots_per_char;
+    uint32_t active_start_dots = (h_total_chars - hsync_pos) * dots_per_char;
 
     uint32_t top = cga_card_->active_start_scanline();
     if (top >= (uint32_t)OUT_H) top = 0;
 
-    float u0 = float(left_porch_dots) / float(OUT_W);
+    float u0 = float(active_start_dots) / float(OUT_W);
     float v0 = float(top) / float(OUT_H);
-    float u1 = float(left_porch_dots + VIEW_W) / float(OUT_W);
+    float u1 = float(active_start_dots + VIEW_W) / float(OUT_W);
     float v1 = float(top + VIEW_H) / float(OUT_H);
     if (u1 > 1.0f) u1 = 1.0f;
     if (v1 > 1.0f) v1 = 1.0f;
