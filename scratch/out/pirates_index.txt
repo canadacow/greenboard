@@ -482,10 +482,9 @@ addr          name                           size  callers
 1000:08b1     FUN_1000_08b1                   168  FUN_0050_f840
 1000:0959     FUN_1000_0959                    69  FUN_0050_f840
 1000:0bf6     FUN_1000_0bf6                    76  FUN_0050_f840
-1000:0e71     FUN_1000_0e71                    30  FUN_1000_0ed7
-1000:0e8f     FUN_1000_0e8f                     9  FUN_1000_0e71,FUN_1000_0ed7
-1000:0e99     FUN_1000_0e99                     5  FUN_0050_0080
-1000:0ebe     FUN_1000_0ebe                    25  FUN_1000_0ed7
+1000:0e71     read_into_cursor                 30  FUN_1000_0ed7
+1000:0e8f     read_bytes                        9  FUN_1000_0ed7,read_into_cursor
+1000:0ebe     nibble_expand                    25  FUN_1000_0ed7
 1000:0ed7     FUN_1000_0ed7                  1317  
 1000:13fe     FUN_1000_13fe                   363  FUN_1000_0ed7,FUN_1000_1569
 1000:1569     FUN_1000_1569                    37  FUN_1000_0ed7,FUN_1000_15ea
@@ -494,8 +493,8 @@ addr          name                           size  callers
 1000:1a3c     FUN_1000_1a3c                    26  FUN_1000_15ea,FUN_1000_1a56
 1000:1a56     FUN_1000_1a56                   195  FUN_1000_15ea
 1000:1b19     FUN_1000_1b19                   224  
-1000:1bf9     FUN_1000_1bf9                   212  FUN_1000_0ed7
-1000:1ccf     FUN_1000_1ccf                    83  FUN_1000_1bf9
+1000:1bf9     decode_image_rect               212  FUN_1000_0ed7
+1000:1ccf     huff_decode_sym                  83  decode_image_rect
 1000:1d22     FUN_1000_1d22                   358  FUN_1000_1569
 1000:1e8e     FUN_1000_1e8e                   389  FUN_1000_1569
 1000:2015     FUN_1000_2015                    21  FUN_1000_2175
@@ -510,7 +509,7 @@ addr          name                           size  callers
 1000:4480     FUN_1000_4480                    68  FUN_0050_3fbd
 1000:462b     FUN_1000_462b                    46  FUN_0050_f840
 1000:4c93     FUN_1000_4c93                     3  FUN_0050_f840
-1000:505f     FUN_1000_505f                  1234  FUN_1000_1ccf
+1000:505f     refill_buffer                  1234  huff_decode_sym
 1000:56f7     FUN_1000_56f7                   353  FUN_0050_f840
 1000:a320     FUN_1000_a320                    34  FUN_0050_b5ed
 1000:c340     FUN_1000_c340                    34  FUN_0050_f840

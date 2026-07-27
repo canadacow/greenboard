@@ -1,0 +1,1499 @@
+
+========================================================================
+### 1000:0e8f  read_bytes  [1000:0e8f .. 1000:0e97]
+void read_bytes(undefined1 *param_1,int param_2)
+{
+  int iVar1;
+  undefined2 unaff_DS;
+  do {
+    if (0x1ff < *(int *)0xc73d) {
+      refill_buffer();
+      *(undefined2 *)0xc73d = 0;
+    }
+    iVar1 = *(int *)0xc73d;
+    *(int *)0xc73d = *(int *)0xc73d + 1;
+    *param_1 = ((undefined *)&DAT_0050_63b1)[iVar1];
+    param_1 = param_1 + 1;
+    param_2 = param_2 + -1;
+  } while (param_2 != 0);
+  return;
+}
+
+========================================================================
+### 1000:0e71  read_into_cursor  [1000:0e71 .. 1000:0e8e]
+void __cdecl16near read_into_cursor(int param_1)
+{
+  undefined2 unaff_DS;
+  read_bytes(*(undefined2 *)0xc73a,param_1);
+  *(int *)0xc73a = *(int *)0xc73a + param_1;
+  return;
+}
+
+========================================================================
+### 1000:0ebe  nibble_expand  [1000:0ebe .. 1000:0ed6]
+void __cdecl16near nibble_expand(void)
+{
+  byte bVar1;
+  uint uVar2;
+  byte in_CL;
+  byte *in_BX;
+  byte *unaff_SI;
+  undefined2 unaff_DS;
+  bVar1 = *unaff_SI;
+  uVar2 = CONCAT11((bVar1 & 0xf0) >> (in_CL & 0x1f),bVar1) & 0xfff0;
+  *in_BX = (byte)uVar2 | (byte)(uVar2 >> 8);
+  uVar2 = CONCAT11((bVar1 & 0xf) << (in_CL & 0x1f),bVar1) & 0xff0f;
+  in_BX[0x10] = (byte)uVar2 | (byte)(uVar2 >> 8);
+  return;
+}
+
+========================================================================
+### 1000:505f  refill_buffer  [1000:505f .. 1000:5694]
+/* WARNING: Instruction at (ram,0x0001568d) overlaps instruction at (ram,0x0001568a)
+    */
+/* WARNING (jumptable): Stack frame is not setup normally: Input value of stackpointer is not used
+    */
+/* WARNING: Stack frame is not setup normally: Input value of stackpointer is not used */
+/* WARNING: Removing unreachable block (ram,0x000154df) */
+/* WARNING: Removing unreachable block (ram,0x00015487) */
+/* WARNING: Removing unreachable block (ram,0x0001547e) */
+/* WARNING: Removing unreachable block (ram,0x00015545) */
+/* WARNING: Removing unreachable block (ram,0x00015440) */
+/* WARNING: Removing unreachable block (ram,0x00015443) */
+/* WARNING: Removing unreachable block (ram,0x00015426) */
+/* WARNING: Removing unreachable block (ram,0x00015491) */
+/* WARNING: Removing unreachable block (ram,0x00015428) */
+/* WARNING: Removing unreachable block (ram,0x00015433) */
+/* WARNING: Removing unreachable block (ram,0x000153ff) */
+/* WARNING: Removing unreachable block (ram,0x0001517e) */
+/* WARNING: Removing unreachable block (ram,0x000151d3) */
+/* WARNING: Removing unreachable block (ram,0x000150e9) */
+/* WARNING: Removing unreachable block (ram,0x00015363) */
+/* WARNING: Removing unreachable block (ram,0x00015154) */
+/* WARNING: Removing unreachable block (ram,0x00015343) */
+/* WARNING: Removing unreachable block (ram,0x000153b6) */
+/* WARNING: Removing unreachable block (ram,0x00015625) */
+/* WARNING: Removing unreachable block (ram,0x00015677) */
+/* WARNING: Removing unreachable block (ram,0x00015627) */
+/* WARNING: Removing unreachable block (ram,0x000154fd) */
+/* WARNING: Removing unreachable block (ram,0x00015574) */
+/* WARNING: Removing unreachable block (ram,0x0001568d) */
+/* WARNING: Removing unreachable block (ram,0x00015522) */
+/* WARNING: Removing unreachable block (ram,0x0001552d) */
+/* WARNING: Removing unreachable block (ram,0x0001534e) */
+/* WARNING: Removing unreachable block (ram,0x000153b5) */
+/* WARNING: Removing unreachable block (ram,0x00015396) */
+/* WARNING: Removing unreachable block (ram,0x000150fe) */
+/* WARNING: Removing unreachable block (ram,0x00015101) */
+/* WARNING: Removing unreachable block (ram,0x0001516c) */
+/* WARNING: Removing unreachable block (ram,0x0001516f) */
+/* WARNING: Removing unreachable block (ram,0x000151d2) */
+/* WARNING: Removing unreachable block (ram,0x000151d4) */
+/* WARNING: Removing unreachable block (ram,0x0001524a) */
+/* WARNING: Removing unreachable block (ram,0x000151d6) */
+/* WARNING: Removing unreachable block (ram,0x000151d8) */
+/* WARNING: Removing unreachable block (ram,0x000150c8) */
+/* WARNING: Removing unreachable block (ram,0x000150d0) */
+/* WARNING: Removing unreachable block (ram,0x000150d9) */
+/* WARNING: Removing unreachable block (ram,0x000150da) */
+/* WARNING: Removing unreachable block (ram,0x000150dc) */
+/* WARNING: Removing unreachable block (ram,0x00015538) */
+/* WARNING: Removing unreachable block (ram,0x00015539) */
+/* WARNING: Removing unreachable block (ram,0x000155b7) */
+/* WARNING: Removing unreachable block (ram,0x000155c9) */
+/* WARNING: Removing unreachable block (ram,0x00015637) */
+/* WARNING: Removing unreachable block (ram,0x00015543) */
+/* WARNING: Removing unreachable block (ram,0x0001554d) */
+/* WARNING: Removing unreachable block (ram,0x00015553) */
+/* WARNING: Removing unreachable block (ram,0x000155c3) */
+/* WARNING: Removing unreachable block (ram,0x0001555a) */
+/* WARNING: Removing unreachable block (ram,0x0001556d) */
+/* WARNING: Removing unreachable block (ram,0x00015570) */
+/* WARNING: Removing unreachable block (ram,0x00015573) */
+/* WARNING: Removing unreachable block (ram,0x000155d5) */
+/* WARNING: Removing unreachable block (ram,0x000154fb) */
+/* WARNING: Removing unreachable block (ram,0x0001565b) */
+/* WARNING: Removing unreachable block (ram,0x0001535f) */
+/* WARNING: Removing unreachable block (ram,0x000152e9) */
+/* WARNING: Removing unreachable block (ram,0x00015350) */
+/* WARNING: Removing unreachable block (ram,0x000154c5) */
+/* WARNING: Removing unreachable block (ram,0x000154eb) */
+/* WARNING: Removing unreachable block (ram,0x000151fb) */
+/* WARNING: Removing unreachable block (ram,0x0001542b) */
+/* WARNING: Removing unreachable block (ram,0x00015180) */
+/* WARNING: Removing unreachable block (ram,0x00015185) */
+/* WARNING: Removing unreachable block (ram,0x00015187) */
+/* WARNING: Removing unreachable block (ram,0x000151f9) */
+/* WARNING: Removing unreachable block (ram,0x0001557b) */
+/* WARNING: Removing unreachable block (ram,0x000152aa) */
+/* WARNING: Removing unreachable block (ram,0x00015310) */
+/* WARNING: Removing unreachable block (ram,0x0001524b) */
+/* WARNING: Removing unreachable block (ram,0x00015205) */
+/* WARNING: Removing unreachable block (ram,0x00015269) */
+/* WARNING: Removing unreachable block (ram,0x000151fd) */
+/* WARNING: Removing unreachable block (ram,0x0001540f) */
+/* WARNING: Removing unreachable block (ram,0x00015415) */
+/* WARNING: Removing unreachable block (ram,0x00015435) */
+/* WARNING: Removing unreachable block (ram,0x00015331) */
+/* WARNING: Removing unreachable block (ram,0x000153c4) */
+/* WARNING: Removing unreachable block (ram,0x0001542e) */
+/* WARNING: Removing unreachable block (ram,0x000151a1) */
+/* WARNING: Removing unreachable block (ram,0x000151d5) */
+/* WARNING: Removing unreachable block (ram,0x000151df) */
+/* WARNING: Removing unreachable block (ram,0x00015244) */
+/* WARNING: Removing unreachable block (ram,0x000152b5) */
+/* WARNING: Removing unreachable block (ram,0x00015565) */
+/* WARNING: Removing unreachable block (ram,0x0001557f) */
+/* WARNING: Removing unreachable block (ram,0x00015581) */
+/* WARNING: Removing unreachable block (ram,0x000155ed) */
+/* WARNING: Removing unreachable block (ram,0x00015438) */
+/* WARNING: Removing unreachable block (ram,0x000154ad) */
+/* WARNING: Removing unreachable block (ram,0x0001523d) */
+/* WARNING: Removing unreachable block (ram,0x000155e7) */
+/* WARNING: Removing unreachable block (ram,0x000152d2) */
+/* WARNING: Removing unreachable block (ram,0x000154af) */
+/* WARNING: Removing unreachable block (ram,0x00015214) */
+void refill_buffer(void)
+{
+  byte *pbVar1;
+  uint *puVar2;
+  code *pcVar3;
+  code cVar4;
+  code cVar5;
+  undefined1 uVar6;
+  char cVar7;
+  code *pcVar8;
+  undefined1 *puVar9;
+  long lVar10;
+  byte bVar11;
+  byte bVar12;
+  byte bVar13;
+  uint uVar14;
+  byte extraout_AH;
+  uint uVar15;
+  undefined2 uVar16;
+  long in_ECX;
+  ulong uVar17;
+  uint uVar18;
+  undefined2 uVar19;
+  undefined2 uVar20;
+  undefined2 uVar21;
+  uint uVar22;
+  ulong in_EDX;
+  undefined4 uVar23;
+  ulong uVar24;
+  int iVar25;
+  code *pcVar26;
+  undefined4 in_EBX;
+  undefined2 *puVar27;
+  undefined2 *puVar28;
+  undefined2 *puVar29;
+  int *piVar30;
+  undefined2 *puVar31;
+  int *piVar32;
+  undefined2 *puVar33;
+  int *piVar34;
+  int *piVar35;
+  int *piVar36;
+  int *piVar37;
+  int *piVar38;
+  int *piVar39;
+  int *piVar40;
+  int *piVar41;
+  int *piVar42;
+  undefined1 *puVar43;
+  int *piVar44;
+  undefined2 *puVar45;
+  undefined2 *puVar46;
+  undefined2 *puVar47;
+  int *piVar48;
+  undefined1 *puVar49;
+  undefined2 *in_ESP;
+  int *piVar50;
+  int unaff_BP;
+  int iVar51;
+  undefined1 *unaff_SI;
+  undefined1 *puVar52;
+  undefined2 *puVar53;
+  undefined2 *puVar54;
+  undefined2 *puVar55;
+  char *pcVar56;
+  char *pcVar57;
+  int iVar58;
+  undefined2 *puVar59;
+  uint *puVar60;
+  undefined2 *in_EDI;
+  undefined2 *puVar61;
+  undefined2 unaff_ES;
+  undefined2 unaff_CS;
+  undefined2 unaff_SS;
+  undefined2 unaff_DS;
+  undefined2 in_FS;
+  undefined2 in_GS;
+  long in_GS_OFFSET;
+  undefined1 uVar62;
+  bool bVar63;
+  bool in_ZF;
+  bool bVar64;
+  undefined1 uVar65;
+  bool bVar66;
+  undefined1 uVar67;
+  iVar25 = (int)in_EBX;
+  iVar51 = *(int *)(unaff_BP + 0x20) * 0x6f79;
+  if (in_ZF) {
+    puVar53 = (undefined2 *)in_EDI;
+    uVar19 = (undefined2)((ulong)in_EDI >> 0x10);
+    uVar16 = (undefined2)in_EDX;
+    uVar65 = in(uVar16);
+    *(undefined1 *)puVar53 = uVar65;
+    puVar55 = puVar53 + 1;
+    in_EDI = (undefined2 *)CONCAT22(uVar19,puVar55);
+    uVar65 = in(uVar16);
+    *(undefined1 *)((int)puVar53 + 1) = uVar65;
+    pbVar1 = (byte *)((int)puVar55 + iVar25 + 0x6f);
+    *pbVar1 = *pbVar1 & (byte)((ulong)in_EBX >> 8);
+    if (*pbVar1 != 0) {
+      unaff_SI[0x69] = unaff_SI[0x69] & (byte)((ulong)in_ECX >> 8);
+      goto code_r0x000150a2;
+    }
+    uVar16 = in(uVar16);
+    *puVar55 = uVar16;
+    puVar27 = (undefined2 *)in_ESP;
+    puVar55 = (undefined2 *)*puVar27;
+    uVar16 = (undefined2)((ulong)in_ESP >> 0x10);
+    puVar52 = (undefined1 *)puVar27[1];
+    iVar25 = puVar27[4];
+    uVar18 = puVar27[5];
+    in_EDX = (ulong)uVar18;
+    uVar15 = (uint)((ulong)in_ECX >> 0x10);
+    in_ECX = CONCAT22(uVar15,puVar27[6]);
+    uVar14 = puVar27[7];
+    in_ESP = (undefined2 *)CONCAT22(uVar16,puVar27 + 8);
+    iVar51 = *(int *)(puVar27[2] + 0x20) * 0x6e69;
+    pbVar1 = puVar52 + iVar51 + 0x65;
+    bVar13 = (byte)(uVar18 >> 8);
+    *pbVar1 = *pbVar1 & bVar13;
+    if (*pbVar1 != 0) {
+      in_EDI = (undefined2 *)CONCAT22(uVar19,puVar55 + 1);
+      uVar16 = in(uVar18);
+      *puVar55 = uVar16;
+      unaff_SI = puVar52 + 1;
+      out(*puVar52,uVar18);
+      if ((uVar14 | 0x5220) != 0) {
+        puVar52[0x70] = puVar52[0x70] & bVar13;
+        goto LAB_1000_5094;
+      }
+      goto LAB_1000_5104;
+    }
+    puVar55 = (undefined2 *)puVar27[8];
+    iVar25 = puVar27[10];
+    iVar51 = puVar27[0xc];
+    uVar20 = puVar27[0xd];
+    piVar30 = puVar27 + 0x10;
+    puVar52 = (undefined1 *)puVar27[9] + 1;
+    out(*(undefined1 *)puVar27[9],uVar20);
+    piVar50 = (int *)((int)puVar55 + iVar25 + 0x6f);
+    *piVar50 = *piVar50 + 1;
+    if (*piVar50 != 0) goto LAB_1000_5162;
+    if (*piVar50 == 0) {
+      piVar50 = (int *)((int)puVar55 + 0x61);
+      *piVar50 = *piVar50 + -1;
+      iVar25 = *piVar50;
+    }
+    else {
+      iVar25 = iVar25 + -1;
+      puVar55 = (undefined2 *)puVar27[0x10];
+      puVar52 = (undefined1 *)puVar27[0x11];
+      uVar20 = puVar27[0x15];
+      piVar30 = puVar27 + 0x18;
+    }
+    in_ECX = (ulong)uVar15 << 0x10;
+    if (iVar25 == 0) {
+      *(int *)(puVar52 + 0x75) = *(int *)(puVar52 + 0x75) + 1;
+      in_ESP = (undefined2 *)CONCAT22(uVar16,(undefined2 *)(*(int *)((int)puVar55 + -1) * 0x20));
+      goto LAB_1000_5104;
+    }
+    uVar20 = in(uVar20);
+    *puVar55 = uVar20;
+    iVar51 = *piVar30;
+    iVar25 = piVar30[4];
+    uVar21 = piVar30[5];
+    uVar20 = piVar30[7];
+    out(*(undefined1 *)piVar30[1],uVar21);
+    pbVar1 = (byte *)(iVar25 + 0x66);
+    *pbVar1 = *pbVar1 & (byte)((uint)piVar30[6] >> 8);
+    pbVar1 = (byte *)(iVar25 + iVar51 + 0x76);
+    *pbVar1 = *pbVar1 & (byte)((uint)uVar20 >> 8);
+    pbVar1 = (byte *)(in_GS_OFFSET + CONCAT22(uVar19,iVar51) + 0x65);
+    *pbVar1 = *pbVar1 & (byte)((uint)uVar21 >> 8);
+    bVar13 = *pbVar1;
+    iVar51 = piVar30[9];
+    iVar25 = piVar30[0xc];
+    uVar19 = piVar30[0xd];
+    pcVar57 = (undefined1 *)piVar30[8] + 1;
+    uVar65 = in(uVar19);
+    *(undefined1 *)piVar30[8] = uVar65;
+    if (bVar13 != 0) {
+                    /* WARNING: Could not recover jumptable at 0x0001517a. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      (*(code *)*(undefined2 *)(iVar25 + iVar51))();
+      return;
+    }
+    piVar32 = piVar30 + 0xf;
+    piVar30[0xf] = 0x2079;
+LAB_1000_51e5:
+    uVar19 = in(uVar19);
+    *(undefined2 *)pcVar57 = uVar19;
+    pcVar56 = (char *)*piVar32;
+    uVar18 = piVar32[2];
+    iVar25 = piVar32[4];
+    uVar19 = piVar32[5];
+    uVar20 = piVar32[6];
+    uVar14 = piVar32[7];
+    puVar53 = (undefined2 *)((undefined1 *)piVar32[1] + 1);
+    out(*(undefined1 *)piVar32[1],uVar19);
+    puVar54 = piVar32 + 7;
+    piVar32[7] = *puVar53;
+    cVar7 = (char)uVar20 + *pcVar56;
+    uVar17 = CONCAT31((int3)(CONCAT22(uVar15,uVar20) >> 8),cVar7);
+    if (cVar7 != '\0') {
+                    /* WARNING: Could not recover jumptable at 0x00015263. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      (**(code **)(pcVar56 + iVar25 + 0x6e))();
+      return;
+    }
+LAB_1000_51ef:
+    out(*puVar53,uVar19);
+    pcVar56[*(int *)(uVar18 + 0x67) * 0x7920 + 0x61] =
+         pcVar56[*(int *)(uVar18 + 0x67) * 0x7920 + 0x61] & (byte)(uVar14 >> 8);
+code_r0x000151ff:
+    pcVar56[0x61] = pcVar56[0x61] & (byte)(uVar17 >> 8);
+    uVar67 = false;
+    uVar65 = (int)(uVar14 | 0x6f79) < 0;
+    bVar64 = (uVar14 | 0x6f79) == 0;
+LAB_1000_5209:
+    if (bVar64) {
+                    /* WARNING: Could not recover jumptable at 0x0001520c. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      (*(code *)*(undefined2 *)(puVar54[4] + puVar54[1]))();
+      return;
+    }
+    pcVar57 = (char *)*puVar54;
+    puVar55 = (undefined2 *)puVar54[1];
+    uVar18 = puVar54[2];
+    iVar25 = puVar54[4];
+    uVar19 = puVar54[5];
+    uVar17 = uVar17 & 0xffff0000;
+    piVar32 = puVar54 + 8;
+    bVar64 = false;
+LAB_1000_522c:
+    uVar62 = 0;
+    puVar52 = (undefined1 *)((int)puVar55 + 1);
+    out(*(undefined1 *)puVar55,uVar19);
+    uVar20 = *(undefined2 *)(pcVar57 + iVar25 + 0x6f + 2);
+    pcVar26 = *(code **)(pcVar57 + iVar25 + 0x6f);
+    *(undefined2 *)((int)piVar32 + -2) = unaff_CS;
+    puVar33 = (undefined2 *)((int)piVar32 + -4);
+    *(undefined2 *)((int)piVar32 + -4) = 0x5231;
+    (*pcVar26)();
+    uVar15 = (uint)(uVar17 >> 0x10);
+    if (bVar64) goto LAB_1000_5233;
+    pbVar1 = (byte *)(pcVar57 + iVar25 + 0x6f);
+    *pbVar1 = *pbVar1 & (byte)((uint)iVar25 >> 8);
+    if (*pbVar1 == 0) {
+      pbVar1 = (byte *)(pcVar57 + uVar18 + 0x6f);
+      *pbVar1 = *pbVar1 & extraout_AH;
+      bVar13 = *pbVar1;
+      uVar16 = in(uVar19);
+      *(undefined2 *)pcVar57 = uVar16;
+      uVar16 = in(uVar19);
+      *(undefined2 *)(pcVar57 + 2) = uVar16;
+      if (bVar13 != 0) goto code_r0x000152d0;
+      puVar55 = (undefined2 *)*puVar33;
+      iVar51 = puVar33[2];
+      iVar25 = puVar33[4];
+      uVar16 = puVar33[5];
+      uVar17 = uVar17 & 0xffff0000;
+      bVar13 = (byte)((uint)puVar33[7] >> 8);
+      piVar50 = (int *)ZEXT24(puVar33 + 8);
+      out(*(undefined1 *)puVar33[1],uVar16);
+      pbVar1 = (byte *)(puVar55 + 0x37);
+      *pbVar1 = *pbVar1 & (byte)((uint)uVar16 >> 8);
+      bVar63 = (char)*pbVar1 < '\0';
+      bVar64 = *pbVar1 == 0;
+      puVar9 = (undefined1 *)((long)*(int *)((int)puVar55 + iVar51 + 0x74) * 0x6e69);
+      puVar52 = (undefined1 *)puVar9;
+      if (!bVar64) goto LAB_1000_52dc;
+      if ((undefined1 *)(long)(int)puVar52 != puVar9) {
+                    /* WARNING: Could not recover jumptable at 0x00015275. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+        (*(code *)*(undefined2 *)((int)puVar55 + iVar25 + 0x20))();
+        return;
+      }
+      uVar65 = in(uVar16);
+      *(undefined1 *)puVar55 = uVar65;
+code_r0x000152de:
+      piVar44 = (int *)((int)puVar55 + 1);
+      if (!bVar63) {
+code_r0x00015303:
+        puVar2 = (uint *)((int)piVar44 + iVar25 + 0x70);
+        iVar25 = ((uint)(int *)piVar50 & 3) - (*puVar2 & 3);
+        *puVar2 = *puVar2 + (uint)(0 < iVar25) * iVar25;
+        if (0 < iVar25) {
+          uVar65 = in(uVar16);
+          *(undefined1 *)piVar44 = uVar65;
+                    /* WARNING: Could not recover jumptable at 0x0001536a. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+          (**(code **)(puVar52 + iVar51 + 0x6f))();
+          return;
+        }
+        goto code_r0x0001530d;
+      }
+      piVar34 = (int *)piVar50;
+      if (bVar64) {
+                    /* WARNING: Could not recover jumptable at 0x00015348. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+        (*(code *)*(undefined2 *)((int)piVar44 + iVar25 + 99))();
+        return;
+      }
+      out(*puVar52,uVar16);
+      pbVar1 = (byte *)((int)piVar44 + *(int *)((int)puVar55 + 0x71) * 0x726f + 0x61);
+      *pbVar1 = *pbVar1 & bVar13;
+      piVar44 = (int *)*piVar34;
+      puVar52 = (undefined1 *)piVar34[1];
+      iVar25 = piVar34[4];
+      uVar16 = piVar34[5];
+      uVar17 = CONCAT22((int)(uVar17 >> 0x10),piVar34[6]);
+      bVar13 = (byte)((uint)piVar34[7] >> 8);
+      piVar50 = (int *)ZEXT24(piVar34 + 8);
+      *(byte *)((int)piVar44 + 0x61) =
+           *(byte *)((int)piVar44 + 0x61) & (byte)((uint)piVar34[6] >> 8);
+      iVar51 = *(int *)((int)piVar44 + iVar25 + 0x6e) * 0x67;
+      pbVar1 = (byte *)((int)piVar44 + iVar25 + 0x6f);
+      *pbVar1 = *pbVar1 & (byte)((uint)iVar25 >> 8);
+      if (*pbVar1 == 0) {
+        *piVar44 = *piVar44 + -1;
+        goto code_r0x00015303;
+      }
+      goto LAB_1000_530e;
+    }
+    puVar52 = (undefined1 *)puVar33[1];
+    uVar19 = puVar33[5];
+    puVar33 = puVar33 + 8;
+code_r0x000152d0:
+    out(*puVar52,uVar19);
+    puVar53 = (undefined2 *)*puVar33;
+    iVar51 = puVar33[2];
+    iVar25 = puVar33[4];
+    uVar16 = puVar33[5];
+    bVar13 = (byte)((uint)puVar33[7] >> 8);
+    piVar50 = (int *)ZEXT24(puVar33 + 8);
+    puVar52 = (undefined1 *)puVar33[1] + 1;
+    out(*(undefined1 *)puVar33[1],uVar16);
+    pbVar1 = (byte *)(puVar53 + 0x3c);
+    *pbVar1 = *pbVar1 & bVar13;
+    bVar63 = (char)*pbVar1 < '\0';
+    bVar64 = *pbVar1 == 0;
+    if (!bVar64) {
+      uVar17 = (ulong)uVar15 << 0x10;
+      puVar55 = puVar53 + 1;
+      uVar19 = in(uVar16);
+      *puVar53 = uVar19;
+LAB_1000_52dc:
+      uVar65 = in(uVar16);
+      *(undefined1 *)puVar55 = uVar65;
+      goto code_r0x000152de;
+    }
+    puVar60 = (uint *)puVar33[8];
+    puVar55 = (undefined2 *)puVar33[9];
+    uVar18 = puVar33[10];
+    pcVar26 = (code *)puVar33[0xc];
+    uVar22 = puVar33[0xd];
+    uVar24 = (ulong)uVar22;
+    uVar16 = puVar33[0xe];
+    uVar17 = CONCAT22(uVar15,uVar16);
+    uVar14 = puVar33[0xf];
+    piVar44 = puVar33 + 0x10;
+    if (!bVar64) {
+      pcVar3 = pcVar26 + (int)puVar60 + 0x6f;
+      *pcVar3 = (code)((byte)*pcVar3 & (byte)((uint)pcVar26 >> 8));
+      bVar13 = (byte)(uVar14 >> 8);
+      if (*pcVar3 == (code)0x0) {
+        uVar14 = in(uVar22);
+        *puVar60 = uVar14;
+        uVar14 = in(uVar22);
+        puVar60[1] = uVar14;
+                    /* WARNING: Could not recover jumptable at 0x00015432. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+        (**(code **)(pcVar26 + (int)puVar55))();
+        return;
+      }
+      piVar39 = puVar33 + 0x10;
+      out(*puVar55,uVar22);
+      puVar53 = (undefined2 *)((int)puVar55 + 3);
+      out(*(undefined1 *)(puVar55 + 1),uVar22);
+      (pcVar26 + (int)puVar60)[0x73] = (code)((byte)(pcVar26 + (int)puVar60)[0x73] & bVar13);
+      (pcVar26 + (int)puVar60)[0xd] = (code)((byte)(pcVar26 + (int)puVar60)[0xd] & bVar13);
+      puVar2 = puVar60;
+      *puVar2 = *puVar2 - 1;
+      uVar22 = *puVar2;
+      goto code_r0x000153d9;
+    }
+    puVar54 = (undefined2 *)((int)puVar55 + 1);
+    out(*(undefined1 *)puVar55,uVar22);
+    puVar2 = (uint *)((int)puVar60 + uVar18 + 0x65);
+    iVar25 = ((uint)(puVar33 + 0x10) & 3) - (*puVar2 & 3);
+    *puVar2 = *puVar2 + (uint)(0 < iVar25) * iVar25;
+    (pcVar26 + (int)puVar60)[0x6e] =
+         (code)((byte)(pcVar26 + (int)puVar60)[0x6e] & (byte)((uint)uVar16 >> 8));
+    pbVar1 = (byte *)((int)puVar54 + uVar18 + 0x65);
+    uVar65 = false;
+    *pbVar1 = *pbVar1 & (byte)(uVar22 >> 8);
+    bVar64 = *pbVar1 == 0;
+code_r0x000154fa:
+    uVar16 = (undefined2)uVar24;
+    if (!(bool)uVar65) {
+      bVar63 = true;
+      if (bVar64) goto LAB_1000_5567;
+      *(byte *)(uVar18 + 0x72) = *(byte *)(uVar18 + 0x72) & (byte)(uVar14 >> 8);
+      out(*puVar54,uVar16);
+      puVar2 = puVar60;
+      puVar60 = puVar60 + 1;
+      uVar15 = in(uVar16);
+      *puVar2 = uVar15;
+      pcVar3 = pcVar26 + (int)puVar54 + 0x74;
+      *pcVar3 = (code)((byte)*pcVar3 & (byte)(uVar24 >> 8));
+      bVar66 = (char)*pcVar3 < '\0';
+      bVar64 = *pcVar3 == (code)0x0;
+      goto LAB_1000_5509;
+    }
+code_r0x00015561:
+    pcVar3 = pcVar26 + 0x6e;
+    iVar25 = (uVar18 & 3) - (*(uint *)pcVar3 & 3);
+    *(uint *)pcVar3 = *(uint *)pcVar3 + (uint)(0 < iVar25) * iVar25;
+    bVar64 = true;
+    if (0 < iVar25) {
+LAB_1000_55cb:
+      uVar16 = (undefined2)uVar24;
+      if (bVar64) goto joined_r0x000155cd;
+      pcVar26[(int)puVar54] = (code)((char)pcVar26[(int)puVar54] + (char)uVar17);
+      *(uint *)(uVar18 + (int)puVar54) = *(uint *)(uVar18 + (int)puVar54) | (uint)uVar17;
+      bVar11 = (byte)uVar14 | 0xe;
+      pcVar3 = pcVar26 + (int)puVar60;
+      cVar4 = *pcVar3;
+      bVar12 = (byte)uVar24;
+      *pcVar3 = (code)((char)*pcVar3 + bVar12);
+      bVar13 = bVar12 + *(byte *)(uVar18 + (int)puVar60);
+      bVar64 = CARRY1(bVar12,*(byte *)(uVar18 + (int)puVar60)) ||
+               CARRY1(bVar13,CARRY1((byte)cVar4,bVar12));
+      bVar13 = bVar13 + CARRY1((byte)cVar4,bVar12);
+      bVar12 = bVar11 + 0x15;
+      bVar63 = 0xea < bVar11 || CARRY1(bVar12,bVar64);
+      bVar12 = bVar12 + bVar64;
+      piVar44[-1] = unaff_SS;
+      uVar16 = piVar44[-1];
+      pcVar3 = pcVar26 + (int)puVar60;
+      cVar4 = *pcVar3;
+      cVar5 = *pcVar3;
+      *pcVar3 = (code)((char)cVar5 + bVar13 + bVar63);
+      bVar64 = CARRY1(bVar13,*(byte *)(uVar18 + (int)puVar60)) ||
+               CARRY1(bVar13 + *(byte *)(uVar18 + (int)puVar60),
+                      CARRY1((byte)cVar4,bVar13) || CARRY1((char)cVar5 + bVar13,bVar63));
+      bVar13 = bVar12 + 0x15;
+      piVar44[-1] = uVar16;
+      unaff_SS = piVar44[-1];
+      uVar14 = (uint)(byte)(bVar13 + bVar64 + '\x16' + (0xea < bVar12 || CARRY1(bVar13,bVar64)) +
+                            *(char *)(uVar18 + (int)puVar54) + *(char *)(uVar18 + (int)puVar54));
+LAB_1000_5658:
+      uVar15 = (uint)(byte)((char)uVar14 + *(char *)(uVar18 + (int)puVar54) +
+                            *(char *)(uVar18 + (int)puVar54) + *(char *)(uVar18 + (int)puVar54) +
+                           *(char *)(uVar18 + (int)puVar54));
+LAB_1000_5660:
+      bVar12 = (char)uVar15 + *(char *)(uVar18 + (int)puVar54);
+      bVar64 = CARRY1(bVar12,*(byte *)(uVar18 + (int)puVar54));
+      bVar12 = bVar12 + *(byte *)(uVar18 + (int)puVar54);
+      bVar13 = bVar12 + 0x14;
+      bVar63 = 0xeb < bVar12 || CARRY1(bVar13,bVar64);
+      bVar13 = bVar13 + bVar64;
+      bVar12 = bVar13 + 0x14;
+      bVar64 = 0xeb < bVar13 || CARRY1(bVar12,bVar63);
+      bVar12 = bVar12 + bVar63;
+      bVar13 = bVar12 + 0x14;
+      uVar14 = (uint)(byte)(bVar13 + bVar64 + '\x14' + (0xeb < bVar12 || CARRY1(bVar13,bVar64)));
+LAB_1000_566c:
+      pcVar26[(int)puVar54] = (code)((char)pcVar26[(int)puVar54] + (char)uVar14);
+      pcVar26[(int)puVar54] = (code)((char)pcVar26[(int)puVar54] + (char)uVar14);
+      pcVar3 = (code *)swi(1);
+      (*pcVar3)();
+      return;
+    }
+    puVar61 = puVar54;
+    puVar54 = (undefined2 *)((int)puVar54 + 1);
+    out(*(undefined1 *)puVar61,(int)uVar24);
+    bVar63 = false;
+LAB_1000_5567:
+    if (!bVar63) {
+                    /* WARNING: Could not recover jumptable at 0x00015569. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      (*(code *)*(undefined2 *)((int)puVar60 + uVar18 + 0x6f))();
+      return;
+    }
+LAB_1000_55cd_1:
+    uVar16 = (undefined2)uVar24;
+joined_r0x000155cd:
+    if ((bool)uVar65) {
+      (pcVar26 + (int)puVar60)[0x6e] =
+           (code)((byte)(pcVar26 + (int)puVar60)[0x6e] & (byte)(uVar17 >> 8));
+      pcVar3 = (code *)(puVar54 + 0x34);
+      *pcVar3 = (code)((byte)*pcVar3 & (byte)(uVar24 >> 8));
+      cVar4 = *pcVar3;
+    }
+    else {
+      puVar54 = (undefined2 *)(*(int *)((int)puVar60 + (uVar18 - 1)) * 0x6720);
+      out(*puVar54,uVar16);
+      puVar54 = puVar54 + 1;
+      uVar65 = in(uVar16);
+      *(undefined1 *)puVar60 = uVar65;
+      bVar13 = (byte)((uint)uVar16 >> 8);
+      (pcVar26 + (int)puVar54)[0x69] = (code)((byte)(pcVar26 + (int)puVar54)[0x69] & bVar13);
+      puVar2 = puVar60 + 0x3a;
+      iVar25 = ((uint)piVar44 & 3) - (*puVar2 & 3);
+      *puVar2 = *puVar2 + (uint)(0 < iVar25) * iVar25;
+      uVar14 = uVar14 | 0x6f59;
+      if (uVar14 != 0) goto LAB_1000_5658;
+      pcVar3 = pcVar26 + (int)puVar54 + 0x65;
+      *pcVar3 = (code)((byte)*pcVar3 & bVar13);
+      cVar4 = *pcVar3;
+      out(*puVar54,uVar16);
+    }
+    iVar58 = *piVar44;
+    iVar51 = piVar44[2];
+    pcVar26 = (code *)piVar44[4];
+    uVar15 = piVar44[7];
+    out(*(undefined1 *)piVar44[1],piVar44[5]);
+    puVar2 = (uint *)(iVar58 + 0x20);
+    iVar25 = ((uint)(piVar44 + 8) & 3) - (*puVar2 & 3);
+    *puVar2 = *puVar2 + (uint)(0 < iVar25) * iVar25;
+    uVar18 = *(int *)(iVar51 + 0x20) * 0x6874;
+    puVar54 = (undefined2 *)(*(int *)(uVar18 + iVar58 + 0x20) * 0x6f76);
+    if (-1 < (char)cVar4) goto LAB_1000_5660;
+    bVar63 = false;
+    bVar66 = (int)(uVar15 | 0x656c) < 0;
+    puVar60 = (uint *)piVar44[8];
+    puVar54 = (undefined2 *)piVar44[9];
+    pcVar26 = (code *)piVar44[0xc];
+    uVar16 = piVar44[0xd];
+    uVar14 = piVar44[0xf];
+    piVar48 = piVar44 + 0x10;
+    bVar64 = false;
+    if ((uVar15 | 0x656c) == 0) goto LAB_1000_566c;
+  }
+  else {
+LAB_1000_5094:
+    bVar13 = (byte)(in_EDX >> 8);
+    unaff_SI[0x68] = unaff_SI[0x68] & bVar13;
+    pbVar1 = unaff_SI + iVar25 + 0x69;
+    *pbVar1 = *pbVar1 & bVar13;
+    if (*pbVar1 == 0) {
+LAB_1000_5104:
+      puVar31 = (undefined2 *)in_ESP;
+      pcVar56 = (char *)*puVar31;
+      uVar16 = (undefined2)((ulong)in_ESP >> 0x10);
+      puVar52 = (undefined1 *)puVar31[1];
+      uVar18 = puVar31[2];
+      iVar25 = puVar31[4];
+      uVar19 = puVar31[5];
+      uVar15 = (uint)((ulong)in_ECX >> 0x10);
+      uVar17 = (ulong)uVar15 << 0x10;
+      puVar29 = puVar31 + 8;
+      out(*puVar52,uVar19);
+      uVar14 = puVar31[7] | 0x59ff;
+      puVar55 = (undefined2 *)(puVar52 + 3);
+      out(*(undefined2 *)(puVar52 + 1),uVar19);
+      if (uVar14 == 0) {
+        pcVar56 = (char *)puVar31[8];
+        puVar53 = (undefined2 *)puVar31[9];
+        uVar18 = puVar31[10];
+        iVar25 = puVar31[0xc];
+        uVar19 = puVar31[0xd];
+        uVar20 = puVar31[0xe];
+        uVar17 = CONCAT22(uVar15,uVar20);
+        uVar14 = puVar31[0xf];
+        piVar32 = puVar31 + 0x10;
+        puVar2 = (uint *)((int)puVar53 + iVar25 + 0x69);
+        iVar51 = (uVar18 & 3) - (*puVar2 & 3);
+        *puVar2 = *puVar2 + (uint)(0 < iVar51) * iVar51;
+        if (0 < iVar51) {
+          puVar54 = puVar31 + 0xf;
+          puVar31[0xf] = 0x20ff;
+          goto LAB_1000_51ef;
+        }
+        bVar13 = (byte)((uint)uVar19 >> 8);
+        *(byte *)(puVar53 + 0x34) = *(byte *)(puVar53 + 0x34) & bVar13;
+        pbVar1 = (byte *)((int)puVar53 + 0x69);
+        *pbVar1 = *pbVar1 & bVar13;
+        if (*pbVar1 != 0) goto LAB_1000_511e;
+        if (*pbVar1 == 0) {
+          pcVar56[0x61] = pcVar56[0x61] & (byte)((uint)uVar20 >> 8);
+          out(*(undefined1 *)puVar53,uVar19);
+                    /* WARNING: Could not recover jumptable at 0x00015192. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+          (*(code *)*(undefined2 *)((int)puVar53 + iVar25 + 1))();
+          return;
+        }
+        pcVar56 = (char *)puVar31[0x10];
+        uVar17 = CONCAT22(uVar15,puVar31[0x16]);
+        uVar14 = puVar31[0x17];
+        puVar54 = puVar31 + 0x18;
+        goto code_r0x000151ff;
+      }
+      puVar52[0x72] = puVar52[0x72] & (byte)((uint)uVar19 >> 8);
+      pbVar1 = (byte *)(pcVar56 + iVar25 + 99);
+      uVar67 = false;
+      *pbVar1 = *pbVar1 & (byte)(uVar14 >> 8);
+      uVar65 = (char)*pbVar1 < '\0';
+      bVar64 = *pbVar1 == 0;
+LAB_1000_5134:
+      bVar13 = (byte)(uVar14 >> 8);
+      piVar32 = (int *)((int)puVar29 + -2);
+      *(undefined2 *)((int)puVar29 + -2) = 0x6569;
+      puVar54 = (undefined2 *)((int)puVar29 + -2);
+      if (!bVar64) goto code_r0x00015139;
+LAB_1000_519e:
+      bVar64 = true;
+      cVar7 = in(uVar19);
+      *pcVar56 = cVar7;
+      goto LAB_1000_5209;
+    }
+    unaff_SI[0x69] = unaff_SI[0x69] & (byte)((ulong)in_ECX >> 8);
+code_r0x000150a2:
+    uVar15 = (uint)((ulong)in_ECX >> 0x10);
+    unaff_CS = 0x1000;
+    pcVar26 = (code *)*(undefined2 *)((int)(undefined2 *)in_EDI + iVar51 + 0x70);
+    uVar16 = (undefined2)((ulong)in_ESP >> 0x10);
+    puVar28 = (undefined2 *)in_ESP + -1;
+    ((undefined2 *)in_ESP)[-1] = 0x50a8;
+    (*pcVar26)();
+    puVar52 = (undefined1 *)*puVar28;
+    uVar18 = puVar28[2];
+    iVar25 = puVar28[4];
+    uVar19 = puVar28[5];
+    uVar17 = CONCAT22(uVar15,puVar28[6]);
+    uVar14 = puVar28[7];
+    piVar32 = puVar28 + 8;
+    out(*(undefined1 *)puVar28[1],uVar19);
+    out(*(undefined1 *)(*(int *)(puVar52 + uVar18 + 0x68) * 0x45ff),uVar19);
+    pcVar56 = puVar52 + 1;
+    uVar65 = in(uVar19);
+    *(undefined1 *)CONCAT22((int)((ulong)in_EDI >> 0x10),puVar52) = uVar65;
+    puVar53 = (undefined2 *)(undefined2 *)((long)*(int *)(pcVar56 + uVar18 + 0x68) * 0x46ff);
+    if ((undefined2 *)(long)(int)puVar53 ==
+        (undefined2 *)((long)*(int *)(pcVar56 + uVar18 + 0x68) * 0x46ff)) {
+      puVar55 = (undefined2 *)((int)puVar53 + 1);
+      out(*(undefined1 *)puVar53,uVar19);
+      puVar2 = (uint *)((int)puVar55 + iVar25 + -1);
+      iVar51 = (uVar18 & 3) - (*puVar2 & 3);
+      *puVar2 = *puVar2 + (uint)(0 < iVar51) * iVar51;
+      uVar67 = SCARRY2((int)(puVar28 + 8),1);
+      puVar29 = (undefined2 *)((int)puVar28 + 0x11);
+      uVar65 = (int)((int)puVar28 + 0x11) < 0;
+      bVar64 = puVar28 == (undefined2 *)0xffef;
+      if (!bVar64) goto LAB_1000_5134;
+      puVar2 = (uint *)((int)puVar55 + iVar25 + -1);
+      iVar25 = (uVar18 & 3) - (*puVar2 & 3);
+      *puVar2 = *puVar2 + (uint)(0 < iVar25) * iVar25;
+      uVar67 = SCARRY2(uVar18,1);
+      uVar65 = (int)(uVar18 + 1) < 0;
+      out(*(undefined1 *)puVar55,uVar19);
+      pcVar56 = (char *)*(undefined2 *)0x0;
+      puVar55 = (undefined2 *)*(undefined2 *)0x2;
+      uVar18 = *(uint *)&DAT_0000_0004;
+      iVar25 = *(int *)&DAT_0000_0008;
+      uVar19 = *(undefined2 *)&DAT_0000_000a;
+      uVar17 = (ulong)uVar15 << 0x10;
+      bVar13 = (byte)((uint)*(undefined2 *)&DAT_0000_000e >> 8);
+      piVar32 = (int *)0x10;
+      puVar2 = (uint *)((int)puVar55 + iVar25 + 0x69);
+      iVar51 = (uVar18 & 3) - (*puVar2 & 3);
+      *puVar2 = *puVar2 + (uint)(0 < iVar51) * iVar51;
+      puVar54 = piVar32;
+      if (0 < iVar51) goto LAB_1000_519e;
+code_r0x00015139:
+      pbVar1 = (byte *)(pcVar56 + iVar25 + 0x6e);
+      *pbVar1 = *pbVar1 & bVar13;
+      bVar64 = *pbVar1 == 0;
+      if ((char)*pbVar1 < '\0') {
+        puVar53 = (undefined2 *)((int)puVar55 + 1);
+        out(*(undefined1 *)puVar55,uVar19);
+        lVar10 = (long)(int)pcVar56;
+        pcVar56 = (char *)(char *)(lVar10 * 0x20);
+        if ((char *)(long)(int)pcVar56 != (char *)(lVar10 * 0x20)) {
+          puVar52 = (undefined1 *)*piVar32;
+          iVar51 = piVar32[1];
+          iVar25 = piVar32[4];
+          uVar16 = piVar32[5];
+          uVar65 = in(uVar16);
+          *puVar52 = uVar65;
+          if (bVar64) {
+                    /* WARNING: Could not recover jumptable at 0x0001521b. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+            (*(code *)*(undefined2 *)(iVar25 + iVar51))();
+            return;
+          }
+          uVar16 = in(uVar16);
+          *(undefined2 *)(puVar52 + 1) = uVar16;
+          out(*(undefined1 *)piVar32[9],piVar32[0xd]);
+                    /* WARNING: Could not recover jumptable at 0x000151b8. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+          (*(code *)(ulong)*(uint *)(piVar32[10] + 0x20))();
+          return;
+        }
+        out(*(undefined1 *)puVar53,uVar19);
+        out(*(undefined1 *)(puVar55 + 1),uVar19);
+        goto LAB_1000_5148;
+      }
+      uVar20 = in(uVar19);
+      *(undefined2 *)pcVar56 = uVar20;
+      pcVar57 = pcVar56 + 3;
+      cVar7 = in(uVar19);
+      pcVar56[2] = cVar7;
+      bVar63 = false;
+    }
+    else {
+LAB_1000_511e:
+      *(byte *)(iVar25 + 0x66) = *(byte *)(iVar25 + 0x66) & (byte)(uVar17 >> 8);
+      out(*puVar53,uVar19);
+      if ((uVar14 | 0x59ff) == 0) {
+        puVar61 = *(undefined2 **)piVar32;
+        uVar23 = *(undefined4 *)((int)piVar32 + 0x14);
+        *(undefined2 *)((int)piVar32 + 0x1e) = 0x2079;
+        uVar16 = in((int)uVar23);
+        *(undefined2 *)puVar61 = uVar16;
+        out(**(undefined1 **)(undefined4 *)((int)piVar32 + 0x20),
+            *(undefined2 *)(undefined4 *)((int)piVar32 + 0x28));
+                    /* WARNING: Could not recover jumptable at 0x000151a6. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+        (**(code **)(*(undefined1 **)(undefined4 *)((int)piVar32 + 0x20) +
+                    *(int *)((int)piVar32 + 0x26) + 1))();
+        return;
+      }
+LAB_1000_5148:
+      puVar55 = puVar53 + 1;
+      uVar18 = *(int *)((int)puVar53 + 0x67) * 0x7373;
+      pbVar1 = (byte *)((int)puVar55 + iVar25 + 0x61);
+      bVar13 = (byte)((uint)uVar19 >> 8);
+      *pbVar1 = *pbVar1 & bVar13;
+      bVar63 = (char)*pbVar1 < '\0';
+      if (*pbVar1 == 0) {
+        *(byte *)(uVar18 + 0x65) = *(byte *)(uVar18 + 0x65) & bVar13;
+        pbVar1 = (byte *)((int)puVar55 + iVar25 + 0x6f);
+        *pbVar1 = *pbVar1 & bVar13;
+        out(*puVar55,uVar19);
+        uVar16 = in(uVar19);
+        *(undefined2 *)pcVar56 = uVar16;
+        puVar52 = (undefined1 *)*(undefined2 *)((int)piVar32 + 2);
+        iVar51 = *(int *)((int)piVar32 + 8);
+        uVar20 = *(undefined2 *)((int)piVar32 + 10);
+LAB_1000_5162:
+        out(*puVar52,uVar20);
+                    /* WARNING: Could not recover jumptable at 0x00015163. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+        (**(code **)(puVar52 + iVar51 + 1))();
+        return;
+      }
+      pcVar57 = pcVar56 + 1;
+      cVar7 = in(uVar19);
+      *pcVar56 = cVar7;
+      bVar64 = false;
+    }
+    uVar67 = false;
+    uVar62 = false;
+    uVar15 = (uint)(uVar17 >> 0x10);
+    if (!bVar63) goto LAB_1000_51e5;
+    uVar65 = true;
+    if (!bVar64) goto LAB_1000_522c;
+    puVar52 = (undefined1 *)*piVar32;
+    uVar19 = piVar32[5];
+    puVar33 = piVar32 + 8;
+    uVar6 = in(uVar19);
+    *puVar52 = uVar6;
+    if (!bVar64) {
+      uVar16 = in(uVar19);
+      *(undefined2 *)(puVar52 + 1) = uVar16;
+      out(*(undefined1 *)piVar32[9],piVar32[0xd]);
+                    /* WARNING: Could not recover jumptable at 0x000151d0. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      (*(code *)(ulong)*(uint *)(piVar32[10] + 0x20))();
+      return;
+    }
+LAB_1000_5233:
+    puVar53 = (undefined2 *)*puVar33;
+    puVar55 = (undefined2 *)puVar33[1];
+    iVar51 = puVar33[2];
+    iVar25 = puVar33[4];
+    uVar20 = puVar33[5];
+    uVar17 = CONCAT22(uVar15,puVar33[6]);
+    bVar13 = (byte)((uint)puVar33[7] >> 8);
+    piVar50 = (int *)CONCAT22(uVar16,puVar33 + 8);
+    puVar2 = (uint *)((int)puVar53 + iVar51 + 0x75);
+    iVar58 = ((uint)(puVar33 + 8) & 3) - (*puVar2 & 3);
+    *puVar2 = *puVar2 + (uint)(0 < iVar58) * iVar58;
+    uVar19 = in(uVar20);
+    *puVar53 = uVar19;
+    if (0 < iVar58) {
+      puVar53 = (undefined2 *)puVar33[8];
+      puVar55 = (undefined2 *)puVar33[9];
+      iVar51 = puVar33[10];
+      iVar25 = puVar33[0xc];
+      uVar20 = puVar33[0xd];
+      uVar17 = CONCAT22(uVar15,puVar33[0xe]);
+      bVar13 = (byte)((uint)puVar33[0xf] >> 8);
+      piVar50 = (int *)CONCAT22(uVar16,puVar33 + 0x10);
+      uVar65 = in(uVar20);
+      *(undefined1 *)puVar53 = uVar65;
+      uVar65 = in(uVar20);
+      *(undefined1 *)((int)puVar53 + 1) = uVar65;
+      pbVar1 = (byte *)((int)puVar55 + iVar51 + 0x65);
+      uVar67 = false;
+      *pbVar1 = *pbVar1 & (byte)((uint)uVar20 >> 8);
+      uVar65 = (char)*pbVar1 < '\0';
+      bVar64 = *pbVar1 == 0;
+code_r0x000152a8:
+      puVar59 = puVar53 + 1;
+      puVar54 = puVar55 + 1;
+      out(*puVar55,uVar20);
+      piVar36 = (int *)piVar50;
+      if (!bVar64) {
+        if (bVar64) {
+                    /* WARNING: Could not recover jumptable at 0x000153e8. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+          (*(code *)*(undefined2 *)(iVar25 + (int)puVar54))();
+          return;
+        }
+        goto LAB_1000_5383;
+      }
+      puVar52 = (undefined1 *)((int)puVar53 + 3);
+      uVar62 = in(uVar20);
+      *(undefined1 *)puVar59 = uVar62;
+      uVar15 = (uint)(uVar17 >> 0x10);
+      if ((bool)uVar65) {
+        if ((bool)uVar67) goto code_r0x00015324;
+        if (bVar64) {
+          *(byte *)((int)puVar53 + 0x7b) = *(byte *)((int)puVar53 + 0x7b) & bVar13;
+          goto code_r0x000153a0;
+        }
+        goto LAB_1000_540d;
+      }
+      piVar50 = (int *)((ulong)piVar50 & 0xffff0000);
+      piVar36[-1] = *(undefined2 *)(puVar52 + iVar25 + 0x75);
+code_r0x00015324:
+      piVar37 = (int *)(*(int *)((int)puVar53 + 0x77) * 0x6120);
+      uVar16 = (undefined2)((ulong)piVar50 >> 0x10);
+      piVar50 = (int *)CONCAT22(uVar16,piVar37);
+      puVar61 = puVar54;
+      puVar54 = (undefined2 *)((int)puVar55 + 3);
+      out(*(undefined1 *)puVar61,uVar20);
+      pbVar1 = puVar52 + iVar51 + 0x61;
+      *pbVar1 = *pbVar1 & bVar13;
+      if (*pbVar1 == 0) {
+        lVar10 = (long)*(int *)(iVar25 + 0x75) * -0x8d;
+        uVar14 = (uint)lVar10;
+                    /* WARNING: Could not recover jumptable at 0x00015334. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+        puVar2 = (uint *)(iVar25 + 0x6d);
+        iVar25 = (uVar14 & 3) - (*puVar2 & 3);
+        *puVar2 = *puVar2 + (uint)(0 < iVar25) * iVar25;
+        if ((int)uVar14 != lVar10) {
+          uVar65 = in(uVar20);
+          *puVar52 = uVar65;
+code_r0x000153a0:
+          puVar61 = puVar54;
+          puVar54 = puVar54 + 1;
+          out(*puVar61,uVar20);
+LAB_1000_53a1:
+          puVar52 = (undefined1 *)(*(int *)((int)puVar54 + 0x73) * 0x6f20);
+          puVar54 = (undefined2 *)(puVar52 + 1);
+          out(*puVar52,uVar20);
+          goto code_r0x000153a7;
+        }
+        if (0 < iVar25) goto LAB_1000_53a1;
+        out(*(undefined1 *)puVar54,uVar20);
+        iVar58 = *piVar37;
+        iVar51 = piVar37[2];
+        iVar25 = piVar37[4];
+        uVar19 = piVar37[5];
+        out(*(undefined1 *)piVar37[1],uVar19);
+        pbVar1 = (byte *)(iVar25 + iVar58 + 99);
+        *pbVar1 = *pbVar1 & (byte)((uint)piVar37[7] >> 8);
+        if (*pbVar1 != 0) {
+                    /* WARNING: Could not recover jumptable at 0x00015349. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+          (*(code *)*(undefined2 *)(iVar25 + iVar58 + 99))();
+          return;
+        }
+        *(byte *)(iVar51 + iVar58 + 0x65) =
+             *(byte *)(iVar51 + iVar58 + 0x65) & (byte)((uint)uVar19 >> 8);
+        piVar50 = (int *)CONCAT22(uVar16,piVar37 + 0x10);
+      }
+      else {
+        *(byte *)(iVar25 + 0x6e) = *(byte *)(iVar25 + 0x6e) & (byte)(uVar17 >> 8);
+code_r0x000153a7:
+        *(byte *)(puVar54 + 0x34) = *(byte *)(puVar54 + 0x34) & (byte)((uint)uVar20 >> 8);
+      }
+      piVar50[-1] = 0x7320;
+      piVar38 = (int *)(piVar50 + -1);
+      puVar60 = (uint *)*piVar38;
+      puVar53 = (undefined2 *)piVar38[1];
+      uVar18 = piVar38[2];
+      pcVar26 = (code *)piVar38[4];
+      uVar24 = (ulong)(uint)piVar38[5];
+      piVar39 = piVar38 + 8;
+      uVar22 = piVar38[7] | 0xdff;
+      uVar14 = uVar22;
+code_r0x000153d9:
+      bVar13 = (byte)(uVar14 >> 8);
+      piVar40 = piVar39 + 1;
+      piVar44 = piVar39 + 1;
+      piVar42 = piVar39 + 1;
+      uVar17 = CONCAT22(uVar15,*piVar39);
+      puVar54 = puVar53 + 1;
+      uVar16 = (undefined2)uVar24;
+      out(*puVar53,uVar16);
+      bVar12 = (byte)(uVar24 >> 8);
+      if (uVar22 != 0) {
+        pcVar26[0x66] = (code)((byte)pcVar26[0x66] & (byte)((uint)*piVar39 >> 8));
+        pcVar3 = pcVar26 + (int)puVar60 + 0x6f;
+        *pcVar3 = (code)((byte)*pcVar3 & (byte)((uint)pcVar26 >> 8));
+        bVar64 = false;
+        if (*pcVar3 == (code)0x0) {
+          pbVar1 = (byte *)(puVar53 + 0x3a);
+          *pbVar1 = *pbVar1 & bVar12;
+          bVar12 = *pbVar1;
+          bVar13 = *pbVar1;
+          goto LAB_1000_5409;
+        }
+        goto LAB_1000_5478;
+      }
+      pcVar3 = pcVar26 + 0x6f;
+      *pcVar3 = (code)((byte)*pcVar3 & bVar12);
+      if (*pcVar3 == (code)0x0) {
+                    /* WARNING: Could not recover jumptable at 0x000153e6. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+        (**(code **)(pcVar26 + (int)puVar54))();
+        return;
+      }
+code_r0x00015456:
+      puVar52 = (undefined1 *)((int)puVar54 + 1);
+      out(*(undefined1 *)puVar54,uVar16);
+      pcVar3 = pcVar26 + (int)puVar60 + 0x20;
+      *pcVar3 = (code)((byte)*pcVar3 & (bVar13 | 0x69));
+      bVar64 = *pcVar3 == (code)0x0;
+      uVar19 = *(undefined2 *)(pcVar26 + (int)puVar60 + 0x6f + 2);
+      pcVar8 = *(code **)(pcVar26 + (int)puVar60 + 0x6f);
+      *(undefined2 *)((int)piVar42 + -2) = unaff_CS;
+      puVar43 = (undefined1 *)((int)piVar42 + -4);
+      *(undefined2 *)((int)piVar42 + -4) = 0x5467;
+      uVar14 = (*pcVar8)();
+      bVar13 = (byte)(uVar14 >> 8);
+      if (!bVar64) {
+        out(*puVar52,uVar16);
+        *(byte *)(uVar17 + 0x6e) = *(byte *)(uVar17 + 0x6e) & bVar13;
+        bVar64 = (uVar14 | 0x6562) == 0;
+        puVar54 = *(undefined2 **)(puVar43 + 2);
+        uVar18 = *(uint *)(puVar43 + 4);
+        piVar44 = (int *)(puVar43 + 0x10);
+LAB_1000_54e5:
+        if (bVar64) {
+          puVar61 = (undefined2 *)((long)*(int *)(uVar18 + 0x75) * 0x206c);
+          puVar45 = (undefined2 *)puVar61;
+          uVar65 = (undefined2 *)(long)(int)puVar45 != puVar61;
+          puVar2 = (uint *)((int)puVar54 + uVar18 + 0x65);
+          iVar25 = ((uint)puVar54 & 3) - (*puVar2 & 3);
+          bVar64 = 0 < iVar25;
+          *puVar2 = *puVar2 + (uint)bVar64 * iVar25;
+          puVar60 = (uint *)*puVar45;
+          puVar54 = (undefined2 *)puVar45[1];
+          uVar18 = puVar45[2];
+          pcVar26 = (code *)puVar45[4];
+          uVar14 = puVar45[7];
+          piVar44 = puVar45 + 8;
+          uVar24 = (ulong)(uint)puVar45[5];
+          uVar17 = (ulong)(uint)puVar45[6];
+          bVar63 = true;
+          if (bVar64) goto LAB_1000_5567;
+          if (!(bool)uVar65) {
+            uVar16 = *(undefined2 *)(pcVar26 + (int)puVar60 + 0x6f + 2);
+            pcVar8 = *(code **)(pcVar26 + (int)puVar60 + 0x6f);
+            puVar45[7] = unaff_CS;
+            piVar44 = puVar45 + 6;
+            puVar45[6] = 0x54f8;
+            uVar14 = (*pcVar8)();
+            uVar16 = (undefined2)uVar24;
+            if (!bVar64) {
+              (pcVar26 + (int)puVar60)[0x67] =
+                   (code)((byte)(pcVar26 + (int)puVar60)[0x67] & (byte)(uVar14 >> 8));
+              goto code_r0x00015511;
+            }
+            goto code_r0x000154fa;
+          }
+        }
+        else {
+          puVar60 = (uint *)*piVar44;
+          puVar54 = (undefined2 *)piVar44[1];
+          uVar18 = piVar44[2];
+          pcVar26 = (code *)piVar44[4];
+          uVar24 = (ulong)(uint)piVar44[5];
+          uVar17 = (ulong)(uint)piVar44[6];
+          uVar14 = piVar44[7];
+        }
+        piVar44 = (int *)(puVar60[0x3a] * 0x6120);
+        puVar52 = (undefined1 *)((int)puVar54 + 1);
+        out(*(undefined1 *)puVar54,(int)uVar24);
+        pbVar1 = (byte *)((int)puVar60 + uVar18 + 0x6f);
+        uVar65 = 0;
+        *pbVar1 = *pbVar1 & (byte)(uVar14 >> 8);
+        puVar54 = puVar54 + 1;
+        out(*puVar52,(int)uVar24);
+        goto code_r0x00015561;
+      }
+      pbVar1 = puVar52 + uVar18 + 0x72;
+      *pbVar1 = *pbVar1 & bVar13;
+      bVar12 = *pbVar1;
+      bVar64 = *pbVar1 == 0;
+      piVar44 = (int *)(undefined1 *)((long)*(int *)(puVar52 + 0x65) * 0x6920);
+      bVar63 = (undefined1 *)(long)(int)piVar44 !=
+               (undefined1 *)((long)*(int *)(puVar52 + 0x65) * 0x6920);
+    }
+    else {
+      bVar64 = false;
+      if (!(bool)uVar62) goto code_r0x000152a8;
+code_r0x0001530d:
+      piVar35 = (int *)piVar50;
+      piVar44 = (int *)*piVar35;
+      puVar52 = (undefined1 *)piVar35[1];
+      iVar51 = piVar35[2];
+      iVar25 = piVar35[4];
+      uVar16 = piVar35[5];
+      uVar17 = uVar17 & 0xffff0000;
+      bVar13 = (byte)((uint)piVar35[7] >> 8);
+      piVar50 = (int *)ZEXT24(piVar35 + 8);
+LAB_1000_530e:
+      puVar52[iVar51 + 0x6f] = puVar52[iVar51 + 0x6f] & bVar13;
+      puVar59 = (undefined2 *)((int)piVar44 + 1);
+      uVar65 = in(uVar16);
+      *(undefined1 *)piVar44 = uVar65;
+LAB_1000_5383:
+      pbVar1 = (byte *)((int)puVar59 + iVar25 + 0x6e);
+      *pbVar1 = *pbVar1 & bVar13;
+      pbVar1 = (byte *)(iVar51 + 0x65);
+      *pbVar1 = *pbVar1 & bVar13;
+      bVar12 = *pbVar1;
+      bVar13 = *pbVar1;
+      uVar17 = uVar17 & 0xffff0000;
+      piVar40 = (int *)piVar50 + 8;
+LAB_1000_5409:
+      bVar63 = false;
+      puVar60 = (uint *)*piVar40;
+      puVar52 = (undefined1 *)piVar40[1];
+      uVar18 = piVar40[2];
+      pcVar26 = (code *)piVar40[4];
+      uVar16 = piVar40[5];
+      uVar15 = (uint)(uVar17 >> 0x10);
+      uVar17 = CONCAT22(uVar15,piVar40[6]);
+      uVar14 = piVar40[7];
+      piVar44 = piVar40 + 8;
+      piVar50 = (int *)ZEXT24(piVar40 + 8);
+      bVar64 = true;
+      if (bVar13 != 0) {
+        uVar65 = in(uVar16);
+        *(undefined1 *)puVar60 = uVar65;
+LAB_1000_540d:
+        piVar41 = (int *)piVar50;
+        puVar53 = (undefined2 *)*piVar41;
+        puVar55 = (undefined2 *)piVar41[1];
+        pcVar26 = (code *)piVar41[4];
+        uVar22 = piVar41[5];
+        uVar24 = (ulong)uVar22;
+        uVar14 = piVar41[7];
+        pbVar1 = (byte *)(piVar41[2] + 0x61);
+        bVar12 = (byte)(uVar14 >> 8);
+        *pbVar1 = *pbVar1 & bVar12;
+        bVar13 = *pbVar1;
+        puVar60 = puVar53 + 1;
+        uVar16 = in(uVar22);
+        *puVar53 = uVar16;
+        lVar10 = (long)*(int *)((int)puVar55 + 0x79) * -0xd2;
+        uVar18 = (uint)lVar10;
+        piVar44 = piVar41 + 9;
+        uVar17 = CONCAT22(uVar15,piVar41[8]);
+        puVar54 = puVar55 + 1;
+        out(*puVar55,uVar22);
+        bVar11 = (byte)(uVar22 >> 8);
+        if (bVar13 == 0) {
+          if ((int)uVar18 != lVar10) {
+            uVar14 = in(uVar22);
+            *puVar60 = uVar14;
+            out(*(undefined1 *)piVar41[10],piVar41[0xe]);
+                    /* WARNING: Could not recover jumptable at 0x000154b6. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+            (**(code **)((undefined1 *)piVar41[10] + piVar41[0xd] + 1))();
+            return;
+          }
+          *(byte *)(puVar53 + 0x38) = *(byte *)(puVar53 + 0x38) & bVar11;
+          puVar60 = (uint *)piVar41[9];
+          puVar54 = (undefined2 *)piVar41[10];
+          uVar18 = piVar41[0xb];
+          pcVar26 = (code *)piVar41[0xd];
+          uVar16 = piVar41[0xe];
+          uVar17 = CONCAT22(uVar15,piVar41[0xf]);
+          bVar13 = (byte)((uint)piVar41[0x10] >> 8);
+          piVar42 = piVar41 + 0x11;
+          *(byte *)((int)puVar54 + 0x6f) =
+               *(byte *)((int)puVar54 + 0x6f) & (byte)((uint)uVar16 >> 8);
+          goto code_r0x00015456;
+        }
+        if ((int)uVar18 != lVar10) {
+          out(*puVar54,uVar22);
+          uVar14 = in(uVar22);
+          *puVar60 = uVar14;
+          pbVar1 = (byte *)((int)puVar60 + uVar18 + 0x74);
+          *pbVar1 = *pbVar1 & bVar12;
+          bVar66 = (char)*pbVar1 < '\0';
+          puVar60 = (uint *)piVar41[9];
+          uVar18 = piVar41[0xb];
+          pcVar26 = (code *)piVar41[0xd];
+          uVar16 = piVar41[0xe];
+          uVar17 = (ulong)(uint)piVar41[0xf];
+          uVar14 = piVar41[0x10];
+          piVar44 = piVar41 + 0x11;
+          bVar64 = true;
+          if (*pbVar1 != 0) {
+                    /* WARNING: Could not recover jumptable at 0x00015496. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+            (**(code **)(pcVar26 + piVar41[10]))();
+            return;
+          }
+          goto LAB_1000_5509;
+        }
+        (pcVar26 + (int)puVar60)[0x73] =
+             (code)((byte)(pcVar26 + (int)puVar60)[0x73] & (byte)((uint)piVar41[8] >> 8));
+        (pcVar26 + (int)puVar60)[-1] = (code)((byte)(pcVar26 + (int)puVar60)[-1] & bVar12);
+        pbVar1 = (byte *)((int)puVar60 + uVar18 + 0x68);
+        *pbVar1 = *pbVar1 & bVar11;
+        bVar64 = *pbVar1 == 0;
+LAB_1000_5478:
+        uVar65 = 0;
+        if (!bVar64) goto LAB_1000_54e5;
+        if (bVar64) {
+          uVar65 = 0;
+          uVar14 = uVar14 | 0x6c70;
+          bVar64 = uVar14 == 0;
+          goto LAB_1000_55cb;
+        }
+        goto LAB_1000_55cd_1;
+      }
+    }
+    bVar66 = (char)bVar12 < '\0';
+    if (bVar63) {
+                    /* WARNING: Could not recover jumptable at 0x00015474. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      (*(code *)*(undefined2 *)(*(int *)((int)piVar44 + 8) + *(int *)((int)piVar44 + 2)))();
+      return;
+    }
+    if (bVar64) {
+                    /* WARNING: Could not recover jumptable at 0x00015495. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      (**(code **)(pcVar26 + (int)puVar52))();
+      return;
+    }
+    bVar64 = false;
+LAB_1000_5509:
+    puVar61 = (undefined2 *)((long)*(int *)(uVar18 + 0x61) * 0x6574);
+    puVar54 = (undefined2 *)puVar61;
+    if ((undefined2 *)(long)(int)puVar54 == puVar61) {
+code_r0x00015511:
+      out(*(undefined1 *)puVar54,uVar16);
+      *(byte *)((int)puVar54 + 0x69) = *(byte *)((int)puVar54 + 0x69) & (byte)((uint)uVar16 >> 8);
+      (pcVar26 + (int)puVar60)[0x67] =
+           (code)((byte)(pcVar26 + (int)puVar60)[0x67] & ((byte)(uVar14 >> 8) | 0x74));
+      pcVar26[0x66] = (code)((byte)pcVar26[0x66] & (byte)(uVar17 >> 8));
+                    /* WARNING: Could not recover jumptable at 0x00015521. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+      (**(code **)(pcVar26 + (int)((int)puVar54 + 1)))();
+      return;
+    }
+    piVar48 = (int *)((int)piVar44 + -2);
+    *(undefined2 *)((int)piVar44 + -2) = 0x6565;
+    bVar63 = true;
+  }
+  if (!bVar63) {
+    *(int **)(undefined1 *)((int)piVar48 + -2) = piVar48;
+    (pcVar26 + (int)puVar54)[0x4f] = (code)((byte)(pcVar26 + (int)puVar54)[0x4f] & (byte)uVar16);
+code_r0x0001562f:
+    *(undefined1 **)(undefined1 *)((int)piVar48 + -4) = (undefined1 *)((int)piVar48 + -2);
+    *(undefined2 *)((int)piVar48 + -6) = pcVar26;
+                    /* WARNING: Could not recover jumptable at 0x00015635. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+    (*(code *)(ulong)*(uint *)pcVar26)();
+    return;
+  }
+  if (bVar66) {
+    if (!bVar64) {
+      *(uint *)((int)piVar48 + -2) = uVar14;
+      goto code_r0x0001562f;
+    }
+    if (bVar63 || bVar64) {
+      if (!bVar64) {
+        pcVar3 = pcVar26 + (int)puVar60 + 0x20;
+        bVar13 = (byte)(uVar14 >> 8);
+        *pcVar3 = (code)((byte)*pcVar3 & bVar13);
+        if (*pcVar3 != (code)0x0) {
+          out(*puVar54,uVar16);
+          out(*(undefined1 *)(puVar54 + 1),uVar16);
+          (pcVar26 + (int)puVar60)[0x73] = (code)((byte)(pcVar26 + (int)puVar60)[0x73] & bVar13);
+                    /* WARNING: Could not recover jumptable at 0x00015624. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+          (*pcVar26)();
+          return;
+        }
+        *(undefined2 *)((int)piVar48 + -2) = unaff_SS;
+        puVar47 = (undefined2 *)((int)piVar48 + -4);
+        piVar48 = (int *)((int)piVar48 + -4);
+        *puVar47 = unaff_SS;
+        goto code_r0x0001567e;
+      }
+      puVar46 = (undefined2 *)((int)piVar48 + -2);
+      piVar48 = (int *)((int)piVar48 + -2);
+      *puVar46 = unaff_SS;
+    }
+  }
+  *(byte *)0x1641 = *(byte *)0x1641 ^ (byte)uVar16;
+code_r0x0001567e:
+  *(undefined2 *)((int)piVar48 + -2) = uVar16;
+  *(undefined2 *)((int)piVar48 + -4) = unaff_SS;
+  uVar16 = *(undefined2 *)((int)piVar48 + -4);
+  *(undefined2 *)((int)piVar48 + -4) = unaff_SS;
+  *(undefined2 *)((int)piVar48 + -6) = 0x7916;
+  *(undefined2 *)((int)piVar48 + -8) = unaff_SS;
+  LOCK();
+  *(undefined2 *)0x168f = uVar16;
+  UNLOCK();
+  *(undefined2 *)((int)piVar48 + -10) = unaff_CS;
+  puVar49 = (undefined1 *)((int)piVar48 + -0xc);
+  *(undefined2 *)((int)piVar48 + -0xc) = 0x568f;
+  func_0x000b7176();
+  *(undefined2 *)(puVar49 + -2) = unaff_SS;
+  *(undefined2 *)0xc514 = unaff_SS;
+  return;
+}
+
+========================================================================
+### 1000:1ccf  huff_decode_sym  [1000:1ccf .. 1000:1d21]
+int __cdecl16near huff_decode_sym(void)
+{
+  char cVar1;
+  char cVar2;
+  undefined2 in_CX;
+  int iVar3;
+  uint uVar4;
+  undefined2 unaff_ES;
+  undefined2 unaff_DS;
+  bool bVar5;
+  cVar2 = *(char *)0xc736;
+  cVar1 = *(char *)0xc737;
+  uVar4 = *(uint *)0xc73d;
+  iVar3 = 0;
+  do {
+    cVar2 = cVar2 + -1;
+    if (cVar2 < '\0') {
+      cVar1 = ((undefined *)&DAT_0050_63b1)[uVar4];
+      uVar4 = uVar4 + 1;
+      if (0x200 < uVar4) {
+        refill_buffer(unaff_ES,iVar3,in_CX);
+        uVar4 = 1;
+        cVar1 = *(char *)&DAT_0050_63b1;
+      }
+      cVar2 = '\a';
+    }
+    bVar5 = cVar1 < '\0';
+    cVar1 = cVar1 << 1;
+    iVar3 = *(int *)((undefined *)&DAT_0050_67b1 + (iVar3 + (uint)bVar5) * 2);
+  } while (-1 < iVar3);
+  *(char *)0xc737 = cVar1;
+  *(char *)0xc736 = cVar2;
+  *(uint *)0xc73d = uVar4;
+  return -1 - iVar3;
+}
+
+========================================================================
+### 1000:1bf9  decode_image_rect  [1000:1bf9 .. 1000:1cce]
+void __cdecl16near decode_image_rect(uint param_1,uint param_2,int param_3,int param_4)
+{
+  byte *pbVar1;
+  undefined2 uVar2;
+  byte bVar3;
+  undefined1 uVar4;
+  int iVar5;
+  uint uVar6;
+  byte *pbVar7;
+  undefined2 unaff_DS;
+  uVar2 = *(undefined2 *)0xc74f;
+  *(int *)0xd03c = param_2 + param_4;
+  *(int *)0xd03a = param_1 + param_3;
+  do {
+    *(uint *)0xd03e = param_2;
+    if (*(uint *)0xd03c <= param_2) {
+      return;
+    }
+    pbVar7 = (byte *)((param_1 >> 1) + *(int *)(*(int *)0xd03e * 2 + 0x3e31));
+    bVar3 = 0;
+    *(undefined1 *)0xd040 = 0;
+    uVar6 = param_1;
+    if (param_1 < *(uint *)0xd03a) {
+      do {
+        pbVar1 = (byte *)0xc730;
+        *pbVar1 = *pbVar1 ^ 1;
+        if (*pbVar1 == 0) {
+          bVar3 = *(byte *)0xc731 & 0xf;
+        }
+        else {
+          if (*(int *)0xc732 == 0) {
+            bVar3 = huff_decode_sym();
+            if (bVar3 == *(byte *)0xc735) {
+              uVar4 = huff_decode_sym();
+              *(undefined1 *)0xc734 = uVar4;
+              *(undefined2 *)0xc732 = 4;
+              do {
+                iVar5 = huff_decode_sym();
+                *(int *)0xc732 = *(int *)0xc732 + iVar5;
+              } while ((char)iVar5 == -1);
+              goto LAB_1000_1c70;
+            }
+          }
+          else {
+LAB_1000_1c70:
+            *(int *)0xc732 = *(int *)0xc732 + -1;
+            bVar3 = *(byte *)0xc734;
+          }
+          *(byte *)0xc731 = bVar3;
+          bVar3 = bVar3 >> 4;
+        }
+        if ((uVar6 & 1) == 0) {
+          bVar3 = (bVar3 - *(char *)0xc73c) * '\x10';
+          *(byte *)0xd040 = *(byte *)0xd040 | bVar3;
+        }
+        else {
+          bVar3 = bVar3 - *(char *)0xc73c & 0xf | *(byte *)0xd040;
+          *pbVar7 = *pbVar7 ^ bVar3;
+          pbVar7 = pbVar7 + 1;
+          *(undefined1 *)0xd040 = 0;
+        }
+        uVar6 = uVar6 + 1;
+      } while (uVar6 < *(uint *)0xd03a);
+    }
+    if ((uVar6 & 1) != 0) {
+      *pbVar7 = *pbVar7 ^ bVar3;
+    }
+    param_2 = *(int *)0xd03e + 1;
+  } while( true );
+}
