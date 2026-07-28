@@ -1,0 +1,820 @@
+Pirates! (DOS, 1987) -- function map, built outward from the boot sector
+==============================================================================
+
+BOOT CHAIN (from the boot sector disassembly):
+  0000:7C00  boot sector: relocates itself to 0020:0000, sets CGA mode 4,
+             loads the title screen to B800:0000 and 168KB of program to
+             0050:0000, then LJMP 0050:0020.
+
+NOTE: "callers" below is the DIRECT call-site address (the E8 site),
+not an enclosing function -- call targets are not function boundaries,
+so attributing sites to the nearest preceding target is unreliable.
+
+addr      size  label / evidence                                    call sites
+------------------------------------------------------------------------------
+0010      16                                                      e182
+0020       3  entry_stage2            (LJMP target from boot sector)
+0023       8                                                      01a6
+002b       6                                                      267b
+0031      29                                                      e1a3
+004e       2                                                      1177b
+0050       2                                                      1177d
+0052       6                                                      1177f
+0058      15                                                      2c31
+0067     154                                                      00cb
+0101       6                                                      11874
+0107      14                                                      11833
+0115      25                                                      11841
+012e      24                                                      f326
+0146     107                                                      11872
+01b1      50                                                      011c
+01e3      19                                                      011f
+01f6       8                                                      fbf0
+01fe      37                                                      01f1,050a
+0223      35                                                      0122
+0246      41                                                      fc42
+026f       7                                                      0254
+0276      55                                                      119e9
+02ad      12                                                      fc81
+02b9       2                                                      119e5
+02bb      25                                                      119e7
+02d4     104                                                      fca8
+033c      14                                                      01fa
+034a      40                                                      fd44
+0372      18                                                      0367
+0384      37                                                      0377
+03a9       7                                                      fb32,fcbf,100fc,10280
+03b0       1                                                      01f7,082a
+03b1     118                                                      f9f5,fa21,1000c,1003c
+0427      15                                                      0125
+0436      20                                                      042d
+044a      15  PORT 0x200                                          01a3
+0459      69                                                      f86a,fcad,1026e
+049e      50                                                      f867
+04d0      16                                                      2bed
+04e0     132  startup_video_and_config                            00e3
+0564      46  splash_screens                                      053b
+0592     126  config_menu             (GRAPHICS/DRIVE/CONTROL, reads 1/2/3)  [PORT 0x02d]053e
+0610       9                                                      05f9
+0619       2                                                      1d45
+061b     187  PORT 0x0c7,0x201                                    1d47
+06d6      32                                                      10530
+06f6      18                                                      f86d,fda9
+0708      47                                                      e87a
+0737      25  PORT 0x0a3                                          0579,0588,0598,05c0,05d9
+0750      40                                                      a304
+0778      54  PORT 0x08a                                          069a,06af,06c4
+07ae      18                                                      0567,0582,0592,060c,0610
+07c0      18                                                      101ba
+07d2      23  wait_key_timeout        (timeout in [0x3c08])       057f,058e
+07e9      11  wait_key                (loops until a key)         059b,05c3,05dc
+07f4      23  PORT 0x0bb                                          076c,07a8
+080b       2                                                      04e0
+080d      83                                                      10209
+0860       2  read_key_filtered       (0xE0/0x16/V/space handling)40d5
+0862       9                                                      f93a
+086b      42                                                      1023f
+0895       1                                                      10269
+0896      58  key_read_wrapper        (INT 16h AH=1 peek, AH=0 get)  [INT 16h  PORT 0x008,0x056]07e1,07ec,0860
+08d0      16                                                      11843
+08e0      15  PORT 0x040                                          10765
+08ef      18                                                      2d3b
+0901      45                                                      4a3a
+092e      45                                                      0132
+095b      18                                                      fa33
+096d       4                                                      0195,050d,1865,1883,18b0
+0971      30                                                      10a79
+098f      43  PORT 0x3df                                          1097b,109f9,10a60,10aaf,10b1c
+09ba       4                                                      2bf3,2bf6,2bf9,2bfc,2bff
+09be       3                                                      10a0c,10a12
+09c1      44  INT 16h  PORT 0x061                                 119bb
+09ed      18                                                      0fb0,0fc8,1010,1024,109d
+09ff     126  PORT 0x3df                                          0e29,0e2f,420f,4215
+0a7d     119  glyph_blit_cga                                      0805,0a1e,0a65,0cee
+0af4      24                                                      0a6d
+0b0c      57                                                      d47e
+0b45     136                                                      e287
+0bcd     316  PORT 0x080                                          0a3e,0a75
+0d09      23                                                      0d00
+0d20      28                                                      e462
+0d3c      11                                                      2468
+0d47     183                                                      2473
+0dfe      88  INT FBh                                             0a21,0a39,0a41,0a68,0a70
+0e56      21                                                      ff2e
+0e6b      14                                                      10865
+0e79      17  PORT 0x033                                          4d21,4d3d,4d63
+0e8a     116  PORT 0x033                                          53d0,541d,5468
+0efe       8                                                      10c40,10c86,10cef,10e23
+0f06      15                                                      ffde
+0f15      15                                                      4cf3
+0f24     133                                                      4161,41e7,421b,49ed,4a17
+0fa9      23  PORT 0x033                                          0ed7,0eea,0efd,0f10
+0fc0      20                                                      0f6b,0f7e,0f91,0fa4
+0fd4      85                                                      0e3b,0e4e,0e61,0e74,0e85
+1029      18                                                      2f37,35f7,3671,40d2,53b2
+103b       9                                                      2eec,4b27,4b2d,4b33
+1044      37  PORT 0x08a                                          4cb8
+1069      31  PORT 0x040                                          10ef0,11309,11363,113bc,11416
+1088      29  PORT 0x0c3                                          1083
+10a5      18                                                      4074,408f,4095,4139,4172
+10b7       9                                                      4b7b,4b84,501d,5043,5049
+10c0      42                                                      4c71,4c86,4ca2,4cbf,4cca
+10ea       7                                                      110cb
+10f1      11  PORT 0x040                                          11864
+10fc      58  rng                     (rol/xor on [0x3c14],[0x3c16])  [INT 1Ah]089d,24bd,2c1d,2f46,3683
+1136      88  INT 10h                                             00ce
+118e      23                                                      e8d2
+11a5      12                                                      0198,36fa
+11b1     179  INT 10h                                             119ab
+1264      23  PORT 0x00f                                          119d7
+127b       6                                                      0928
+1281       6                                                      093f
+1287       6                                                      097e
+128d      91  install_timer_isr       (hooks INT 1Ch at 0000:0070)00d1
+12e8     218  glyph_blit_alt                                      0a2f,0cf7
+13c2     185                                                      d534
+147b      33                                                      2475
+149c      30                                                      4cd6
+14ba      51                                                      204b4
+14ed      18                                                      14b1,16c4
+14ff      52                                                      204f4
+1533       9                                                      14ba,16cd
+153c       8                                                      11140,1117c,111a8,115bf
+1544      18                                                      20534
+1556      51                                                      1145b,11486
+1589      34                                                      20574
+15ab      35                                                      14c3,16d6
+15ce      69                                                      205b4
+1613       4                                                      205f4
+1617     100                                                      f789
+167b     117  PORT 0x08b                                          4faf
+16f0       9                                                      1c55,1c5b,4bbd,509c
+16f9       6                                                      10c14,10d27
+16ff      42                                                      23dd
+1729      50  PORT 0x080                                          240c
+175b     116  INT 10h  PORT 0x0b3,0x0c6                           019b,1c58,1c5e,36fd,4bc3
+17cf     120                                                      11750,11759,11765
+1847     109  INT 10h  PORT 0x040                                 460e
+18b4      41  INT 10h  PORT 0x0c6                                 4af4,4fb8
+18dd      43  PORT 0x3da                                          183d,18ad,588a
+1908      42                                                      4f72
+1932      34                                                      f12a
+1954      38  PORT 0x040                                          37a0,50b0
+197a      47  INT 10h                                             268d
+19a9      42  INT 10h                                             fdeb
+19d3      20  PORT 0x3d8                                          1994,1b3e
+19e7     302  PORT 0x040                                          01df,01f4,026b,37a3
+1b15      21                                                      11c96
+1b2a      21                                                      11b1a,11b1d
+1b3f      53  INT 10h                                             f337
+1b74      50  PORT 0x009,0x08b                                    2d3e
+1ba6      16  PORT 0x009                                          1853,191a,1940,1966
+1bb6      50  INT 10h                                             1bb2
+1be8       3                                                      0128,2d38,4f52
+1beb      20                                                      11c91
+1bff      33                                                      f505
+1c20      66                                                      11bfe,11c05,11c0c,11c13
+1c62      14                                                      2cf7
+1c70       2                                                      246a
+1c72       3                                                      10e44,10ebf
+1c75      43  PORT 0x0a3                                          10ddc,10dfa
+1ca0      68  PORT 0x0a3                                          99dd,affb
+1ce4      77  PORT 0x0a3                                          1c7f,1c9a,1cb7
+1d31      40  PORT 0x001                                          1d0e,1d18,1d25
+1d59      85  PORT 0x0a0                                          1c68
+1dae     115                                                      11781
+1e21       7                                                      11dd2,11de2,11df5,11e05
+1e28     121                                                      11d41,11d54,11d67,11d7a,11d8d
+1ea1       1                                                      11e82
+1ea2       2                                                      11e8b
+1ea4       1                                                      11e91
+1ea5       1                                                      11e97
+1ea6      80                                                      11e9d
+1ef6     140  PORT 0x08b                                          2146
+1f82     169  PORT 0x08b                                          214c
+202b      11                                                      9aa0,9f26,e612
+2036      19                                                      e362
+2049      30                                                      d3bf,ec20,f831,103ad
+2067     106  PORT 0x08b                                          2152
+20d1     119  PORT 0x080                                          f813
+2148     164  PORT 0x080                                          3751
+21ec     307  PORT 0x00f,0x3df                                    1917,193d,1963
+231f     137  PORT 0x080                                          fa61
+23a8      16                                                      1725,23f2,2405
+23b8      35                                                      4098
+23db      53  PORT 0x0ba,0x3df                                    fce1
+2410      48                                                      2409
+2440      86  PORT 0x08b,0x201                                    24dc,261c
+2496      15                                                      251f
+24a5      24  input_keyboard          (~[0x3c0e] & 0x1f)          24cf,24e8,2507
+24bd     121  input_dispatch          (device -> [0x3bfa])        2787,2799,27b5,2dc8,2f43
+2536      71  PORT 0x03b,0x0ef,0x0f7,0x0fb,0x0fd,0x0fe            24f0,2510
+257d       5                                                      2455
+2582      76  PORT 0x03b,0x0ef,0x0f7,0x0fb,0x0fd,0x0fe            24f8,2519
+25ce      59                                                      0688,069d,06b2,06c7
+2609       4                                                      25ce
+260d      15                                                      4d80
+261c      26                                                      25e8
+2636      69  PORT 0x201                                          25d1,2609
+267b      47                                                      2532
+26aa     150  PORT 0x020,0x060,0x061,0x0a8                        00e0
+2740      71  input_poll_wrapper  [INT 16h]                       0564,2528,2696
+2787     127                                                      2dd3,35fa,4bd7
+2806      26                                                      088d,277e
+2820      36  load_resource           (AX = index; descriptor table at 0x136b)048c,049e,04ec,2ab7,2b0f
+2844      93  PORT 0x08b                                          2823,532d
+28a1      63  INT 13h  PORT 0x002                                 2b8b
+28e0      32                                                      f849
+2900      12                                                      52ed,5317,5367
+290c      31  PORT 0x08b                                          2903
+292b     158  INT 13h                                             dc86
+29c9      31                                                      28fa
+29e8       5                                                      2948
+29ed      18                                                      c4f8,c545,c54a
+29ff       6                                                      db8a
+2a05      59                                                      3744
+2a40      50                                                      4682,5271
+2a72     296                                                      0be4
+2b9a      20                                                      04c7,2c2e
+2bae       7                                                      0d20
+2bb5      43  INT 13h  PORT 0x0e8                                 019e
+2be0      95  PORT 0x025                                          2dd6,2f49,358f
+2c3f      49                                                      2ecd
+2c70      46  PORT 0x08b,0x0d1                                    0538
+2c9e     363  PORT 0x004,0x040                                    723d
+2e09      21                                                      2ade,2b35,2de8,3827,38dc
+2e1e     108                                                      2af3,2b4a,2bcf,2dfd
+2e8a     154  PORT 0x0a3                                          a2ec
+2f24      15                                                      a575,a6ac,a7de,a7f0,ac2c
+2f33      16                                                      2ef8,360f
+2f43      45                                                      4bba
+2f70      57                                                      b9d2,be2b
+2fa9      22                                                      2e5b
+2fbf      25                                                      2e83
+2fd8      55                                                      2e30,317c
+300f      26                                                      e069
+3029       3                                                      9db6,9dbc,9dc2,9dcf,aea1
+302c      22                                                      e086
+3042      94                                                      0704
+30a0       5                                                      e0fa
+30a5      18                                                      9d81,9d88,9db0,a2b2,a2c4
+30b7      62  PORT 0x001                                          9e19,9e67,a022,a0d7,a232
+30f5       4                                                      e14f
+30f9       3                                                      1146b
+30fc      46                                                      812e,8407,89bb,8d9c,9219
+312a      28                                                      d49d
+3146      19                                                      d4b9
+3159      34                                                      30b8,32d0
+317b      83  PORT 0x08a                                          37f6
+31ce      31                                                      2e52
+31ed      10                                                      a247
+31f7       5                                                      39b8,39d3,3a17,3a64,3af6
+31fc      10                                                      a656
+3206      41                                                      a260
+322f       1                                                      a8ad
+3230      10                                                      f3aa
+323a       4                                                      b61a
+323e      12                                                      53f8
+324a      64                                                      f3c4
+328a      26                                                      3253
+32a4      17                                                      30bb
+32b5       9                                                      30b5,32cc,4575
+32be      14                                                      f518
+32cc      14  PORT 0x0ff                                          2ac8,2b1e,2bb8,2de5,37a9
+32da      29                                                      2ace,2ad5,2adb,2b25,2b2c
+32f7      23                                                      330e
+330e      38  PORT 0x0ff                                          528f
+3334      19                                                      2ae4,2b3b,382d,38e2,391f
+3347      17                                                      3358
+3358      56                                                      45ea
+3390      20                                                      a3ea
+33a4      26                                                      33b5,4271,5849
+33be      48                                                      3f88,3f9b,3fa1
+33ee      17                                                      33ff
+33ff       9                                                      3f6f,3f7c,45cc,45d5,4e4e
+3408      29                                                      4e54,4f00,4f22,513d
+3425      61                                                      3f82,4eed,4f1c
+3462      28                                                      4296,5874
+347e      18                                                      343e,344c,345a,3468,3476
+3490      34                                                      f73e,f7b7
+34b2       2                                                      4bde
+34b4      23                                                      4be0
+34cb       2                                                      3497,34a2,34ad,34b8,34c3
+34cd       2                                                      4bf9
+34cf      14                                                      4bfb
+34dd      45                                                      2bc0,3134,47f3,480a,58ee
+350a      30                                                      3f95
+3528       7                                                      3539,3568,357a
+352f      59                                                      34e4,34f3,3502,3511,3520
+356a      20                                                      dfc4
+357e      21                                                      07d5,07e9,2dc5,35d2
+3593     121  menu_select_loop        (fires when [0x3bfa] bit4 low)2f2f
+360c     111                                                      35c3,35e9
+367b       8                                                      a355,e5bf
+3683      51                                                      35d5
+36b6      47                                                      7d56
+36e5      11                                                      01ac
+36f0     102  PORT 0x0f4                                          ebef,f61d,108be
+3756       3  PORT 0x0f4                                          3ddb
+3759       2                                                      377f,378e
+375b       1                                                      ebfb,f623,102ed,108c4
+375c       3                                                      37ea,405c,412e,4373
+375f     232                                                      3747
+3847     109  INT 08h  PORT 0x0a0                                 b51c,bcf1
+38b4      50                                                      b8e0
+38e6      33                                                      f7be,108e0
+3907      39                                                      3890
+392e      13                                                      9ae0,9d12,a3ab
+393b      25                                                      fdf8
+3954       8                                                      9aa3,9f20,a070,a418
+395c      47                                                      fe19
+398b      66  PORT 0x02d                                          fe48
+39cd     323  PORT 0x0d1                                          f227
+3b10      86                                                      b36a
+3b66     145                                                      13b60
+3bf7       9                                                      39af
+3c00      26  PORT 0x0a3                                          b8dd
+3c1a      46  PORT 0x08a                                          f474
+3c48      91                                                      b8e3
+3ca3      11                                                      5472
+3cae     186  PORT 0x0a3                                          9b81
+3d68     119  PORT 0x000,0x02d,0x0a0,0x0a3                        d28d
+3ddf     128  script_interpreter      (bytecode VM, PC at [0x154d])  [PORT 0x0a3]3bef
+3e5f      56                                                      d2b9
+3e97     193                                                      c949
+3f58      77                                                      3de5
+3fa5      24  script_apply_answer                                 3f22
+3fbd     256  script_op_check         (protection compare -> [0x473d]=4)  [PORT 0x040,0x0a3]3e2d
+40bd      89  name_entry              (family name into [0x104b]) 3b4c
+4116      21                                                      3846
+412b     264  INT BEh,C7h  PORT 0x0a3,0x0e8,0x0ff                 102e4
+4233      51                                                      416a
+4266      11  PORT 0x0a1                                          ca72
+4271      44                                                      3f69,41a5,4383,4474
+429d       3                                                      4506
+42a0     104  PORT 0x08a                                          464e
+4308     176  PORT 0x08a,0x0a3,0x0f3                              30c8
+43b8     261                                                      9b1e,9dd2,a202,a2f5
+44bd      77                                                      db3e
+450a      17                                                      43b3,43bc,43ec,43f5,440a
+451b     190  PORT 0x08a                                          447a
+45d9      21                                                      4398,4477
+45ee      10                                                      38be,3be3,3fa8
+45f8       3                                                      37b8,383c,385b,38f1,392e
+45fb       6                                                      3b30
+4601       3  PORT 0x0a1                                          3f52,403b
+4604       6                                                      3ebc
+460a       3  PORT 0x0c3                                          3c1d
+460d       1                                                      4640
+460e       4                                                      379d,37bb,3812,3e0e,3eff
+4612      27                                                      3be0,3fa5
+462d      19                                                      376a
+4640       7                                                      3f33
+4647      13                                                      374a
+4654      91                                                      383f,38f4,3931
+46af       3                                                      490a,4a60,4b21,4c66,538c
+46b2     142  PORT 0x0a3                                          469a
+4740      71  PORT 0x0a3                                          b826,b8b2
+4787      12                                                      a307
+4793      34                                                      d2bf,ec01,f629,102f3,108ca
+47b5       3                                                      b9f9,cc70,da30,e2e4,ed80
+47b8      21                                                      cc75,da35,e2e9,ed85,f851
+47cd      56                                                      4788
+4805      27                                                      37fd
+4820     185                                                      b5c5,bd0c,bd16
+48d9       8  PORT 0x081,0x0d1                                    47dc
+48e1      31  PORT 0x0e9                                          f53b
+4900     164  PORT 0x0a3                                          bda0
+49a4      97                                                      e574
+4a05     118                                                      b5b3,b8d4
+4a7b      55  PORT 0x0be                                          b8ac,bd9a
+4ab2      36                                                      4a6f
+4ad6      32                                                      4aa1
+4af6     105  INT C7h                                             db52
+4b5f      86  PORT 0x08b                                          1099a,117f0
+4bb5      43                                                      b689
+4be0     104                                                      d2bc,db32,ebfe,f626,102f0
+4c48     115  PORT 0x0a3                                          4c30,5c7c
+4cbb     212                                                      4bfd
+4d8f     328  PORT 0x003,0x005,0x0a3,0x0c7                        494a,4cb2,591e
+4ed7     113  PORT 0x08b,0x0b8,0x0c3,0x0e4                        4ddc,5499
+4f48     367  PORT 0x08a,0x0e8                                    4f39
+50b7      97  PORT 0x0a3                                          4fe4
+5118     156  PORT 0x0a3                                          d495
+51b4      67                                                      b0e2
+51f7      71  PORT 0x0a3                                          84f9,8508,87e7,8993,89ab
+523e     119  PORT 0x0d1                                          80ec,8f18,a1d2,aa35,b7c1
+52b5      23                                                      8fbf,9a0d
+52cc      14                                                      8016,805b,80c5,8110,816a
+52da      45                                                      8061,8077,808d,811e,8170
+5307       7                                                      dd64
+530e       9                                                      8b56
+5317      16  PORT 0x0d5                                          8b5c
+5327      13                                                      52b9,52f9
+5334      19                                                      81b1,81b7,81f4,8243,874f
+5347       6                                                      8cb5
+534d      11                                                      52cc,531c
+5358       9                                                      8a9f,8b7d,90a8,ae32,afae
+5361      29                                                      8b29
+537e      51                                                      8b1d,8b23
+53b1       4                                                      de0e
+53b5      57                                                      8345,857e,9804,9819,afd7
+53ee      17                                                      ae78
+53ff       9                                                      835a,8642,8b6b,8cc7,8ccf
+5408      29                                                      8366,8b71,8b77,8ef3
+5425     104  PORT 0x0be                                          8360
+548d       7                                                      4085
+5494      21                                                      a892,ae81,aede
+54a9      52                                                      361b
+54dd      69  PORT 0x0dd                                          8118,8896,893c,8f23,956d
+5522      92  PORT 0x0a3                                          4be2
+557e     364  PORT 0x0a3                                          b3c7,db3b
+56ea     350  PORT 0x002,0x08b,0x0a3,0x0b1                        1103d
+5848       1                                                      4c36
+5849      47                                                      488b,4b7e,4c74,507d,5893
+5878     335  PORT 0x0a3                                          4aae,54f8,5a88
+59c7     774  INT 2Eh  PORT 0x005,0x050,0x0a3,0x0b9               151a8
+5ccd     275  PORT 0x005,0x089,0x0a3                              b98a
+5de0     180  PORT 0x0b9                                          10f53
+5e94     204  PORT 0x02a,0x0a3                                    5d1e,5d45
+5f60     171  PORT 0x0a3                                          86d2
+600b     110                                                      1195e
+6079     187                                                      119eb
+6134      91                                                      bdf1
+618f    1157                                                      11ae2
+6614     155                                                      0002
+66af      57                                                      a2a7,a4ab,abd7,ae75
+66e8      27                                                      4e37
+6703     202                                                      11876
+67cd     268                                                      80a6,9bd5
+68d9     337                                                      a54a,b331
+6a2a     114                                                      4e75,5211
+6a9c     368                                                      5c5d
+6c0c      60                                                      72af
+6c48      24                                                      8972
+6c60     303                                                      7303
+6d8f      20                                                      81e7,833e,863b,877f,916c
+6da3       1                                                      9299,9f10,a74c
+6da4     250                                                      827b,88cc,a9da
+6e9e      57                                                      963d,a993
+6ed7      45                                                      8159,82d6,842d,8540,8b17
+6f04     155                                                      819f,8563,8865
+6f9f       5                                                      47b1
+6fa4      23                                                      86d0
+6fbb      43                                                      1a78
+6fe6     261                                                      45fa
+70eb      29                                                      5758,5773,5b0e,5c16
+7108      16                                                      51d6,5fbb
+7118    1233  INT 86h  PORT 0x00d,0x027,0x05a,0x05e,0x098,0x09a,0x09b,0x09e,0x0c7,0x0de,0x0ef5fc1
+75e9     608  PORT 0x01b,0x01e,0x05e,0x09b,0x0a5                  45fd
+7849      42                                                      8055,8485,875b,87ba,890c
+7873       5                                                      5593,5ed2
+7878       3                                                      8978
+787b     125                                                      a5cb
+78f8     318  PORT 0x05e,0x078,0x09b,0x0a5                        5a82
+7a36     153  PORT 0x05a,0x05e,0x064                              5ba8
+7acf     426  PORT 0x05a,0x05e,0x064                              5881
+7c79     395  PORT 0x05a,0x06f,0x09a                              5b83
+7e04      64                                                      dc3e
+7e44     191  PORT 0x05e                                          16e3e
+7f03     524  PORT 0x05a,0x064                                    10445
+810f     539  PORT 0x040                                          54e6,5561
+832a     499  PORT 0x003,0x0a3,0x0d1                              5b05
+851d      34                                                      8315
+853f      20                                                      3179
+8553     370  INT C7h,E8h                                         e523
+86c5      35                                                      851d,8cd2
+86e8     329  PORT 0x021,0x039,0x08b,0x0f7                        b43b
+8831      15                                                      5c69
+8840      82  PORT 0x0be                                          51f3,5222
+8892      31                                                      388d,533f,552a,5cd7,5fe9
+88b1       9                                                      4882,52a4,54dd,55cf,59de
+88ba      87  PORT 0x0bb                                          50c8,54f5,596c,5a59,5eaa
+8911       4                                                      517e,5cf8
+8915      35                                                      5981,5ca8
+8938     242                                                      5c54
+8a2a     114                                                      8a24
+8a9c     105                                                      8999,8a7a,9669
+8b05     142  PORT 0x0a3                                          a302
+8b93       3                                                      5705
+8b96     349  PORT 0x0a3                                          5e5f
+8cf3     259  PORT 0x005,0x037,0x03b,0x08b,0x0a3,0x0e8            827e
+8df6      15                                                      4e14
+8e05      18                                                      0701
+8e17      26                                                      5c0d
+8e31      64                                                      072d
+8e71       1                                                      8e6b
+8e72      13                                                      06e6
+8e7f      31                                                      06f3
+8e9e      13                                                      0712
+8eab      20                                                      071f
+8ebf     291                                                      a697
+8fe2      71                                                      9a47
+9029      70                                                      522b,5c2d,5c3b
+906f      54                                                      8f32,99ff
+90a5      25                                                      8e5e,8f92
+90be      14                                                      4e48,5131
+90cc       1                                                      49d2
+90cd      30                                                      8128,9c28,b299
+90eb      22                                                      88c4,9060,90cd,94d9,9624
+9101       7  PORT 0x0c3                                          5404
+9108      16                                                      8465,ac3b
+9118      42                                                      8678,895e,8a11,90e7,9982
+9142       7                                                      8f2f,8ffa,b36e
+9149       7                                                      5bec
+9150      10                                                      8e71,9a38
+915a       6                                                      587e
+9160      24                                                      9c5b
+9178     130                                                      adbd
+91fa      14  PORT 0x0bb                                          4df1,4e69,4ebd,51d3,5205
+9208      12                                                      5289
+9214      14                                                      5786,580c,5ac7
+9222     432  PORT 0x03b,0x0a3                                    50e2
+93d2     143                                                      4751,538f
+9461     157  PORT 0x0a3                                          9eae
+94fe      29                                                      9f52
+951b       1                                                      471a
+951c      10                                                      4754,47cd,48e9,4af1,4c39
+9526      66  PORT 0x0a3                                          4697,469d
+9568     402  PORT 0x005                                          4eae
+96fa     251                                                      9b54
+97f5      21                                                      8cea,96a9
+980a     105                                                      8ced,96b6
+9873      42                                                      8795,9296,953f,9d76,9d96
+989d      66  PORT 0x03d                                          9288,a08e
+98df      20  PORT 0x02b                                          93b2
+98f3      26                                                      942c,9f41
+990d       6                                                      8010,b192
+9913     201  PORT 0x0f7                                          9c4f,9f04,a04a
+99dc      35                                                      024e
+99ff     136                                                      99e6,b00a
+9a87      25                                                      e8c6
+9aa0     473  PORT 0x005,0x0a3                                    9b61,9e70,9fb6,9fde
+9c79     563  PORT 0x0a3,0x0bb,0x0d1                              9c73
+9eac      16                                                      4bc0,509f
+9ebc     314                                                      35c9
+9ff6     231                                                      9f94,9fd1
+a0dd      27                                                      a0b9,a0c5
+a0f8      23                                                      9e6d,9f2f,a026
+a10f      68  PORT 0x0a3                                          9ce6
+a153      67                                                      8a2d,99da,9af3,9d58,a1ea
+a196     211                                                      af22
+a269     107                                                      a24b,a264,a3ff
+a2d4      25                                                      35b3,35c6
+a2ed      61                                                      5b62
+a32a     160  PORT 0x0bb                                          9d2e
+a3ca     201                                                      360c
+a493      27                                                      8a6b
+a4ae      13                                                      4ac1,4adf
+a4bb      14  PORT 0x02d,0x08b                                    4791,55fd
+a4c9     142  PORT 0x0a3                                          5e6f
+a557      72  PORT 0x0a3                                          4dfe,519f,5a29,5bd4,5d90
+a59f     256  PORT 0x02e                                          3da8,4255
+a69f       9                                                      419f,474b,4b53,4c1e,5077
+a6a8       2                                                      4aab
+a6aa      29                                                      4f94
+a6c7     116  PORT 0x0a3                                          15671
+a73b     221  PORT 0x0a3                                          a6e6,a723,a72c,a770,a779
+a818      15  PORT 0x0b1                                          94fb,9f7e
+a827      10                                                      06e9
+a831      15                                                      ab87
+a840      82  PORT 0x0a3                                          83b7,8c63,8c8c,9848,aa5e
+a892      31                                                      8019,80c8,912d,b1ab
+a8b1       9                                                      809c,812b,8173,8278,86bf
+a8ba      30                                                      8f2c,9390,a8a7,b204,b361
+a8d8      30                                                      8924
+a8f6      10                                                      870d,885f,9e96
+a900       5                                                      c02c
+a905      12                                                      819c,89de
+a911       4                                                      838a,85da,951c,a969
+a915     164  INT 87h  PORT 0x03b                                 86f4,98dc,99bf,9fb9,9fe1
+a9b9       2                                                      c0e5
+a9bb      37                                                      c0e7
+a9e0      20                                                      4612
+a9f4      20                                                      45ee
+aa08     105  PORT 0x0bb                                          3724,467f
+aa71      31  PORT 0x0bb                                          a6bd
+aa90     160  PORT 0x02b,0x02d,0x0bb                              3bec
+ab30     102  PORT 0x0bb                                          38c1,3fb7
+ab96      63                                                      9795,b1cb
+abd5     148  PORT 0x0c7                                          c301
+ac69       2                                                      c395
+ac6b       5                                                      c397
+ac70      95                                                      40a9
+accf     110                                                      c3fb
+ad3d       2                                                      c469
+ad3f      43                                                      c46b
+ad6a     100                                                      9e42
+adce      40                                                      ac8f,acb9,acea,ad02
+adf6      33                                                      85b1,8e52,b2b8
+ae17     139  PORT 0x0fa                                          94d0
+aea2      83  INT 81h  PORT 0x081                                 b79c
+aef5     308  PORT 0x03b                                          c621
+b029     116  INT 15h                                             862f,869d,86a0,94ee,94f1
+b09d       9                                                      8862
+b0a6      24                                                      9349
+b0be      14                                                      a808,b421
+b0cc      65  PORT 0x0bb                                          908e,9a57
+b10d      30                                                      8ebc
+b12b      47                                                      8577,8edb,8f48,9a87
+b15a     118  PORT 0x048,0x0d1,0x0f6                              8176,97f1,9add
+b1d0      42  PORT 0x0bf,0x0d1                                    9599,b197
+b1fa       7                                                      82eb,83c0,83ed,845b,8560
+b201       7                                                      8ed8,8fb1,99d4,afdf
+b208       9                                                      8716,8b65,8f08,8f3b,b1fa
+b211       3                                                      9ada,a159,a8c7
+b214      14                                                      83d3,aaae,aabc,b501,b514
+b222     193  INT 15h                                             803d,8fce,9a28,9bb1,a31c
+b2e3       9                                                      e1a0
+b2ec      63  INT 15h                                             4600
+b32b     167  PORT 0x0a3,0x0d1                                    b253
+b3d2      40                                                      b256
+b3fa      49  PORT 0x0a3                                          8404
+b42b     109  INT C3h                                             cb57
+b498      93                                                      b40e
+b4f5      39  PORT 0x005,0x02d                                    9666,9fea,a938,a93b
+b51c       4                                                      85be,99aa,9b1b,9d15,9f23
+b520      24                                                      8a2a,99d7,9ae3,9d31,a19c
+b538      48                                                      8dbb
+b568     129                                                      8dee,92d7
+b5e9       3                                                      ba20,bdbf
+b5ec     197  PORT 0x0c6                                          b5d4
+b6b1     460  PORT 0x003,0x005,0x0a3,0x0bb,0x0bf,0x0f7            c623
+b87d      65                                                      84d7
+b8be      69  PORT 0x040                                          10400
+b903     112                                                      b820
+b973     191  PORT 0x040,0x08a                                    b823
+ba32      83  PORT 0x0a3                                          b755
+ba85      22                                                      d1b1
+ba9b     188  PORT 0x0a3                                          d1c7
+bb57       8                                                      16434
+bb5f      53                                                      cb59
+bb94     259  PORT 0x0a3                                          b1d6
+bc97      70                                                      b6a2
+bcdd       3                                                      b86e,b89f,b8c7,baea,bb74
+bce0       6                                                      b614,b8fe
+bce6      10                                                      b9f6
+bcf0       1                                                      b5ef,bcf8
+bcf1      14                                                      b605,b85f,b8fb,ba05,badb
+bcff      20                                                      b5d7
+bd13     145  INT 15h                                             b8af
+bda4     156                                                      bd97
+be40     124  PORT 0x02d,0x08a                                    d2b6,ebf5,f620,102ea,108c1
+bebc      16                                                      db2f
+becc     703  PORT 0x001,0x003,0x007,0x026                        be9c,c1e4,c1f5,c206
+c18b     135  PORT 0x02d,0x08a                                    ebf8
+c212      84                                                      d2ad
+c266      13                                                      c9d8
+c273      22                                                      d29d
+c289      75                                                      bf60
+c2d4     131                                                      db2c
+c357     115                                                      c02e
+c3ca      72                                                      da4f
+c412     142                                                      c0e9
+c4a0      14                                                      9bc9,9def,a3c5,e4c9,e4fe
+c4ae      13                                                      a017,b0ac,b0ed,b116,b21c
+c4bb      14                                                      a15f,b06b,b074,cbd3,d016
+c4c9       7                                                      98e2,9b4f,d80f,d81e,d9e4
+c4d0       9                                                      d25a,d268,f710,f726,f76a
+c4d9     112                                                      db78,db9c,dbb0,dbbe,dbd2
+c549       7                                                      c533,c53e
+c550       7                                                      997c
+c557      34                                                      8439,860d,87dd,88d2,88e0
+c579      19                                                      e04c,ea64,edd9,ee96,eeff
+c58c      19                                                      e207,ebcb,f081,f09d,f0d7
+c59f     110                                                      dd62,ed1f
+c60d      67  PORT 0x0d1                                          c650,c6d5,c71c,c755
+c650       7                                                      de0c,e2b5,e668,11e2f
+c657      20                                                      9afd
+c66b      20                                                      9b80
+c67f      32  INT 15h                                             b029,b08f
+c69f       9                                                      8755,8c0a,8d7f,8dd5,984e
+c6a8       2                                                      a5c8
+c6aa     171                                                      ded4,e5bc
+c755     212  PORT 0x001,0x0d1                                    c730
+c829      88                                                      c825,ca3c
+c881       9                                                      dfad
+c88a      27  PORT 0x03d,0x0f7                                    c8a8,e417,e537,ea7d,eb6f
+c8a5       7                                                      e428,e588,ea8b,eb99,f024
+c8ac     199                                                      eff6,fd1f,10621
+c973      72  PORT 0x074                                          c64b,1026f
+c9bb      37                                                      8e8f,b3dc,bb4c
+c9e0      20                                                      ad94
+c9f4      20                                                      a165
+ca08      21                                                      b5b0
+ca1d      35                                                      9d18
+ca40     560  PORT 0x003,0x0a3,0x0b1                              ebf2,102e7
+cc70     253  PORT 0x08b,0x0a3                                    a205
+cd6d      16                                                      96df
+cd7d     664  INT 00h  PORT 0x005,0x083,0x08b,0x0a3               96ef
+d015     444  PORT 0x005,0x08b,0x0a3                              78fb
+d1d1     270                                                      145c3
+d2df      43                                                      cdd0,cddb,d209
+d30a      43                                                      d064,d06f,d23c
+d335      28                                                      cca3
+d351     106                                                      b4c3
+d3bb      21                                                      ce40,d0c5,d23f
+d3d0     730  PORT 0x003,0x03b,0x048,0x08a,0x08b,0x0a3,0x0d1      b38f
+d6aa     398  PORT 0x005,0x02b,0x08b,0x0a3                        1f7b6
+d838       9                                                      06fa
+d841     127                                                      d619
+d8c0      64  PORT 0x0a3                                          c303
+d900       6                                                      c343
+d906      80  PORT 0x0a3                                          d8dc,d902
+d956      57  PORT 0x005                                          c399
+d98f      11  PORT 0x005                                          d43b,d4e9,d4fa,d6c4,d78e
+d99a      32                                                      d86c
+d9ba       2                                                      c3fd
+d9bc      17                                                      d7b0
+d9cd      25  PORT 0x0a3                                          d545
+d9e6       3                                                      f112
+d9e9      19  INT EAh  PORT 0x0a3                                 c42c
+d9fc       8                                                      f128
+da04      38                                                      d56f,d70c
+da2a       6                                                      c46d
+da30      45                                                      adca
+da5d      53                                                      d457
+da92     213                                                      1f79e
+db67     145                                                      da4a,db0a
+dbf8      17                                                      f324
+dc09      55                                                      f335
+dc40      45                                                      db63
+dc6d      41  PORT 0x0bb                                          da47
+dc96      38                                                      f3c2
+dcbc      28                                                      da5b,dacb
+dcd8      56                                                      da58
+dd10     116  PORT 0x08b,0x0a3                                    8a3c
+dd84     101  PORT 0x0a3                                          ddde
+dde9      19                                                      105bb
+ddfc       9                                                      105ce
+de05      27  PORT 0x0c3                                          dd30
+de20      21  PORT 0x0a3                                          a352
+de35     371  PORT 0x005,0x00b,0x02b,0x083,0x0a3                  cf0d
+dfa8     627  PORT 0x005,0x08b,0x0a3,0x0b1,0x0d1                  10f1b
+e21b      49                                                      df54,dfce
+e24c      53                                                      5dc0
+e281      43  PORT 0x0a3                                          e1bb
+e2ac       2                                                      dbe2
+e2ae       9                                                      de4c,de57,de62,de6d
+e2b7       9                                                      dfaf
+e2c0      14                                                      dbf6
+e2ce       2                                                      dc04
+e2d0      20                                                      9b5e
+e2e4      16                                                      dc1a
+e2f4     262  PORT 0x0a3                                          dc2a
+e3fa     232  PORT 0x001,0x029                                    e654
+e4e2     290                                                      da3c
+e604       3                                                      e35e
+e607     699  PORT 0x02b,0x0a3                                    e661
+e8c2     277  PORT 0x03d,0x048,0x0b1                              11835
+e9d7     184  PORT 0x0da                                          2da4
+ea8f      71                                                      5ee9
+ead6      13                                                      e4a8
+eae3      40                                                      fa55
+eb0b      39                                                      e4dd
+eb32     234  PORT 0x000                                          5f8c
+ec1c       8                                                      e76c
+ec24      95  PORT 0x0b1                                          e305
+ec83     132  PORT 0x0b0                                          7222
+ed07      39  PORT 0x0e8                                          e6a6,e7ad
+ed2e      30                                                      e5da,e5fc,e624,e9ff
+ed4c      21                                                      ec8e
+ed61      31                                                      e8bd
+ed80     130                                                      a3ae
+ee02     139                                                      1052e
+ee8d      19                                                      105b9
+eea0     305  PORT 0x0a3                                          105cc
+efd1       2                                                      06fd
+efd3      42                                                      06ff
+effd       2                                                      0729
+efff     143                                                      072b
+f08e      62                                                      358c
+f0cc      48                                                      ea9e
+f0fc     453                                                      eace
+f2c1     161  PORT 0x0a3                                          e399
+f362      24                                                      ed34
+f37a      27  PORT 0x0a3                                          ed4c
+f395      12                                                      ed67
+f3a1      17                                                      ed73
+f3b2     108                                                      e48a
+f41e     441  PORT 0x0a3,0x0d0                                    cb62
+f5d7      66  PORT 0x08a                                          1d49
+f619     215  PORT 0x0ce                                          1cdc
+f6f0     206  INT A1h,C7h,E8h                                     f5fc
+f7be      32                                                      eda1
+f7de      47  INT A1h                                             10f51
+f80d      32  PORT 0x0a3                                          ef1a,f374,f478,f729,f7a2
+f82d       8                                                      f371
+f835      11                                                      f738,f741,f7b1,f7ba
+f840      87                                                      9dd5
+f897      22  PORT 0x0a3                                          f291
+f8ad      22                                                      d1b3
+f8c3     401                                                      d1c9
+fa54     131                                                      f428
+fad7      90                                                      f723
+fb31     506  PORT 0x0c7,0x0c8                                    f77d
+fd2b     497  PORT 0x0a3                                          2485
+ff1c      27                                                      f114
+ff37     125                                                      2491
+ffb4      50                                                      10f27
+ffe6     256  INT 00h,11h,15h,2Eh,75h,9Bh,C9h,D0h  PORT 0x000,0x003,0x00a,0x016,0x020,0x02b,0x03a,0x03b,0x040,0x046,0x047,0x050,0x053,0x061,0x089,0x08a,0x08b,0x09e,0x09f,0x0a0,0x0a3,0x0b1,0x0bc,0x0c0,0x0c3,0x0d1,0x0e1,0x0e5,0x0e7,0x0e9,0x0eb,0x0fffe40
