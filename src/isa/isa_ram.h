@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "debug/traced_writer.h"
+
 namespace bench {
 
 // ISA RAM expansion card.
@@ -12,7 +14,11 @@ namespace bench {
 // Pure SRAM mapped into the 20-bit address space.  No I/O ports, no DMA,
 // no IRQ -- just memory.  Used to expand a 256KB 5150 up to 640KB by
 // mapping 384KB at 0x40000-0x9FFFF.
-class ISA_RAM final : public ISA_Card {
+class ISA_RAM final : public ISA_Card
+#if BENCH_CFG_TRACE
+                    , public TracedWriter
+#endif
+{
 public:
     // base: first byte address (must be 4KB-aligned for MMIO page map).
     // size: number of bytes (must be 4KB-aligned).
@@ -39,6 +45,11 @@ public:
     }
     void on_mmio_write(uint32_t addr, uint8_t val) override {
         ram_[addr - base_] = val;
+#if BENCH_CFG_TRACE
+        // Expansion RAM above the motherboard's 256KB. Reached by both CPU
+        // stores and DMA transfers, same as DRAM.
+        trace_write(addr, val);
+#endif
     }
 
     void card_save(cereal::BinaryOutputArchive& ar) override {

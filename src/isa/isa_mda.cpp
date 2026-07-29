@@ -89,6 +89,9 @@ uint8_t ISA_MDA::on_mmio_read(uint32_t addr) {
 void ISA_MDA::on_mmio_write(uint32_t addr, uint8_t val) {
     uint32_t offset = addr - FB_BASE;
     fb_[offset] = val;
+#if BENCH_CFG_TRACE
+    trace_write(addr, val);
+#endif
 }
 
 } // namespace bench

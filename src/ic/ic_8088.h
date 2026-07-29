@@ -18,6 +18,10 @@
 #include <cstdint>
 #include <cstring>
 
+#if BENCH_CFG_TRACE
+#include "debug/cfg_tracer.h"
+#endif
+
 namespace bench {
 
 class Scheduler;
@@ -297,6 +301,15 @@ public:
     BusT bus_t() const { return bus_t_; }
     uint64_t instr_count() const { return instr_count_; }
 
+#if BENCH_CFG_TRACE
+    // Execution tracer. Non-owning; the board owns it and hands it here
+    // before power-on. The CPU logs instruction flow and port reads; memory
+    // writes are logged where they land (DRAM / ISA RAM), which is the only
+    // point that sees DMA transfers as well as CPU stores.
+    void set_tracer(CFGTracer* t) { tracer_ = t; }
+    CFGTracer* tracer() const { return tracer_; }
+#endif
+
     // Last bus transaction (for debugger bus analyzer)
     struct BusTx {
         uint32_t addr = 0;
@@ -441,6 +454,10 @@ private:
 
     BusTx last_bus_tx_;
     uint64_t instr_count_ = 0;
+
+#if BENCH_CFG_TRACE
+    CFGTracer* tracer_ = nullptr;
+#endif
 
     uint16_t start_cs_, start_ip_;
     uint32_t prefetch_base_ = 0;

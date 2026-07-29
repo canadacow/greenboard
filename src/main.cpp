@@ -13,6 +13,9 @@
 #include "isa/isa_ram.h"
 #include "display/renderer.h"
 #include "debug/memory_view.h"
+#if BENCH_CFG_TRACE
+#include "debug/cfg_tracer.h"
+#endif
 #include "test/test_keyboard.h"
 #include "audio/pc_speaker.h"
 #include "audio/speaker_driver.h"
@@ -95,6 +98,9 @@ struct System {
     MemoryView memview;
     BusProbe bus_probe;
     SystemConfig config;
+#if BENCH_CFG_TRACE
+    std::unique_ptr<CFGTracer> tracer;
+#endif
 
     void power_off() {
         if (!board || !board->clk_gen) return;
@@ -102,6 +108,10 @@ struct System {
         board->clk_gen->psu_power_off();
         board->clk_gen->power_off();
         if (pc_speaker) pc_speaker->shutdown();
+#if BENCH_CFG_TRACE
+        // Clock thread has joined -- nothing can touch the tracer now.
+        if (tracer) tracer->dump("bench_trace.bcfg");
+#endif
     }
 };
 
@@ -280,6 +290,36 @@ static void bind_debug(System& sys) {
             (int)sys.isa_bus->cpu_memr_prev(), (int)sys.isa_bus->dma_memr_prev(),
             sys.scheduler->current_perm());
     };
+
+#if BENCH_CFG_TRACE
+    // --- Execution tracer ---
+    //
+    // Records the CFG (first visit per instruction + control transfers),
+    // every memory write from any source, and every port read. Together with
+    // the ROM images these fully determine the session: tracing starts at
+    // RESET, so there is no initial memory image to capture -- every
+    // meaningful byte got there via a recorded write.
+    sys.tracer = std::make_unique<CFGTracer>();
+    sys.tracer->exclude_bios_default();
+
+    // One context callback shared by every memory component: where the CPU
+    // was when the byte landed. During a DMA transfer this is simply the
+    // instruction the CPU is parked on, which is what "when" means for
+    // ordering purposes.
+    auto ctx = [&sys]() -> TracedWriter::TraceCtx {
+        auto* c = sys.board->cpu;
+        return {c->regs16_ro()[IC_8088::CS], c->ip(), c->instr_count()};
+    };
+
+    sys.board->cpu->set_tracer(sys.tracer.get());
+    sys.board->dram.set_tracer(sys.tracer.get(), ctx);
+    if (sys.ram_exp) sys.ram_exp->set_tracer(sys.tracer.get(), ctx);
+    // Video framebuffers: every byte that reaches the screen lands here,
+    // which makes a replay of the write log reproducible as an image.
+    if (sys.cga) sys.cga->set_tracer(sys.tracer.get(), ctx);
+    if (sys.mda) sys.mda->set_tracer(sys.tracer.get(), ctx);
+    spdlog::info("[CFG] tracer armed (BIOS F0000-FFFFF excluded from CFG)");
+#endif
 }
 
 static void start_renderer(Renderer& renderer, System& sys) {

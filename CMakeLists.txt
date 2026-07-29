@@ -28,6 +28,11 @@ add_library(nfd STATIC
 target_include_directories(nfd PUBLIC third-party/nativefiledialog/src/include)
 target_link_libraries(nfd PRIVATE ole32 uuid shell32)
 
+# Execution trace recorder for offline reverse engineering (CFG + write log +
+# port reads). Adds a predicted-not-taken null check per instruction and per
+# memory write when ON; compiles out entirely when OFF.
+option(BENCH_CFG_TRACE "Record execution trace (CFG, memory writes, port reads)" OFF)
+
 # Collect all headers so they appear in Visual Studio Solution Explorer
 file(GLOB_RECURSE BENCH_HEADERS CONFIGURE_DEPENDS src/*.h)
 
@@ -85,6 +90,7 @@ add_executable(bench
     src/display/mda_display.cpp
     src/display/cga_display.cpp
     src/display/board_view.cpp
+    src/debug/cfg_tracer.cpp
     src/test/test_keyboard.cpp
     ${BENCH_HEADERS}
 )
@@ -94,6 +100,7 @@ target_include_directories(bench PRIVATE ${MINIAUDIO_INCLUDE_DIRS})
 target_link_libraries(bench PRIVATE spdlog::spdlog fmt::fmt imgui::imgui Zydis::Zydis nlohmann_json::nlohmann_json cereal::cereal nfd d3d11 d2d1 dwrite dxgi d3dcompiler windowscodecs)
 target_compile_definitions(bench PRIVATE
     PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
+    $<$<BOOL:${BENCH_CFG_TRACE}>:BENCH_CFG_TRACE=1>
 )
 
 # Organize source files into VS filters matching directory structure

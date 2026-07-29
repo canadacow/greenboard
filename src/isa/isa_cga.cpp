@@ -163,6 +163,11 @@ uint8_t ISA_CGA::on_mmio_read(uint32_t addr) {
 void ISA_CGA::on_mmio_write(uint32_t addr, uint8_t val) {
     vram_[(addr - FB_BASE) & (FB_SIZE - 1)] = val;
     note_snow(addr, val, true);
+#if BENCH_CFG_TRACE
+    // Recorded at the mirrored-down address so a replay does not have to know
+    // about the 16KB aliasing in the 32KB window.
+    trace_write(FB_BASE + ((addr - FB_BASE) & (FB_SIZE - 1)), val);
+#endif
 }
 
 // CGA snow: record a CPU VRAM access that steals the CRTC's fetch.

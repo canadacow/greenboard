@@ -1,6 +1,7 @@
 #pragma once
 #include "isa/isa_card.h"
 #include "core/component.h"
+#include "debug/traced_writer.h"
 #include <cereal/cereal.hpp>
 #include <cstdint>
 #ifndef NOMINMAX
@@ -38,7 +39,11 @@ namespace bench {
 //   - Graphics palette + interleaved scanline addressing
 //   - Composite NTSC artifact color (optional pass)
 //   - Aspect-correct upscale to display resolution
-class ISA_CGA final : public ISA_Card, public Component {
+class ISA_CGA final : public ISA_Card, public Component
+#if BENCH_CFG_TRACE
+                    , public TracedWriter
+#endif
+{
 public:
     ISA_CGA();
 

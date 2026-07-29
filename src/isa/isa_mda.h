@@ -1,5 +1,6 @@
 #pragma once
 #include "isa/isa_card.h"
+#include "debug/traced_writer.h"
 #include <cstdint>
 
 namespace bench {
@@ -14,7 +15,11 @@ namespace bench {
 //   0x3B0/0x3B1: 6845 CRTC index/data registers
 //   0x3B8: Mode control register
 //   0x3BA: Status register (bit 0 = hsync, bit 3 = video)
-class ISA_MDA final : public ISA_Card {
+class ISA_MDA final : public ISA_Card
+#if BENCH_CFG_TRACE
+                    , public TracedWriter
+#endif
+{
 public:
     ISA_MDA();
 

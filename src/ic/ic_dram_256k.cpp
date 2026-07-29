@@ -169,6 +169,13 @@ void IC_DRAM_256K::on_cycle(Fiber /*caller*/) {
             }
             ram_[addr] = data;
             parity_[addr] = bank.din[8].level() == Level::High ? 1 : 0;
+#if BENCH_CFG_TRACE
+            // Every byte that becomes DRAM passes through here, whether the
+            // 8088 or the 8237A drove the bus. Physical address is the linear
+            // form (74S158 presents row/col inverted) plus the bank bits,
+            // which U65/U47 decode straight from A16/A17.
+            trace_write(linear | (static_cast<uint32_t>(b) << 16), data);
+#endif
         } else {
             // Read: drive DOUT pins from RAM
             uint8_t data = ram_[addr];

@@ -561,6 +561,11 @@ EUTask<void> IC_8088::eu_run() {
 
     if (cs_ip == 0) { halted_ = true; break; }
 
+#if BENCH_CFG_TRACE
+    if (tracer_)
+        tracer_->on_instruction(cs_ip, regs16()[REG_CS], reg_ip_, instr_count_);
+#endif
+
     prefetch_base_ = cs_ip;
 
     uint8_t opbyte = co_await fetch_byte(0);
@@ -1124,14 +1129,43 @@ EUTask<void> IC_8088::eu_run() {
         scratch_uint_ = extra_ ? regs16()[REG_DX] : co_await fetch_byte(1);
         uint8_t val = co_await eu_io_read_byte((uint16_t)scratch_uint_);
         regs8()[REG_AL] = val;
-        if (i_w_) regs8()[REG_AH] = co_await eu_io_read_byte((uint16_t)(scratch_uint_ + 1));
+#if BENCH_CFG_TRACE
+        // Port reads are machine INPUTS -- nothing else in the trace predicts
+        // them, so offline replay needs them recorded verbatim.
+        if (tracer_)
+            tracer_->on_port_read((uint16_t)scratch_uint_, val,
+                                  regs16()[REG_CS], reg_ip_, instr_count_);
+#endif
+        if (i_w_) {
+            regs8()[REG_AH] = co_await eu_io_read_byte((uint16_t)(scratch_uint_ + 1));
+#if BENCH_CFG_TRACE
+            if (tracer_)
+                tracer_->on_port_read((uint16_t)(scratch_uint_ + 1), regs8()[REG_AH],
+                                      regs16()[REG_CS], reg_ip_, instr_count_);
+#endif
+        }
         op_result_ = regs8()[REG_AL];
         break;
     }
     case 22: { // OUT DX/imm8, AL/AX
         scratch_uint_ = extra_ ? regs16()[REG_DX] : co_await fetch_byte(1);
         co_await eu_io_write_byte((uint16_t)scratch_uint_, regs8()[REG_AL]);
-        if (i_w_) co_await eu_io_write_byte((uint16_t)(scratch_uint_ + 1), regs8()[REG_AH]);
+#if BENCH_CFG_TRACE
+        // Port writes are derivable by replaying the CFG, but recording them
+        // makes the trace directly interpretable -- e.g. the video mode
+        // register (3D8/3B8) that says how to read the framebuffer bytes.
+        if (tracer_)
+            tracer_->on_port_write((uint16_t)scratch_uint_, regs8()[REG_AL],
+                                   regs16()[REG_CS], reg_ip_, instr_count_);
+#endif
+        if (i_w_) {
+            co_await eu_io_write_byte((uint16_t)(scratch_uint_ + 1), regs8()[REG_AH]);
+#if BENCH_CFG_TRACE
+            if (tracer_)
+                tracer_->on_port_write((uint16_t)(scratch_uint_ + 1), regs8()[REG_AH],
+                                       regs16()[REG_CS], reg_ip_, instr_count_);
+#endif
+        }
         break;
     }
     case 23: { // REPxx

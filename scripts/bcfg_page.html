@@ -1,0 +1,493 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bench trace</title>
+<style>
+:root{--bg:#0f1115;--pan:#171a21;--ln:#262b36;--fg:#d6dae3;--dim:#7d879c;
+      --acc:#6ea8fe;--hot:#f0883e;--ok:#57ab5a;--call:#c297ff}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
+     display:flex;flex-direction:column;
+     font:12px ui-monospace,SFMono-Regular,Consolas,monospace}
+
+/* ---------- header + timeline ---------- */
+#top{display:flex;align-items:center;gap:12px;padding:6px 12px;
+     background:var(--pan);border-bottom:1px solid var(--ln);flex:0 0 auto}
+#top b{font-size:13px;letter-spacing:.3px}
+#stats{color:var(--dim);font-size:11px}
+#tl{position:relative;height:60px;flex:0 0 auto;background:#0b0d11;
+    border-bottom:1px solid var(--ln);cursor:crosshair}
+#tl canvas{display:block;width:100%;height:100%}
+#cur{position:absolute;top:0;bottom:0;width:1px;background:var(--acc);
+     pointer-events:none;box-shadow:0 0 6px var(--acc)}
+#ctl{display:flex;align-items:center;gap:6px;padding:5px 12px;
+     background:var(--pan);border-bottom:1px solid var(--ln);flex:0 0 auto;
+     flex-wrap:wrap}
+.k{color:var(--dim);font-size:11px}
+.sep{width:1px;height:18px;background:var(--ln);margin:0 4px}
+
+/* ---------- main grid ---------- */
+#main{flex:1;min-height:0;display:grid;
+      grid-template-columns:210px 1fr 420px;
+      grid-template-rows:1fr auto;
+      grid-template-areas:"list graph side" "list code side"}
+#pList{grid-area:list} #pGraph{grid-area:graph}
+#pCode{grid-area:code} #pSide{grid-area:side}
+.pane{display:flex;flex-direction:column;min-width:0;min-height:0;
+      border-right:1px solid var(--ln);overflow:hidden}
+#pSide{border-right:none}
+#pCode{border-top:1px solid var(--ln);height:31vh}
+.hd{padding:5px 9px;border-bottom:1px solid var(--ln);color:var(--dim);
+    font-size:11px;display:flex;justify-content:space-between;gap:8px;
+    align-items:center;background:var(--pan);flex:0 0 auto}
+.bd{overflow:auto;flex:1;min-height:0}
+
+input,select{background:#0d0f13;border:1px solid var(--ln);color:var(--fg);
+     padding:2px 5px;border-radius:3px;font:inherit;min-width:0}
+button{background:var(--pan);border:1px solid var(--ln);color:var(--fg);
+       padding:2px 8px;border-radius:3px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--acc)}
+button:disabled{opacity:.3;cursor:default}
+.tab{padding:2px 9px;border:1px solid var(--ln);border-radius:3px;
+     cursor:pointer;color:var(--dim);font-size:11px}
+.tab.on{color:var(--fg);border-color:var(--acc);background:#1d2330}
+
+/* ---------- graph ---------- */
+#gwrap{position:relative;flex:1;min-height:0;background:#0b0d11}
+#svg{width:100%;height:100%;display:block;cursor:grab}
+#svg.drag{cursor:grabbing}
+.node rect{stroke:var(--ln);fill:#1b202a}
+.node.sel rect{stroke:var(--acc);stroke-width:2;fill:#243044}
+.node.hot rect{stroke:#5a4230}
+.node.live rect{stroke:var(--ok);stroke-width:2}
+.node text{fill:var(--dim);font:9px ui-monospace,monospace;pointer-events:none}
+.node.sel text{fill:var(--fg)}
+.node{cursor:pointer}
+.edge{stroke:#39414f;fill:none;marker-end:url(#ar)}
+.edge.hl{stroke:var(--acc);stroke-width:1.6;marker-end:url(#arh)}
+.edge.call{stroke:#4b3a63}
+.edge.call.hl{stroke:var(--call);marker-end:url(#arc)}
+
+/* ---------- listings ---------- */
+.ins{display:flex;gap:7px;padding:1px 9px;white-space:pre;cursor:pointer}
+.ins:hover{background:#1a1f29}
+.ins.cur{background:#243044;box-shadow:inset 2px 0 0 var(--acc)}
+.ins .a{color:var(--dim);min-width:48px}
+.ins .b{color:#454d5e;min-width:104px}
+.ins.cur .t{color:var(--acc)}
+.row{padding:2px 9px;cursor:pointer;color:var(--dim);white-space:nowrap;
+     overflow:hidden;text-overflow:ellipsis}
+.row:hover{background:#1a1f29;color:var(--fg)}
+.row.on{background:#243044;color:var(--fg)}
+.row b{color:var(--fg);font-weight:600}
+.tag{color:var(--hot)}
+
+/* ---------- side ---------- */
+#shot{background:#000;display:flex;align-items:center;justify-content:center;
+      flex:0 0 auto;padding:6px}
+#screen{image-rendering:pixelated;max-width:100%;display:block}
+#mem{padding:6px 9px;white-space:pre;line-height:1.5;font-size:11.5px}
+.mz{color:#39414f} .mu{color:#252a33} .mv{color:var(--ok)}
+.ma{color:var(--dim)}
+</style>
+
+<div id="top">
+  <b>bench trace</b><span id="stats">loading…</span>
+  <span style="flex:1"></span>
+  <span class="k" id="modenow"></span>
+</div>
+
+<div id="tl"><canvas></canvas><div id="cur"></div></div>
+
+<div id="ctl">
+  <span class="k">time</span>
+  <button id="tb1" title="back 1 instruction">&#9664;</button>
+  <button id="tf1" title="forward 1 instruction">&#9654;</button>
+  <button id="tb2">&#171; 1k</button>
+  <button id="tf2">1k &#187;</button>
+  <button id="tb3">&#171; 100k</button>
+  <button id="tf3">100k &#187;</button>
+  <input id="ibox" style="width:112px">
+  <input type="range" id="slider" min="0" max="1000" style="flex:1;min-width:120px;accent-color:var(--acc)">
+  <span class="sep"></span>
+  <span class="k">flow</span>
+  <button id="pblk" title="previous block along the executed path">&#9664;&#9664;&nbsp;blk</button>
+  <button id="nblk" title="next block along the executed path">blk&nbsp;&#9654;&#9654;</button>
+  <button id="bback">back</button>
+  <span id="bsucc"></span>
+  <button id="gotolive" title="jump to the block executing at this instant">sync&nbsp;to&nbsp;time</button>
+</div>
+
+<div id="main">
+  <div class="pane" id="pList">
+    <div class="hd">
+      <span id="listttl">entry points</span>
+    </div>
+    <div class="hd" style="border-bottom:1px solid var(--ln);gap:4px">
+      <span class="tab on" data-v="entry">entry</span>
+      <span class="tab" data-v="hot">hot</span>
+      <span class="tab" data-v="all">all</span>
+    </div>
+    <div class="hd"><input id="find" placeholder="addr / mnemonic" style="width:100%"></div>
+    <div class="bd" id="list"></div>
+  </div>
+
+  <div class="pane" id="pGraph">
+    <div class="hd">
+      <span id="gttl">control flow</span>
+      <span>
+        <span class="k" id="ginfo"></span>
+        <button id="zin">+</button><button id="zout">&minus;</button>
+        <button id="zfit">fit</button>
+      </span>
+    </div>
+    <div id="gwrap"><svg id="svg"></svg></div>
+  </div>
+
+  <div class="pane" id="pCode" style="flex-direction:row">
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;
+                border-right:1px solid var(--ln)">
+      <div class="hd"><span id="bttl">block</span><span class="k" id="bmeta"></span></div>
+      <div class="bd" id="code"></div>
+    </div>
+    <div style="flex:0 0 210px;display:flex;flex-direction:column;min-width:0">
+      <div class="hd"><span>executed path</span><span class="k">instr &rarr; addr</span></div>
+      <div class="bd" id="path"></div>
+    </div>
+  </div>
+
+  <div class="pane" id="pSide">
+    <div class="hd"><span>screen</span><span id="sdesc" class="k"></span></div>
+    <div id="shot"><img id="screen"></div>
+    <div class="hd">
+      <span>memory</span>
+      <span>
+        <input id="maddr" value="B8000" style="width:64px">
+        <select id="mlen"><option>256</option><option>512</option><option>1024</option></select>
+        <button id="mfollow" title="follow the selected block">follow code</button>
+      </span>
+    </div>
+    <div class="bd"><div id="mem"></div></div>
+  </div>
+</div>
+
+<script>
+let META=null, CFG=[], BY={}, PRED={}, SEL=null, HIST=[], INSTR=0;
+let VIEW='entry', LAY=null, tx=0, ty=0, sc=1, follow=false;
+
+const hx=(n,w=5)=>(n>>>0).toString(16).toUpperCase().padStart(w,'0');
+const fmt=n=>n.toLocaleString();
+const $=i=>document.getElementById(i);
+
+async function boot(){
+  META=await (await fetch('/api/meta')).json();
+  CFG=(await (await fetch('/api/cfg')).json()).blocks;
+  for(const b of CFG){ BY[b.a]=b; }
+  for(const b of CFG) for(const o of b.o) (PRED[o]=PRED[o]||[]).push(b.a);
+  $('stats').textContent=`${fmt(CFG.length)} blocks · ${fmt(META.nodes)} instrs · `
+    +`${fmt(META.edges)} edges · ${fmt(META.writes)} writes`;
+  $('slider').max=META.max_instr;
+  setInstr(META.max_instr,false);
+  drawTimeline();
+  renderList();
+  await loadPC();
+  // Start where execution actually is, if the trace knows; otherwise at the
+  // earliest-discovered block.
+  if(PC&&PC.block!=null){ select(PC.block,true); }
+  else { let f=CFG[0]; for(const b of CFG) if(b.f<f.f) f=b; select(f.a,true); }
+  drawScreen(); drawMem();
+}
+
+/* ---------------- timeline ---------------- */
+function drawTimeline(){
+  const wrap=$('tl'), cv=wrap.querySelector('canvas');
+  const w=cv.width=wrap.clientWidth*2, h=cv.height=wrap.clientHeight*2;
+  const g=cv.getContext('2d'); g.clearRect(0,0,w,h);
+  const X=i=>i/META.max_instr*w;
+
+  g.fillStyle='#161b24'; g.fillRect(0,0,X(META.first_exec),h);
+  g.fillStyle='#3a424f'; g.font='19px ui-monospace,monospace';
+  g.fillText('BIOS / POST', 10, h*0.30);
+
+  for(const e of (META.events||[])){
+    const x=X(e.first), ww=Math.max(3,X(e.last)-x);
+    g.fillStyle='rgba(110,168,254,.5)'; g.fillRect(x,h*0.10,ww,h*0.34);
+  }
+  for(const m of (META.modes||[])){
+    g.fillStyle=(m.mode&2)?'#f0883e':'#57ab5a';
+    g.fillRect(X(m.instr),h*0.56,3,h*0.34);
+  }
+  g.fillStyle='#3a424f'; g.font='17px ui-monospace,monospace';
+  g.fillText('code loads', 10, h*0.62);
+  g.fillText('video mode', 10, h*0.96);
+}
+
+/* ---------------- time ---------------- */
+let tTimer=null;
+function setInstr(i,refresh=true){
+  INSTR=Math.max(0,Math.min(META.max_instr,Math.round(i)));
+  $('slider').value=INSTR; $('ibox').value=INSTR;
+  $('cur').style.left=(INSTR/META.max_instr*100)+'%';
+  const m=(META.modes||[]).filter(x=>x.instr<=INSTR).pop();
+  $('modenow').textContent=m?('mode '+hx(m.mode,2)+' @ '+fmt(m.instr)):'';
+  if(!refresh) return;
+  clearTimeout(tTimer);
+  tTimer=setTimeout(()=>{ drawScreen(); drawMem(); loadPC(); },70);
+}
+const step=d=>setInstr(INSTR+d);
+
+/* Exact execution position, read from the trace's execution timeline.
+   PC holds {addr, block, path} for the current instant; PATH is the real
+   sequence of addresses executed around it -- the actual route taken on this
+   pass, not the CFG's set of possible successors. */
+let PC=null;
+async function loadPC(){
+  const r=await (await fetch('/api/pc?instr='+INSTR)).json();
+  PC=r; markLive(); renderPath();
+  if(SEL!=null) highlightCur();
+  return r;
+}
+function markLive(){
+  const a=PC&&PC.block!=null?PC.block:null;
+  document.querySelectorAll('.node').forEach(n=>
+    n.classList.toggle('live', a!=null && +n.dataset.a===a));
+  if(!PC){ $('ginfo').textContent=''; return; }
+  $('ginfo').textContent = PC.exact
+    ? 'PC '+hx(PC.addr)+(PC.block==null?' (BIOS)':'')
+    : 'PC unknown (old trace)';
+}
+function highlightCur(){
+  document.querySelectorAll('#code .ins').forEach(d=>
+    d.classList.toggle('cur', PC&&+d.dataset.a===PC.addr));
+}
+/* the executed path around the cursor, one row per instruction in time */
+function renderPath(){
+  const el=$('path'); if(!el) return;
+  el.innerHTML='';
+  if(!PC||!PC.path){ el.textContent='no execution timeline'; return; }
+  PC.path.forEach((a,k)=>{
+    const n=PC.lo+k;
+    const d=document.createElement('div');
+    d.className='ins'+(n===PC.instr?' cur':'');
+    d.innerHTML=`<span class="a">${fmt(n)}</span><span class="t">${hx(a)}</span>`;
+    d.onclick=()=>{ setInstr(n); if(PC.blocks[k]!=null) select(PC.blocks[k],true); };
+    el.appendChild(d);
+  });
+  const c=el.querySelector('.cur'); if(c) c.scrollIntoView({block:'center'});
+}
+function liveBlock(){ return PC&&PC.block!=null?BY[PC.block]:null; }
+
+/* ---------------- left list ---------------- */
+function listSource(){
+  if(VIEW==='hot') return [...CFG].sort((a,b)=>b.h-a.h);
+  if(VIEW==='all') return [...CFG].sort((a,b)=>a.a-b.a);
+  const c=[...CFG].filter(b=>b.c>0).sort((a,b)=>b.c-a.c);
+  return c.length?c:[...CFG].sort((a,b)=>b.h-a.h);
+}
+function renderList(){
+  const q=$('find').value.trim().toLowerCase();
+  let src=listSource();
+  if(q){
+    const n=parseInt(q,16);
+    src=src.filter(b=>hx(b.a).toLowerCase().includes(q)
+      ||(!isNaN(n)&&b.a<=n&&n<=b.e)||(b.t||'').includes(q));
+  }
+  $('listttl').textContent=VIEW==='hot'?'hottest':VIEW==='all'?'all blocks':'entry points';
+  const el=$('list'); el.innerHTML='';
+  for(const b of src.slice(0,700)){
+    const d=document.createElement('div');
+    d.className='row'+(SEL===b.a?' on':''); d.dataset.a=b.a;
+    const x=VIEW==='hot'?fmt(b.h)+' hits':b.c>0?b.c+' callers':b.n+' ins';
+    d.innerHTML=`<b>${hx(b.a)}</b> <span class=k>${hx(b.cs,4)}:${hx(b.ip,4)}</span> <span class=tag>${x}</span>`;
+    d.onclick=()=>select(b.a,true);
+    el.appendChild(d);
+  }
+}
+
+/* ---------------- graph ---------------- */
+function neighbourhood(root,up=2,down=3,cap=110){
+  const lvl=new Map([[root,0]]);
+  let f=[root];
+  for(let d=1;d<=down;d++){ const nx=[];
+    for(const a of f) for(const o of (BY[a]?.o||[]))
+      if(!lvl.has(o)&&lvl.size<cap){lvl.set(o,d);nx.push(o);}
+    f=nx; if(!f.length)break; }
+  f=[root];
+  for(let d=1;d<=up;d++){ const nx=[];
+    for(const a of f) for(const p of (PRED[a]||[]))
+      if(!lvl.has(p)&&lvl.size<cap){lvl.set(p,-d);nx.push(p);}
+    f=nx; if(!f.length)break; }
+  return lvl;
+}
+function layout(root){
+  const lvl=neighbourhood(root), rows={};
+  for(const [a,d] of lvl) (rows[d]=rows[d]||[]).push(a);
+  const ds=Object.keys(rows).map(Number).sort((a,b)=>a-b);
+  const W=156,H=32,GX=24,GY=62,pos={};
+  ds.forEach((d,ri)=>{
+    const r=rows[d].sort((a,b)=>a-b);
+    const tot=r.length*(W+GX)-GX;
+    r.forEach((a,i)=>pos[a]={x:i*(W+GX)-tot/2,y:ri*GY,w:W,h:H});
+  });
+  const edges=[];
+  for(const [a] of lvl) for(const o of (BY[a]?.o||[]))
+    if(lvl.has(o)) edges.push([a,o,BY[a].t==='call']);
+  return {pos,edges};
+}
+function drawGraph(){
+  if(SEL==null)return;
+  LAY=layout(SEL);
+  const {pos,edges}=LAY;
+  let s=`<defs>
+   <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#39414f"/></marker>
+   <marker id="arh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6ea8fe"/></marker>
+   <marker id="arc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c297ff"/></marker>
+   </defs><g id="cam">`;
+  for(const [a,b,isCall] of edges){
+    const p=pos[a],q=pos[b]; if(!p||!q)continue;
+    const x1=p.x+p.w/2,y1=p.y+p.h,x2=q.x+q.w/2,y2=q.y,my=(y1+y2)/2;
+    s+=`<path class="edge${isCall?' call':''}${(a===SEL||b===SEL)?' hl':''}" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/>`;
+  }
+  for(const a in pos){
+    const p=pos[a],b=BY[a];
+    s+=`<g class="node${+a===SEL?' sel':''}${b.h>50000?' hot':''}" data-a="${a}" transform="translate(${p.x},${p.y})">
+      <rect width="${p.w}" height="${p.h}" rx="3"/>
+      <text x="8" y="13">${hx(b.a)}  ${b.t}</text>
+      <text x="8" y="25" opacity=".75">${b.n} ins · ${fmt(b.h)} hits${b.c?' · '+b.c+' cal':''}</text></g>`;
+  }
+  $('svg').innerHTML=s+'</g>';
+  $('svg').querySelectorAll('.node').forEach(n=>n.onclick=()=>select(+n.dataset.a,true));
+  fit(); markLive();
+}
+const cam=()=>{const g=$('svg').querySelector('#cam');
+  if(g)g.setAttribute('transform',`translate(${tx},${ty}) scale(${sc})`);};
+function fit(){
+  if(!LAY)return;
+  const w=$('gwrap').clientWidth,h=$('gwrap').clientHeight;
+  const v=Object.values(LAY.pos); if(!v.length)return;
+  const x0=Math.min(...v.map(p=>p.x)),x1=Math.max(...v.map(p=>p.x+p.w));
+  const y0=Math.min(...v.map(p=>p.y)),y1=Math.max(...v.map(p=>p.y+p.h));
+  sc=Math.min(w/(x1-x0+70),h/(y1-y0+70),1.7);
+  tx=w/2-((x0+x1)/2)*sc; ty=34-y0*sc; cam();
+}
+
+/* ---------------- selection ---------------- */
+async function select(a,push){
+  if(push&&SEL!=null&&SEL!==a)HIST.push(SEL);
+  SEL=a;
+  document.querySelectorAll('.row').forEach(r=>r.classList.toggle('on',+r.dataset.a===a));
+  drawGraph();
+  const b=await (await fetch('/api/block?addr='+a)).json();
+  $('bttl').innerHTML=`<b>${hx(b.addr)}</b> &nbsp;<span class=k>${b.term}</span>`;
+  $('bmeta').textContent=`${fmt(b.hits)} hits · ${b.ninbound} inbound · first @ ${fmt(b.first)}`;
+  const c=$('code'); c.innerHTML='';
+  for(const i of b.ins){
+    const d=document.createElement('div'); d.className='ins'; d.dataset.a=i.addr;
+    d.innerHTML=`<span class="a">${hx(i.addr)}</span><span class="b">${i.bytes}</span><span class="t">${i.text}</span>`;
+    d.onclick=()=>{$('maddr').value=hx(i.addr);follow=false;drawMem();};
+    c.appendChild(d);
+  }
+  highlightCur();
+  const s=$('bsucc'); s.innerHTML='';
+  b.outs.forEach((o,k)=>{
+    const t=document.createElement('button');
+    t.textContent=(k+1)+'→ '+hx(o);
+    t.onclick=()=>select(o,true); s.appendChild(t);
+  });
+  $('bback').disabled=!HIST.length;
+  if(follow){$('maddr').value=hx(b.addr);drawMem();}
+}
+
+/* ---------------- screen + memory ---------------- */
+let sT=null,mT=null;
+function drawScreen(){
+  clearTimeout(sT);
+  sT=setTimeout(async()=>{
+    const r=await fetch('/api/screen?instr='+INSTR);
+    $('sdesc').textContent=r.headers.get('X-Screen-Desc')||'';
+    $('screen').src=URL.createObjectURL(await r.blob());
+  },60);
+}
+function drawMem(){
+  clearTimeout(mT);
+  mT=setTimeout(async()=>{
+    const base=parseInt($('maddr').value,16)||0;
+    const len=+$('mlen').value;
+    const r=await (await fetch(`/api/mem?base=${base}&len=${len}&instr=${INSTR}`)).json();
+    const t=new Set(r.touched), b=r.data.match(/../g)||[];
+    let o='';
+    for(let i=0;i<b.length;i+=16){
+      o+=`<span class=ma>${hx(base+i)}</span>  `;
+      for(let j=0;j<16;j++){
+        const k=i+j,v=b[k]; if(v===undefined){o+='   ';continue;}
+        o+=`<span class=${!t.has(k)?'mu':(v==='00'?'mz':'mv')}>${v.toUpperCase()}</span> `;
+      }
+      o+=' ';
+      for(let j=0;j<16;j++){
+        const k=i+j,v=b[k]; if(v===undefined)break;
+        const n=parseInt(v,16);
+        let ch=(n>=32&&n<127)?String.fromCharCode(n):'.';
+        if(ch==='<')ch='&lt;'; if(ch==='&')ch='&amp;';
+        o+=`<span class=${!t.has(k)?'mu':'mv'}>${ch}</span>`;
+      }
+      o+='\n';
+    }
+    $('mem').innerHTML=o;
+  },60);
+}
+
+/* ---------------- wiring ---------------- */
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
+  t.classList.add('on'); VIEW=t.dataset.v; renderList();});
+$('find').oninput=renderList;
+$('slider').oninput=e=>setInstr(+e.target.value);
+$('ibox').onchange=e=>setInstr(+e.target.value);
+$('tb1').onclick=()=>step(-1);   $('tf1').onclick=()=>step(1);
+$('tb2').onclick=()=>step(-1000); $('tf2').onclick=()=>step(1000);
+$('tb3').onclick=()=>step(-100000); $('tf3').onclick=()=>step(100000);
+$('bback').onclick=()=>{const p=HIST.pop(); if(p!=null)select(p,false);};
+async function blockStep(d){
+  const r=await (await fetch(`/api/nextblock?instr=${INSTR}&dir=${d}`)).json();
+  setInstr(r.instr);
+  if(r.block!=null) select(r.block,true);
+}
+$('nblk').onclick=()=>blockStep(1);
+$('pblk').onclick=()=>blockStep(-1);
+$('gotolive').onclick=async()=>{
+  if(!PC) await loadPC();
+  if(PC&&PC.block!=null) select(PC.block,true);
+};
+$('maddr').onchange=()=>{follow=false;drawMem();};
+$('mlen').onchange=drawMem;
+$('mfollow').onclick=()=>{follow=!follow;
+  $('mfollow').style.borderColor=follow?'var(--acc)':'';
+  if(follow&&SEL!=null){$('maddr').value=hx(SEL);drawMem();}};
+$('zin').onclick=()=>{sc*=1.25;cam();};
+$('zout').onclick=()=>{sc/=1.25;cam();};
+$('zfit').onclick=fit;
+$('tl').onclick=e=>{const r=e.currentTarget.getBoundingClientRect();
+  setInstr((e.clientX-r.left)/r.width*META.max_instr);};
+
+(function(){const svg=$('svg');let dx=0,dy=0,on=false;
+  svg.onmousedown=e=>{on=true;dx=e.clientX-tx;dy=e.clientY-ty;svg.classList.add('drag');};
+  addEventListener('mouseup',()=>{on=false;svg.classList.remove('drag');});
+  addEventListener('mousemove',e=>{if(on){tx=e.clientX-dx;ty=e.clientY-dy;cam();}});
+  svg.onwheel=e=>{e.preventDefault();const f=e.deltaY<0?1.12:1/1.12;
+    const r=svg.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+    tx=mx-(mx-tx)*f;ty=my-(my-ty)*f;sc*=f;cam();};})();
+
+addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  const b=BY[SEL];
+  if(e.key==='ArrowRight'){e.preventDefault();step(e.shiftKey?100000:1000);}
+  if(e.key==='ArrowLeft'){e.preventDefault();step(e.shiftKey?-100000:-1000);}
+  if(e.key==='.'){step(1);} if(e.key===','){step(-1);}
+  if(e.key==='n'){blockStep(1);} if(e.key==='p'){blockStep(-1);}
+  if(e.key==='Enter'&&b&&b.o.length)select(b.o[0],true);
+  if(e.key==='Backspace'){e.preventDefault();$('bback').click();}
+  if(e.key>='1'&&e.key<='4'&&b&&b.o[+e.key-1]!=null)select(b.o[+e.key-1],true);
+});
+addEventListener('resize',()=>{drawTimeline();fit();});
+boot();
+</script>
