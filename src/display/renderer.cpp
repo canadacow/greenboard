@@ -397,7 +397,7 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
 
     // --- Debug layers (must be enabled BEFORE device creation) ---
     // Temporary: set BENCH_D3D_DEBUG to 0 to turn off once 11on12 is stable.
-#define BENCH_D3D_DEBUG 1
+#define BENCH_D3D_DEBUG 0
     // GPU-based validation patches every shader and can push time-to-first-frame
     // into the minutes. Only worth it for chasing a specific GPU-side bug.
 #define BENCH_D3D_GPU_VALIDATION 0
