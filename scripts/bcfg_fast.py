@@ -25,13 +25,9 @@ NODE_DT = np.dtype([
     ("first", "<u8"), ("hits", "<u8"),
 ])
 EDGE_DT = np.dtype([("src", "<u4"), ("dst", "<u4")])
-PORT18_DT = np.dtype([
+PORT_DT = np.dtype([
     ("instr", "<u8"), ("port", "<u2"), ("cs", "<u2"), ("ip", "<u2"),
     ("data", "u1"), ("is_write", "u1"), ("_pad", "<u2"),
-])
-PORT16_DT = np.dtype([
-    ("instr", "<u8"), ("port", "<u2"), ("cs", "<u2"), ("ip", "<u2"),
-    ("data", "u1"), ("_pad", "u1"),
 ])
 
 
@@ -46,7 +42,6 @@ class FastTrace:
         off = 8
         self.nodes = self.edges = self.writes = self.ports = None
         self.exec = None
-        self.port_has_write = False
 
         while off < len(buf):
             tag = bytes(buf[off:off + 4])
@@ -74,12 +69,18 @@ class FastTrace:
                 self.exec = np.frombuffer(buf, "<u4", count, off)
                 off += count * 4
             elif tag == b"PORT":
+                # PORT is the last section, so its record size must divide the
+                # bytes remaining. A mismatch means the file was written by a
+                # different build -- say so instead of misparsing it.
                 rem = len(buf) - off
-                sz = rem // count if count else 16
-                dt = PORT18_DT if sz >= 18 else PORT16_DT
-                self.ports = np.frombuffer(buf, dt, count, off)
-                self.port_has_write = dt is PORT18_DT
-                off += count * sz
+                if count and rem != count * PORT_DT.itemsize:
+                    raise ValueError(
+                        "PORT section is %d bytes for %d records (%.2f each); "
+                        "this reader expects %d. Trace and binary are out of "
+                        "sync -- rebuild and re-record."
+                        % (rem, count, rem / count, PORT_DT.itemsize))
+                self.ports = np.frombuffer(buf, PORT_DT, count, off)
+                off += count * PORT_DT.itemsize
             else:
                 raise ValueError("unknown tag %r" % (tag,))
 
@@ -244,7 +245,7 @@ class FastTrace:
 
     def port_writes(self, port, instr=None):
         """All writes to a port at or before `instr`."""
-        if self.ports is None or not self.port_has_write:
+        if self.ports is None:
             return []
         p = self.ports
         m = (p["port"] == port) & (p["is_write"] == 1)

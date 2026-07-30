@@ -201,53 +201,8 @@ def render_screen(instr):
     return px, "text %dx25 mode %02X" % (cols, mode)
 
 
-def screen_text(instr):
-    t = TRACE
-    mode = t.last_port_write(0x3D8, instr) or 0x29
-    if mode & 0x02:
-        return None
-    cols = 80 if (mode & 0x01) else 40
-    fb = t.region_fast(CGA_BASE, CGA_SIZE, instr)
-    out = []
-    for r in range(25):
-        line = []
-        for c in range(cols):
-            ch = fb[(r * cols + c) * 2]
-            line.append(chr(ch) if 32 <= ch < 127 else
-                        (" " if ch in (0, 0xFF) else "."))
-        out.append("".join(line).rstrip())
-    return "\n".join(out)
-
 
 # ------------------------------------------------------------------- disasm
-
-def disasm_at(addr, instr, before=6, count=24):
-    """Disassemble around `addr` using the bytes live at `instr`.
-
-    Starts a little before the anchor and resyncs: x86 is not self-
-    synchronising backwards, so the leading instructions may be wrong until
-    the stream aligns. The anchor line itself is always correct because it is
-    decoded from a known instruction boundary.
-    """
-    t = TRACE
-    start = max(0, addr - before)
-    length = 128
-    buf = t.snapshot(instr)[start:start + length].tobytes()
-
-    known = set(int(a) for a in t.nodes["addr"])
-    out = []
-    for ins in MD.disasm(buf, start):
-        out.append(dict(
-            addr=ins.address,
-            bytes=ins.bytes.hex(),
-            text="%s %s" % (ins.mnemonic, ins.op_str) if ins.op_str
-                 else ins.mnemonic,
-            executed=ins.address in known,
-            anchor=ins.address == addr,
-        ))
-        if len(out) >= count:
-            break
-    return out
 
 
 def build_cfg():
@@ -460,10 +415,195 @@ def build_cfg():
     return blocks, decoded, owner, succ, pred
 
 
+def build_functions(blocks, callers=None):
+    """Group basic blocks into functions.
+
+    A function's entry is a block that something CALLs, plus the program's
+    first block. Its body is everything reachable from that entry by ordinary
+    flow -- branches and fall-through -- without passing through another
+    entry and without following call edges, which belong to the callee.
+
+    Blocks reachable from no entry at all (dead ends, or code the trace
+    entered by a jump from somewhere unrecorded) become their own single-block
+    functions so nothing is dropped from the view.
+    """
+    # Entries: any block that is the target of a CALL.
+    entries = set()
+    for b in blocks.values():
+        if b["term"] in ("call", "lcall") and b["outs"]:
+            entries.add(b["outs"][0])
+    if blocks:
+        entries.add(min(blocks, key=lambda a: blocks[a]["first"]))
+
+    # Flow edges only -- a call's target is the callee's problem, but its
+    # fall-through continues this function.
+    flow = {}
+    for a, b in blocks.items():
+        if b["term"] in ("call", "lcall"):
+            # outs[0] is the callee; anything after is the return path.
+            flow[a] = b["outs"][1:]
+        else:
+            flow[a] = list(b["outs"])
+
+    # Claim blocks first-come, so each belongs to exactly one function.
+    # Without this a block reachable from two entries is counted in both and
+    # the instruction totals exceed what actually executed.
+    #
+    # Order matters: entries are visited by first execution, so the routine
+    # that ran earliest claims shared tails. That is arbitrary where two
+    # functions genuinely share code, which does happen in hand-written asm --
+    # the alternative is duplicating the tail, which double-counts instead.
+    funcs = {}
+    assigned = {}
+    order = sorted(e for e in entries if e in blocks)
+    order.sort(key=lambda a: blocks[a]["first"])
+    for e in order:
+        if e in assigned:
+            continue
+        body, stack = [e], [e]
+        assigned[e] = e
+        while stack:
+            cur = stack.pop()
+            for nxt in flow.get(cur, ()):
+                if nxt in assigned or nxt in entries or nxt not in blocks:
+                    continue
+                assigned[nxt] = e
+                body.append(nxt)
+                stack.append(nxt)
+        funcs[e] = sorted(body)
+
+    # Anything unclaimed becomes its own function so the view is complete.
+    for a in sorted(blocks):
+        if a not in assigned:
+            funcs[a] = [a]
+            assigned[a] = a
+
+    out = {}
+    for e, body in funcs.items():
+        ins = sum(blocks[a]["n"] for a in body if a in blocks)
+        hits = blocks[e]["hits"] if e in blocks else 0
+        lo = min(body)
+        hi = max(blocks[a]["end"] for a in body if a in blocks)
+        # Which functions this one calls, and who calls it.
+        outc = set()
+        for a in body:
+            b = blocks.get(a)
+            if b and b["term"] in ("call", "lcall") and b["outs"]:
+                t = assigned.get(b["outs"][0], b["outs"][0])
+                if t != e:
+                    outc.add(t)
+        out[e] = dict(
+            addr=e, blocks=body, nblocks=len(body), ins=ins,
+            hits=hits, lo=lo, hi=hi,
+            cs=blocks[e]["cs"] if e in blocks else 0,
+            ip=blocks[e]["ip"] if e in blocks else 0,
+            first=blocks[e]["first"] if e in blocks else 0,
+            ncall=blocks[e]["ncall"] if e in blocks else 0,
+            calls=sorted(outc),
+        )
+    # Callers, derived from the calls sets.
+    rev = {}
+    for e, f in out.items():
+        for t in f["calls"]:
+            rev.setdefault(t, set()).add(e)
+    for e, f in out.items():
+        f["callers"] = sorted(rev.get(e, ()))
+    return out, assigned
+
+
 CFG = None
 DECODED = None
 OWNER = None
 CODE = None
+FUNCS = None
+FUNC_OF = None
+MAP = None
+
+
+def flow_at(instr, before=40, after=120):
+    """The blocks executed around instruction `instr`, in execution order.
+
+    This is the chart: the actual path the program took, read top to bottom,
+    with each entry stamped by the instruction count where it began. Because
+    the rows ARE the timeline, scrolling the chart and dragging the scrubber
+    are the same motion.
+
+    A graph-distance layout was the wrong model -- it showed an abstract rank
+    from the entry point, which is not the order anything happens in.
+    """
+    ex = TRACE.exec
+    if ex is None or not len(ex):
+        return dict(rows=[], instr=instr)
+
+    n = max(0, min(len(ex) - 1, int(instr)))
+
+    # The window is counted in BLOCK ENTRIES, not instructions. A row is
+    # emitted when the executing block changes, so in a tight loop a window
+    # measured in instructions would yield almost nothing -- 60 instructions
+    # of a 3-instruction loop is one row.
+    # BIOS and interrupt handlers are skipped entirely. They are known code,
+    # they are not what is being reverse-engineered, and timer ticks land at
+    # arbitrary points -- a row saying "a handler ran here" is noise that
+    # breaks up the flow being read.
+    def blk_at(i):
+        return OWNER.get(int(ex[i]))
+
+    # Backwards: find where the previous `before` block entries began.
+    back = []
+    cur = blk_at(n)
+    i = n
+    while i > 0 and len(back) < before:
+        b = blk_at(i - 1)
+        if b is not None and b != cur:
+            back.append(i)
+            cur = b
+        i -= 1
+    lo = max(0, (back[-1] - 1) if back else 0)
+
+    # Forwards: walk until we have collected `after` block entries.
+    rows = []
+    cur_blk = None
+    entries = 0
+    for i in range(lo, len(ex)):
+        blk = blk_at(i)
+        if blk is None or blk == cur_blk:
+            continue
+        cur_blk = blk
+        entries += 1
+        if entries > before + after:
+            break
+        b = CFG.get(blk, {})
+        a = int(ex[i])
+        # Show the instruction AT this address -- the one about to execute --
+        # not the block's terminator. Those are different instructions and
+        # pairing one address with the other's mnemonic is simply wrong.
+        ins = next(MD.disasm(CODE.get(a, b"\x90"), a), None)
+        rows.append(dict(
+            instr=i, addr=a, blk=blk,
+            fn=FUNC_OF.get(blk, blk) if FUNC_OF else blk,
+            n=b.get("n", 0),
+            t=("%s %s" % (ins.mnemonic, ins.op_str) if ins and ins.op_str
+               else (ins.mnemonic if ins else "?")),
+            term=b.get("term", ""),
+            hits=b.get("hits", 0),
+            kind="call" if b.get("term") in ("call", "lcall") else "blk",
+        ))
+    hi = rows[-1]["instr"] if rows else lo
+
+    # Call depth, so nesting is visible as indentation: a CALL pushes, and a
+    # return shows up as the next row landing back at a shallower address.
+    depth = 0
+    stack = []
+    for r in rows:
+        # Returning: this row is back in the function that made the call.
+        if stack and stack[-1] == r["fn"]:
+            stack.pop()
+            depth = max(0, depth - 1)
+        r["depth"] = depth
+        if r["kind"] == "call":
+            stack.append(r["fn"])
+            depth += 1
+    return dict(rows=rows, instr=n, lo=lo, hi=hi, total=len(ex))
 
 
 def block_listing(lead, instr=None):
@@ -493,34 +633,6 @@ def block_listing(lead, instr=None):
     return out
 
 
-def cs_ip_at(instr):
-    """The address executing at instruction count `instr`.
-
-    Read straight from the execution timeline. Older traces without one fall
-    back to the nearest first-execution, which is only meaningful during the
-    discovery phase -- past that it is arbitrary, so it is reported as
-    inexact rather than presented as the live position.
-    """
-    t = TRACE
-    pc = t.pc_at(instr)
-    if pc is not None:
-        n = NODE_BY_ADDR.get(pc)
-        if n:
-            return pc, n["cs"], n["ip"], True
-        # Executing inside an excluded region (BIOS): no node, but the
-        # address is still exact.
-        return pc, pc >> 4, pc & 0xF, True
-
-    f = t.nodes["first"]
-    order = np.argsort(f)
-    k = np.searchsorted(f[order], instr, side="right")
-    if k == 0:
-        k = 1
-    n = t.nodes[order[k - 1]]
-    return int(n["addr"]), int(n["cs"]), int(n["ip"]), False
-
-
-NODE_BY_ADDR = {}
 
 
 # ---------------------------------------------------------------- meta/index
@@ -566,7 +678,7 @@ def build_meta():
                writers=sorted(e["writers"])[:4]) for e in events]
 
     modes = []
-    if t.ports is not None and t.port_has_write:
+    if t.ports is not None:
         p = t.ports
         m = (p["port"] == 0x3D8) & (p["is_write"] == 1)
         seen = None
@@ -619,54 +731,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(_load_page(), "text/html; charset=utf-8")
             elif u.path == "/api/meta":
                 self._send(json.dumps(META))
-            elif u.path == "/api/state":
-                instr = qi("instr", META["max_instr"])
-                addr, cs, ip, exact = cs_ip_at(instr)
-                self._send(json.dumps(dict(
-                    instr=instr, addr=addr, cs=cs, ip=ip, exact=exact,
-                    block=OWNER.get(addr),
-                    disasm=disasm_at(addr, instr),
-                    text=screen_text(instr),
-                )))
-            elif u.path == "/api/nextblock":
-                # Next/previous BLOCK transition along the real executed
-                # path. Walks the execution timeline until the owning block
-                # changes, so it follows the route actually taken rather than
-                # a CFG successor that may not have been the one used here.
-                instr = qi("instr", 0)
-                d = qi("dir", 1)
-                ex = TRACE.exec
-                if ex is None or not len(ex):
-                    self._send(json.dumps(dict(instr=instr)))
-                else:
-                    n = max(0, min(len(ex) - 1, instr))
-                    cur = OWNER.get(int(ex[n]))
-                    limit = 2_000_000
-                    i = n
-                    while 0 <= i < len(ex) and limit:
-                        i += d
-                        limit -= 1
-                        if not (0 <= i < len(ex)):
-                            break
-                        if OWNER.get(int(ex[i])) != cur:
-                            break
-                    i = max(0, min(len(ex) - 1, i))
-                    self._send(json.dumps(dict(
-                        instr=i, addr=int(ex[i]),
-                        block=OWNER.get(int(ex[i])))))
-            elif u.path == "/api/pc":
-                # Exact execution position, plus the real path taken around
-                # it -- the actual sequence on this pass, not CFG successors.
-                instr = qi("instr", META["max_instr"])
-                addr, cs, ip, exact = cs_ip_at(instr)
-                lo, win = TRACE.pc_window(instr, qi("before", 6),
-                                          qi("after", 18))
-                self._send(json.dumps(dict(
-                    instr=instr, addr=addr, cs=cs, ip=ip, exact=exact,
-                    block=OWNER.get(addr),
-                    lo=lo, path=win,
-                    blocks=[OWNER.get(a) for a in win],
-                )))
             elif u.path == "/api/screen":
                 instr = qi("instr", META["max_instr"])
                 px, desc = render_screen(instr)
@@ -677,37 +741,37 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
-            elif u.path == "/api/disasm":
-                addr = qi("addr", 0)
-                instr = qi("instr", META["max_instr"])
-                self._send(json.dumps(disasm_at(
-                    addr, instr, before=0, count=qi("count", 40))))
-            elif u.path == "/api/cfg":
-                # Whole graph, laid out client-side.
+            elif u.path == "/api/flow":
+                # The chart: blocks in the order they actually executed around
+                # a point in time. Rows are timeline positions, so scrolling
+                # the chart and moving the scrubber are the same motion.
+                instr = qi("instr", 0)
+                self._send(json.dumps(flow_at(
+                    instr, qi("before", 40), qi("after", 120))))
+            elif u.path == "/api/asm":
+                # Full disassembly of the function containing an address,
+                # decoded from the bytes each instruction actually executed.
+                a = qi("addr", 0)
+                fe = FUNC_OF.get(OWNER.get(a, a), None) if FUNC_OF else None
+                f = FUNCS.get(fe) if fe is not None else None
+                if not f:
+                    blk = OWNER.get(a)
+                    f = dict(addr=blk if blk is not None else a,
+                             blocks=[blk] if blk is not None else [])
+                out = []
+                for blk in f["blocks"]:
+                    b = CFG.get(blk)
+                    if not b:
+                        continue
+                    for ins in block_listing(blk, None):
+                        ins["blk"] = blk
+                        out.append(ins)
+                    out.append(dict(addr=None, blk=blk, sep=1,
+                                    text=b["term"],
+                                    outs=[hex(x) for x in b["outs"]]))
                 self._send(json.dumps(dict(
-                    blocks=[dict(a=b["addr"], e=b["end"], n=b["n"],
-                                 cs=b["cs"], ip=b["ip"], h=b["hits"],
-                                 f=b["first"], t=b["term"],
-                                 o=b["outs"], c=b["ncall"])
-                            for b in CFG.values()])))
-            elif u.path == "/api/block":
-                lead = qi("addr", 0)
-                instr = qi("instr", None)
-                b = CFG.get(lead)
-                if not b:
-                    lead = OWNER.get(lead)
-                    b = CFG.get(lead)
-                if not b:
-                    self._send(json.dumps(dict(error="no block")))
-                else:
-                    ins = block_listing(lead, instr)
-                    inbound = [x["addr"] for x in CFG.values()
-                               if lead in x["outs"]]
-                    self._send(json.dumps(dict(
-                        addr=b["addr"], end=b["end"], term=b["term"],
-                        hits=b["hits"], first=b["first"], cs=b["cs"],
-                        outs=b["outs"], ins=ins, inbound=inbound[:40],
-                        ninbound=len(inbound))))
+                    fn=f["addr"], ins=out,
+                    nblocks=len(f["blocks"]))))
             elif u.path == "/api/mem":
                 base = qi("base", 0) & 0xFFFFF
                 length = min(qi("len", 256), 4096)
@@ -723,15 +787,6 @@ class Handler(BaseHTTPRequestHandler):
                                      for x in a[np.flatnonzero(sel)]))
                 self._send(json.dumps(dict(
                     base=base, data=data.hex(), touched=touched)))
-            elif u.path == "/api/blocks":
-                t = TRACE
-                order = np.argsort(-t.nodes["hits"])[:qi("count", 200)]
-                self._send(json.dumps([
-                    dict(addr=int(t.nodes["addr"][i]),
-                         cs=int(t.nodes["cs"][i]), ip=int(t.nodes["ip"][i]),
-                         hits=int(t.nodes["hits"][i]),
-                         first=int(t.nodes["first"][i]))
-                    for i in order]))
             else:
                 self.send_error(404)
         except Exception as e:  # keep the server alive on a bad query
@@ -750,7 +805,7 @@ def _load_page():
 
 
 def main():
-    global TRACE, META, CFG, DECODED, OWNER
+    global TRACE, META, CFG, DECODED, OWNER, FUNCS, FUNC_OF
     if len(sys.argv) < 2:
         print(__doc__)
         return 1
@@ -765,19 +820,15 @@ def main():
     print("building CFG ...")
     CFG, DECODED, OWNER, _s, _p = build_cfg()
     META["blocks"] = len(CFG)
-    for n in TRACE.nodes:
-        a = int(n["addr"])
-        if a not in NODE_BY_ADDR:
-            NODE_BY_ADDR[a] = dict(cs=int(n["cs"]), ip=int(n["ip"]))
-    META["has_exec"] = TRACE.exec is not None and len(TRACE.exec) > 0
-    META["exec_len"] = int(len(TRACE.exec)) if META["has_exec"] else 0
-    if META["has_exec"]:
-        print("  execution timeline: %d instructions" % META["exec_len"])
-    else:
-        print("  no execution timeline in this trace -- rebuild to enable "
-              "exact time->code position")
-    print("  %d nodes, %d writes, %d basic blocks, %d mode changes"
-          % (META["nodes"], META["writes"], len(CFG), len(META["modes"])))
+    FUNCS, FUNC_OF = build_functions(CFG)
+    META["funcs"] = len(FUNCS)
+    print("  %d basic blocks in %d functions" % (len(CFG), len(FUNCS)))
+    if TRACE.exec is None or not len(TRACE.exec):
+        print("  ERROR: no execution timeline in this trace. The chart is the"
+              " executed path, so it needs one -- rebuild and re-record.")
+        return 1
+    META["max_instr"] = int(len(TRACE.exec)) - 1
+    print("  execution timeline: %d instructions" % len(TRACE.exec))
 
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print("\n  http://127.0.0.1:%d\n" % port)

@@ -71,20 +71,19 @@ class Trace:
                     "<%dI" % count, buf, off))
                 off += count * 4
             elif tag == b"PORT":
-                # Two on-disk layouts exist: the original 16-byte record
-                # (reads only) and the 18-byte record that added is_write.
-                # PORT is the last section, so the true size follows from the
-                # bytes remaining.
+                # Last section, so its record size must divide the bytes
+                # remaining. A mismatch means the trace came from a different
+                # build -- fail rather than misparse.
+                sz = struct.calcsize("<QHHHBBH")
                 rem = len(buf) - off
-                sz = rem // count if count else 16
+                if count and rem != count * sz:
+                    raise ValueError(
+                        "PORT section is %d bytes for %d records; expected %d "
+                        "each. Trace and binary are out of sync -- rebuild "
+                        "and re-record." % (rem, count, sz))
                 for _ in range(count):
-                    if sz >= 18:
-                        instr, port, cs, ip, data, isw, _pad = \
-                            struct.unpack_from("<QHHHBBH", buf, off)
-                    else:
-                        instr, port, cs, ip, data, _pad = \
-                            struct.unpack_from("<QHHHBB", buf, off)
-                        isw = 0
+                    instr, port, cs, ip, data, isw, _pad = \
+                        struct.unpack_from("<QHHHBBH", buf, off)
                     off += sz
                     self.ports.append(
                         dict(instr=instr, port=port, cs=cs, ip=ip,
