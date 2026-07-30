@@ -427,21 +427,30 @@ def build_functions(blocks, callers=None):
     entered by a jump from somewhere unrecorded) become their own single-block
     functions so nothing is dropped from the view.
     """
-    # Entries: any block that is the target of a CALL.
+    # Entries: the target of a CALL, or of a far jump.
+    #
+    # A far jump is a transfer to another region entirely -- the boot sector
+    # ends `ljmp 0x20:0x3c` into the loaded program -- so it starts a new
+    # routine just as a call does. Near jumps are ordinary intra-function
+    # control flow and are not entries.
     entries = set()
     for b in blocks.values():
-        if b["term"] in ("call", "lcall") and b["outs"]:
+        if b["term"] in ("call", "lcall", "ljmp") and b["outs"]:
             entries.add(b["outs"][0])
     if blocks:
         entries.add(min(blocks, key=lambda a: blocks[a]["first"]))
 
     # Flow edges only -- a call's target is the callee's problem, but its
-    # fall-through continues this function.
+    # fall-through continues this function. A far jump leaves entirely, so it
+    # contributes no flow: without this the walk runs straight through the
+    # ljmp and swallows the whole next region.
     flow = {}
     for a, b in blocks.items():
         if b["term"] in ("call", "lcall"):
             # outs[0] is the callee; anything after is the return path.
             flow[a] = b["outs"][1:]
+        elif b["term"] == "ljmp":
+            flow[a] = []
         else:
             flow[a] = list(b["outs"])
 
@@ -616,20 +625,24 @@ def block_listing(lead, instr=None):
     b = CFG.get(lead)
     if not b:
         return []
-    out, a = [], b["addr"]
     live = None
     if instr is not None:
         live = TRACE.snapshot(instr)
-    for _ in range(b["n"]):
+    out = []
+    # Walk the addresses the block actually visited. Stepping by decoded
+    # instruction length instead would list whatever bytes happen to follow,
+    # which is not where control went: at 002C1 `jae 0x2c9` the branch was
+    # taken every time, so 002C9 ran and 002C3 never did -- yet a
+    # length-stepping walk shows 002C3 and omits 002C9.
+    for a in b["body"]:
         buf = (live[a:a + 8].tobytes() if live is not None
                else CODE.get(a, b"\x90"))
         ins = next(MD.disasm(buf, a), None)
         if ins is None:
-            break
+            continue
         out.append(dict(addr=a, bytes=ins.bytes.hex(),
                         text="%s %s" % (ins.mnemonic, ins.op_str)
                              if ins.op_str else ins.mnemonic))
-        a += ins.size
     return out
 
 
@@ -758,20 +771,68 @@ class Handler(BaseHTTPRequestHandler):
                     blk = OWNER.get(a)
                     f = dict(addr=blk if blk is not None else a,
                              blocks=[blk] if blk is not None else [])
-                out = []
+                # One listing per address, in address order.
+                #
+                # Blocks can share instructions -- a block's tail is often
+                # another block's head -- so listing block-by-block prints
+                # those runs twice. Collect by address instead.
+                seen = {}
+                for blk in f["blocks"]:
+                    if blk not in CFG:
+                        continue
+                    for ins in block_listing(blk, None):
+                        seen.setdefault(ins["addr"], ins)
+
+                # Loops, as ranges. A back-edge from `src` to `head` where
+                # head <= src means everything between them is the loop body.
+                #
+                # "Target is at a lower address" is not sufficient on its own:
+                # a far jump forward to a lower PHYSICAL address (ljmp
+                # 0x20:0x3c -> 0023C) looks identical. Require the whole span
+                # to be contiguous executed code, which a real loop body is
+                # and a segment change is not.
+                addr_set = set(seen)
+
+                def contiguous(head, end):
+                    a = head
+                    while a < end:
+                        ins = seen.get(a)
+                        if ins is None:
+                            return False
+                        a += max(1, len(ins["bytes"]) // 2)
+                    return a == end
+
+                loops = []
                 for blk in f["blocks"]:
                     b = CFG.get(blk)
                     if not b:
                         continue
-                    for ins in block_listing(blk, None):
-                        ins["blk"] = blk
-                        out.append(ins)
-                    out.append(dict(addr=None, blk=blk, sep=1,
-                                    text=b["term"],
-                                    outs=[hex(x) for x in b["outs"]]))
+                    for tgt in b["outs"]:
+                        if (tgt in addr_set and tgt <= b["end"]
+                                and tgt in CFG and contiguous(tgt, b["end"])):
+                            loops.append((tgt, b["end"]))
+                # Innermost first, so nesting depth comes out right.
+                loops.sort(key=lambda lh: (lh[0], -lh[1]))
+
+                addrs = sorted(seen)
+                out = []
+                prev_end = None
+                for addr in addrs:
+                    ins = seen[addr]
+                    if prev_end is not None and addr != prev_end:
+                        out.append(dict(addr=None, sep=1, gap=addr - prev_end))
+                    # Depth = how many loop bodies contain this address.
+                    depth = sum(1 for (h, e) in loops if h <= addr <= e)
+                    ins = dict(ins)
+                    ins["depth"] = depth
+                    ins["head"] = 1 if any(h == addr for (h, _e) in loops) else 0
+                    ins["tail"] = 1 if any(e == addr for (_h, e) in loops) else 0
+                    out.append(ins)
+                    prev_end = addr + max(1, len(ins["bytes"]) // 2)
                 self._send(json.dumps(dict(
                     fn=f["addr"], ins=out,
-                    nblocks=len(f["blocks"]))))
+                    nblocks=len(f["blocks"]),
+                    loops=[dict(head=h, end=e) for (h, e) in loops])))
             elif u.path == "/api/mem":
                 base = qi("base", 0) & 0xFFFFF
                 length = min(qi("len", 256), 4096)

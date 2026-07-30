@@ -31,12 +31,12 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 .bd{overflow-y:auto;overflow-x:hidden;flex:1;min-height:0}
 
 /* ---- chart: execution flow, one row per block entered ---- */
-.fr{display:flex;gap:6px;padding:1px 6px;cursor:pointer;white-space:pre;
+.fr{display:block;padding:1px 6px;cursor:pointer;white-space:pre;
     border-left:2px solid transparent;font-size:11.5px}
 .fr:hover{background:#1a1f29}
 .fr.cur{background:#243044;border-left-color:var(--acc)}
-.fr .t{color:#4a5266;min-width:66px;text-align:right}
-.fr .a{color:var(--fg);min-width:44px}
+.fr .t{display:inline-block;width:70px;color:#4a5266;text-align:right}
+.fr .a{display:inline-block;width:50px;color:var(--fg);text-align:right}
 .fr .m{color:var(--dim)}
 .fr.cur .a,.fr.cur .m{color:var(--acc)}
 .fr.call .m{color:var(--call)}
@@ -44,14 +44,32 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
      border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
 
 /* ---- assembly ---- */
-.ins{display:flex;gap:8px;padding:1px 8px;white-space:pre}
+/* Rows are inline, not flex: browsers put a newline between flex items when
+   copying, so a flex row pastes as one line per column. Fixed-width inline
+   blocks keep the columns aligned and copy as a single line. */
+.ins{display:block;padding:0 8px;white-space:pre;line-height:16px}
 .ins:hover{background:#1a1f29}
 .ins.cur{background:#243044;box-shadow:inset 2px 0 0 var(--acc)}
-.ins .a{color:#5a6272;min-width:44px}
-.ins .b{color:#454d5e;min-width:92px}
+.ins .a{display:inline-block;width:46px;color:#5a6272}
+.ins .b{display:inline-block;width:96px;color:#454d5e}
 .ins.cur .t{color:var(--acc)}
-.bsep{padding:2px 10px;color:#4a5266;font-size:10.5px;
-      border-top:1px dashed #23293380}
+.bsep{height:7px;border-top:1px dashed #2a3140;margin:3px 0}
+
+/* Loop nesting rails: one per enclosing loop, drawn between the bytes column
+   and the mnemonic. The head and tail rows cap the rail so the extent of the
+   loop body is visible at a glance. */
+.pad,.rail{user-select:none}
+.pad{display:inline-block;width:9px}
+/* Rails span the full line height via a tall inline-block with no content,
+   so they draw continuously down a loop body. */
+.rail{display:inline-block;width:11px;height:16px;vertical-align:top;
+      border-left:1px solid #3a4a5e;margin-right:2px}
+.ins.lhead .rail{border-top:1px solid #4a6b8a;
+                 border-top-left-radius:3px}
+.ins.ltail .rail{border-bottom:1px solid #4a6b8a;
+                 border-bottom-left-radius:3px}
+.ins.lhead .t{color:#8fb8dd}
+.ins.lhead .a,.ins.ltail .a{color:#6d7a8d}
 
 /* ---- screen + memory ---- */
 /* A CGA frame is 320x200 or 640x200 in memory but was displayed at 4:3, so
@@ -134,10 +152,9 @@ async function loadFlow(){
     d.className='fr'+(row.kind==='call'?' call':'');
     d.dataset.instr=row.instr;
     d.dataset.addr=row.addr;
-    const pad='  '.repeat(Math.min(row.depth||0,8));
-    d.innerHTML=`<span class="t">${fmt(row.instr)}</span>`
-      +`<span class="a">${hx(row.addr)}</span>`
-      +`<span class="m">${pad}${row.t}  <span class=k>${row.n} ins</span></span>`;
+    d.innerHTML=`<span class="t">${fmt(row.instr)}  </span>`
+      +`<span class="a">${hx(row.addr)}  </span>`
+      +`<span class="m">${row.t}  <span class=k>${row.n} ins</span></span>`;
     d.onclick=()=>setInstr(row.instr);
     el.appendChild(d);
   }
@@ -165,16 +182,35 @@ async function loadAsm(addr){
   const el=$('asm'); el.innerHTML='';
   for(const i of r.ins){
     if(i.sep){
+      // Only where the listing actually jumps -- straight-line runs stay
+      // unbroken.
       const s=document.createElement('div');
       s.className='bsep';
-      s.textContent=`-- ${i.text} -> ${(i.outs||[]).join(' ')}`;
+      s.textContent='';
       el.appendChild(s);
       continue;
     }
     const d=document.createElement('div');
-    d.className='ins'; d.dataset.a=i.addr;
-    d.innerHTML=`<span class="a">${hx(i.addr)}</span>`
-      +`<span class="b">${i.bytes}</span><span class="t">${i.text}</span>`;
+    d.className='ins'+(i.head?' lhead':'')+(i.tail?' ltail':'');
+    d.dataset.a=i.addr;
+    // Loop nesting: one rail per enclosing loop, so a loop body reads as a
+    // block of code rather than a flat run with a divider at the top.
+    // A fixed base indent so top-level code is not flush against the bytes
+    // column, then one rail per enclosing loop.
+    //
+    // The rails are decoration; aria-hidden keeps them out of the clipboard
+    // so a copied listing pastes as "addr bytes text" per line rather than
+    // gaining blank lines. The tab characters are what actually separate the
+    // columns when pasted -- CSS columns alone paste as nothing.
+    let rails='<span class="pad" aria-hidden="true"></span>';
+    for(let k=0;k<(i.depth||0);k++)
+      rails+='<span class="rail" aria-hidden="true"></span>';
+    // The separating spaces live inside the columns, so the CSS width
+    // absorbs them on screen while the pasted text still has them.
+    d.innerHTML=`<span class="a">${hx(i.addr)}  </span>`
+      +`<span class="b">${i.bytes}  </span>`
+      +rails
+      +`<span class="t">${i.text}</span>`;
     d.onclick=()=>{};
     el.appendChild(d);
   }
