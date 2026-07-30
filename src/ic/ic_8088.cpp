@@ -563,7 +563,8 @@ EUTask<void> IC_8088::eu_run() {
 
 #if BENCH_CFG_TRACE
     if (tracer_)
-        tracer_->on_instruction(cs_ip, regs16()[REG_CS], reg_ip_, instr_count_);
+        tracer_->on_instruction(cs_ip, regs16()[REG_CS], reg_ip_, instr_count_,
+                                in_int_handler());
 #endif
 
     prefetch_base_ = cs_ip;

@@ -17,13 +17,20 @@ void CFGTracer::exclude_range(uint32_t lo, uint32_t hi_exclusive) {
 }
 
 void CFGTracer::on_instruction(uint32_t cs_ip, uint16_t cs, uint16_t ip,
-                               uint64_t instr) {
-    // Execution timeline. Recorded for EVERY instruction including excluded
-    // ones, so the index stays equal to the CPU's instruction count and a
-    // scrub to instant N lands on exactly what was executing -- excursions
-    // into BIOS included. Excluded addresses still contribute no CFG node.
+                               uint64_t instr, bool in_handler) {
+    // Execution timeline. Recorded for EVERY instruction -- excluded regions
+    // and interrupt handlers included -- so the index stays equal to the
+    // CPU's instruction count and a scrub to instant N lands on exactly what
+    // was executing.
     if (exec_.size() == instr)
         exec_.push_back(cs_ip);
+
+    // Inside a handler: no node, no edge, and leave prev_visible_ alone so
+    // the interrupted code's flow resumes across the excursion untouched.
+    if (in_handler) {
+        ++handler_instrs_;
+        return;
+    }
 
     if (excluded(cs_ip)) {
         // Inside an excluded region (BIOS). Emit nothing, but leave
@@ -175,10 +182,12 @@ bool CFGTracer::dump(const std::string& path) {
 
     std::fclose(f);
 
-    spdlog::info("[CFG] wrote {}: {} nodes, {} edges, {} instrs, {} writes, "
+    spdlog::info("[CFG] wrote {}: {} nodes, {} edges, {} instrs "
+                 "({} in handlers, excluded from CFG), {} writes, "
                  "{} port ops, {} code-overwrite events",
                  path, nodes_.size(), edges_.size(), exec_.size(),
-                 writes_.size(), ports_.size(), dirty_events_);
+                 handler_instrs_, writes_.size(), ports_.size(),
+                 dirty_events_);
     return true;
 }
 

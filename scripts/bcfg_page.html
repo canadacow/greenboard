@@ -67,6 +67,10 @@ button:disabled{opacity:.3;cursor:default}
 .edge.hl{stroke:var(--acc);stroke-width:1.6;marker-end:url(#arh)}
 .edge.call{stroke:#4b3a63}
 .edge.call.hl{stroke:var(--call);marker-end:url(#arc)}
+/* loop / lateral edges -- dashed so a back-edge is not mistaken for
+   another forward branch out of the source block */
+.edge.back{stroke:#4a5a44;stroke-dasharray:4 3}
+.edge.back.hl{stroke:var(--ok);stroke-dasharray:4 3;marker-end:url(#arb)}
 
 /* ---------- listings ---------- */
 .ins{display:flex;gap:7px;padding:1px 9px;white-space:pre;cursor:pointer}
@@ -342,11 +346,29 @@ function drawGraph(){
    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#39414f"/></marker>
    <marker id="arh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6ea8fe"/></marker>
    <marker id="arc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c297ff"/></marker>
+   <marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#57ab5a"/></marker>
    </defs><g id="cam">`;
+  // Forward edges drop from the bottom of the source into the top of the
+  // target. Back-edges (loops) and same-row edges route out to the side and
+  // re-enter the target from above, so a loop reads as a loop instead of as
+  // an extra arrow crossing the forward flow.
   for(const [a,b,isCall] of edges){
     const p=pos[a],q=pos[b]; if(!p||!q)continue;
-    const x1=p.x+p.w/2,y1=p.y+p.h,x2=q.x+q.w/2,y2=q.y,my=(y1+y2)/2;
-    s+=`<path class="edge${isCall?' call':''}${(a===SEL||b===SEL)?' hl':''}" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/>`;
+    const cls=`edge${isCall?' call':''}${(a===SEL||b===SEL)?' hl':''}`;
+    const x1=p.x+p.w/2, y1=p.y+p.h, x2=q.x+q.w/2, y2=q.y;
+    if(q.y>p.y){
+      const my=(y1+y2)/2;
+      s+=`<path class="${cls}" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/>`;
+    }else{
+      // Loop or lateral: leave the source's bottom, sweep around the outside,
+      // enter the target's top. Side is chosen by relative position so the
+      // arc stays clear of the boxes between them.
+      const left = x2 <= x1;
+      const sx = left ? Math.min(p.x,q.x)-30 : Math.max(p.x+p.w,q.x+q.w)+30;
+      s+=`<path class="${cls} back" d="M${x1},${y1}`
+        +` C${x1},${y1+22} ${sx},${y1+22} ${sx},${(y1+y2)/2}`
+        +` C${sx},${y2-26} ${x2},${y2-26} ${x2},${y2}"/>`;
+    }
   }
   for(const a in pos){
     const p=pos[a],b=BY[a];

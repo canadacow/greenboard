@@ -306,6 +306,23 @@ def build_cfg():
     RET = ("ret", "retf", "iret", "iretd")
     CALL = ("call", "lcall")
 
+    # Step to the address the CPU actually went to, not addr+size.
+    #
+    # The 8088 executes segment-override and REP prefixes as separate
+    # instructions (cases 27 and 23 in eu_run), so the trace holds a node at
+    # the prefix AND at the instruction it modifies -- 253 of them here.
+    # Capstone decodes the prefix node as one merged instruction, so its size
+    # spans both and addr+size steps straight over the body node. That skipped
+    # 841 executed addresses, whole runs of straight-line code.
+    #
+    # The recorded single successor is authoritative and needs no such
+    # reasoning.
+    def next_addr(a):
+        s = succ.get(a, ())
+        if len(s) == 1:
+            return next(iter(s))
+        return a + decoded[a][0]
+
     leaders = set()
     for a in addrs:
         p = pred.get(a, ())
@@ -317,30 +334,43 @@ def build_cfg():
     # A call's fall-through starts a new block.
     for a in addrs:
         if decoded[a][2] in CALL:
-            nxt = a + decoded[a][0]
+            nxt = next_addr(a)
             if nxt in aset:
                 leaders.add(nxt)
     if addrs:
         leaders.add(addrs[0])
 
+    # Partition the executed addresses into blocks.
+    #
+    # Walk in address order, following observed flow, and stop when the next
+    # address is another leader. Every executed address ends up in exactly one
+    # body: no overlap (a leader's walk cannot enter another leader) and no
+    # gaps (an address that is not a leader is reached from its predecessor,
+    # and one that is starts its own block).
+    #
+    # An earlier version walked leaders in dict order and let one block's walk
+    # swallow addresses that were themselves leaders, which orphaned 900
+    # instructions -- whole runs of straight-line code with a single
+    # contiguous predecessor each.
     blocks = {}
+    claimed = set()
     for lead in sorted(leaders):
+        if lead in claimed or lead not in aset:
+            continue
         body = []
         a = lead
         while True:
-            if a not in aset:
+            if a not in aset or a in claimed:
                 break
             body.append(a)
+            claimed.add(a)
             mn = decoded[a][2]
             if mn in RET:
                 break
-            s = succ.get(a, set())
-            nxt = a + decoded[a][0]
-            if len(s) > 1 or mn in CALL:
+            if len(succ.get(a, ())) > 1 or mn in CALL:
                 break
-            if nxt in leaders or nxt not in aset:
-                break
-            if s and nxt not in s:
+            nxt = next_addr(a)
+            if nxt in leaders or nxt not in aset or nxt in claimed:
                 break
             a = nxt
         if not body:
@@ -355,11 +385,17 @@ def build_cfg():
                 fall = last + decoded[last][0]
                 if fall in aset and fall not in outs:
                     outs.append(fall)
+        if not outs and mn not in RET:
+            # Straight-line end with no recorded successor: the next executed
+            # address continues the flow.
+            nxt = next_addr(last)
+            if nxt in aset:
+                outs.append(nxt)
         blocks[lead] = dict(
             addr=lead, end=last, n=len(body),
             cs=info[lead]["cs"], ip=info[lead]["ip"],
             first=info[lead]["first"], hits=info[lead]["hits"],
-            term=mn, outs=outs,
+            term=mn, outs=outs, body=body,
         )
 
     # Map every executed address to its owning block.
@@ -368,20 +404,24 @@ def build_cfg():
     # a block's instructions come from following observed edges, so stepping
     # by length can diverge and leave the tail unowned. Bodies are rebuilt
     # here from the same rule that produced them.
+    # Use the addresses the block walk actually visited. Re-deriving them by
+    # stepping decoded instruction lengths diverges wherever a recorded
+    # successor is not addr+size, which orphaned 42% of executed addresses.
     owner = {}
     for lead, b in blocks.items():
-        a = lead
-        for _ in range(b["n"]):
+        for a in b["body"]:
             owner[a] = lead
-            if a not in decoded:
-                break
-            a += decoded[a][0]
 
-    # Anything executed but still unowned -- addresses interior to an
-    # instruction, or reached by a path the block walk did not cover -- is
-    # attributed to the nearest preceding block start in the same region.
-    # Without this, roughly a quarter of the execution timeline lands in a
-    # hole and time->block lookup reports nothing.
+    # Anything executed but still unowned is attributed to the nearest
+    # preceding block start in the same region, so time->block lookup always
+    # resolves.
+    #
+    # How much this has to do is a health check on the CFG rather than a
+    # feature: before interrupt handlers were excluded from edge recording,
+    # phantom edges fragmented straight-line code and left ~24% of the
+    # execution timeline unowned. A large count here means edges are still
+    # being recorded that did not happen.
+    unowned_before = sum(1 for a in addrs if a not in owner)
     leads_sorted = sorted(blocks)
     if leads_sorted:
         import bisect as _bi
@@ -394,6 +434,10 @@ def build_cfg():
                 # Only claim it if it plausibly belongs to that block's span.
                 if a - lead <= 64:
                     owner[a] = lead
+    if unowned_before:
+        print("  %d/%d executed addresses needed fallback ownership (%.1f%%)"
+              % (unowned_before, len(addrs),
+                 100.0 * unowned_before / max(1, len(addrs))))
 
     for b in blocks.values():
         seen, tgt = set(), []

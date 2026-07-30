@@ -457,6 +457,37 @@ private:
 
 #if BENCH_CFG_TRACE
     CFGTracer* tracer_ = nullptr;
+
+    // Pending interrupt-handler stack watermarks. See PC_INTERRUPT_.
+    static constexpr int kIntSpMax = 16;
+    uint16_t int_sp_[kIntSpMax] = {};
+    uint16_t int_ss_[kIntSpMax] = {};
+    uint8_t  int_sp_top_ = 0;
+
+    // True while the CPU is inside an interrupt handler. Pops watermarks the
+    // stack has already unwound past, so it self-corrects regardless of how
+    // the handler returned -- IRET, RETF n, or a stack fixup and a jump.
+    bool in_int_handler() {
+        // Reg16::SS / Reg16::SP -- the file-scope REG_* constants used by the
+        // macros in this header live in the .cpp and are not visible here.
+        //
+        // A watermark is retired when the stack has unwound past it, OR when
+        // SS no longer matches the stack it was taken on -- that stack is
+        // gone, so the watermark can never be reached and holding it would
+        // latch the gate on forever. (POST takes interrupts on the BIOS
+        // stack; the boot sector then does MOV SS,0020 and never returns to
+        // it.)
+        while (int_sp_top_) {
+            const uint16_t sp = regs16()[Reg16::SP];
+            const uint16_t ss = regs16()[Reg16::SS];
+            const int top = int_sp_top_ - 1;
+            if (ss != int_ss_[top] || sp > int_sp_[top])
+                --int_sp_top_;
+            else
+                break;
+        }
+        return int_sp_top_ != 0;
+    }
 #endif
 
     uint16_t start_cs_, start_ip_;
@@ -633,6 +664,40 @@ private:
     reg_ip_ = (uint16_t)(_ilo | (_ihi << 8)); \
     regs8()[FLAG_TF] = 0; \
     regs8()[FLAG_IF] = 0; \
+    INT_DEPTH_ENTER_(); \
 } while(0)
+
+// Interrupt-handler detection for the execution tracer.
+//
+// Every path into a handler on a real 8088 -- INTR, NMI, INT n, INT 3, INTO,
+// divide error, trap flag -- goes through PC_INTERRUPT_, which pushes flags,
+// CS and IP: six bytes. Recording SS:SP at that moment gives a watermark, and
+// the handler has finished once SP has risen back to it.
+//
+// Counting IRETs instead does not work: this trace executes 111176 INTs but
+// only 7681 IRETs, because BIOS service handlers commonly return with RETF n
+// after adjusting the stack. A watermark does not care how the handler left.
+//
+// SS is captured too, since a handler that switches stacks would otherwise
+// compare SP against an unrelated stack. Nesting works without a counter --
+// the outermost watermark is the lowest, so the deepest one still pending is
+// what matters, and a small stack of them is kept.
+//
+// While a handler is active the tracer records the execution timeline but
+// builds no CFG node or edge. Otherwise a handler entered between two
+// instructions looks like a control-flow successor of whatever it
+// interrupted: edges that never existed, conditional jumps with impossible
+// fan-out, and straight-line code fragmented into single-instruction blocks.
+#if BENCH_CFG_TRACE
+#define INT_DEPTH_ENTER_() do { \
+    if (int_sp_top_ < kIntSpMax) { \
+        int_sp_[int_sp_top_] = regs16()[REG_SP]; \
+        int_ss_[int_sp_top_] = regs16()[REG_SS]; \
+        ++int_sp_top_; \
+    } \
+} while(0)
+#else
+#define INT_DEPTH_ENTER_() do { } while(0)
+#endif
 
 } // namespace bench

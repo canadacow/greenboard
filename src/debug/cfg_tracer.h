@@ -101,9 +101,19 @@ public:
     // ---- Hot-path hooks ----
 
     // Called at the top of each instruction, before any fetch.
+    //
     // Records the node (first visit only) and the edge from the previous
-    // instruction (non-sequential only).
-    void on_instruction(uint32_t cs_ip, uint16_t cs, uint16_t ip, uint64_t instr);
+    // instruction. `in_handler` is true while the CPU is inside an interrupt
+    // handler: the execution timeline still records those instructions, so
+    // its index stays equal to the CPU's instruction count, but no CFG node
+    // or edge is built for them.
+    //
+    // Without that gate, a handler entered between two instructions looks
+    // like a control-flow successor of whatever it interrupted -- inventing
+    // edges that never existed, giving conditional jumps impossible fan-out,
+    // and fragmenting straight-line code into single-instruction blocks.
+    void on_instruction(uint32_t cs_ip, uint16_t cs, uint16_t ip,
+                        uint64_t instr, bool in_handler = false);
 
     // Called from DRAM / ISA RAM / video when a byte lands in memory.
     // Fires for every write regardless of who drove the bus -- a DMA
@@ -135,6 +145,7 @@ public:
     size_t port_count()  const { return ports_.size(); }
     size_t exec_count()  const { return exec_.size(); }
     uint64_t dirty_events() const { return dirty_events_; }
+    uint64_t handler_instrs() const { return handler_instrs_; }
 
 private:
     bool excluded(uint32_t addr) const {
@@ -177,6 +188,10 @@ private:
     bool     in_excluded_  = false;
 
     uint64_t dirty_events_ = 0;
+
+    // Instructions executed inside interrupt handlers. On the timeline but
+    // deliberately absent from the CFG.
+    uint64_t handler_instrs_ = 0;
 };
 
 } // namespace bench
