@@ -562,9 +562,22 @@ EUTask<void> IC_8088::eu_run() {
     if (cs_ip == 0) { halted_ = true; break; }
 
 #if BENCH_CFG_TRACE
-    if (tracer_)
+    if (tracer_) {
+        bool in_handler = in_int_handler();
         tracer_->on_instruction(cs_ip, regs16()[REG_CS], reg_ip_, instr_count_,
-                                in_int_handler());
+                                in_handler);
+        // Full register state per instruction, so any point in the run can be
+        // resumed exactly. Skipped inside BIOS and handlers -- known code, and
+        // it would double the file for nothing.
+        if (!in_handler && !tracer_->is_excluded(cs_ip)) {
+            // Pack FLAGS locally rather than via make_flags(), which writes
+            // scratch_uint_ -- live EU state at this point.
+            uint16_t fl = 0xF002;
+            for (int i = 8; i >= 0; --i)
+                fl += regs8()[FLAG_CF + i] << TABLE[TABLE_FLAGS_BITFIELDS][i];
+            tracer_->on_state(cs_ip, regs16(), fl, instr_count_);
+        }
+    }
 #endif
 
     prefetch_base_ = cs_ip;

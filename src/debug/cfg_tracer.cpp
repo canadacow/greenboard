@@ -7,9 +7,13 @@ CFGTracer::CFGTracer()
     : gen_(ADDR_SPACE, 0), executed_(ADDR_SPACE, 0) {
     nodes_.reserve(1u << 16);
     edges_.reserve(1u << 16);
-    writes_.reserve(1u << 20);
-    ports_.reserve(1u << 14);
-    exec_.reserve(1u << 24);   // ~16M instructions, 64 MB; grows if needed
+    ports_.reserve(1u << 22);
+    // Reserve generously up front so a long run never reallocates mid-trace.
+    // Sized for ~256M instructions: 1 GB of timeline, 10 GB of register state,
+    // 4 GB of writes. Trivial against 255 GB of RAM.
+    exec_.reserve(1ull << 28);
+    states_.reserve(1ull << 28);
+    writes_.reserve(1ull << 27);
 }
 
 void CFGTracer::exclude_range(uint32_t lo, uint32_t hi_exclusive) {
@@ -82,6 +86,19 @@ void CFGTracer::on_write(uint32_t addr, uint8_t data,
     }
 
     writes_.push_back(WriteRec{instr, addr, cs, ip, data});
+}
+
+void CFGTracer::on_state(uint32_t addr, const uint16_t* r, uint16_t flags,
+                         uint64_t instr) {
+    // Register file order matches IC_8088::Reg16:
+    //   AX CX DX BX SP BP SI DI ES CS SS DS
+    states_.push_back(StateRec{
+        instr, addr,
+        r[0], r[1], r[2], r[3],
+        r[4], r[5], r[6], r[7],
+        r[8], r[9], r[10], r[11],
+        flags, 0,
+    });
 }
 
 void CFGTracer::on_port_read(uint16_t port, uint8_t data,
@@ -168,6 +185,18 @@ bool CFGTracer::dump(const std::string& path) {
     if (!exec_.empty())
         std::fwrite(exec_.data(), sizeof(uint32_t), exec_.size(), f);
 
+    // Register state per traced instruction. Bulk-written, which requires the
+    // struct to have no implicit padding -- asserted so a layout change here
+    // cannot silently desynchronise the reader.
+    // instr(8) + addr(4) + 12 registers + flags + _pad (14 x u16) = 40.
+    static_assert(sizeof(StateRec) == 8 + 4 + 14 * 2,
+                  "StateRec has implicit padding; the reader expects 40 bytes "
+                  "field-for-field");
+    put_tag(f, "STAT");
+    put<uint64_t>(f, states_.size());
+    if (!states_.empty())
+        std::fwrite(states_.data(), sizeof(StateRec), states_.size(), f);
+
     put_tag(f, "PORT");
     put<uint64_t>(f, ports_.size());
     for (const auto& p : ports_) {
@@ -184,10 +213,10 @@ bool CFGTracer::dump(const std::string& path) {
 
     spdlog::info("[CFG] wrote {}: {} nodes, {} edges, {} instrs "
                  "({} in handlers, excluded from CFG), {} writes, "
-                 "{} port ops, {} code-overwrite events",
+                 "{} port ops, {} reg states, {} code-overwrite events",
                  path, nodes_.size(), edges_.size(), exec_.size(),
                  handler_instrs_, writes_.size(), ports_.size(),
-                 dirty_events_);
+                 states_.size(), dirty_events_);
     return true;
 }
 

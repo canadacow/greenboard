@@ -43,6 +43,18 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
 .fnh{padding:3px 10px;color:var(--hot);font-size:11px;background:#1b1f28;
      border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
 
+/* Register panel: fixed grid so values do not shift as they change, and a
+   highlight on whatever changed since the previous instruction -- which is
+   the whole point of having per-instruction state. */
+#regs{padding:5px 8px;display:grid;font-size:11.5px;line-height:17px;
+      grid-template-columns:repeat(4,1fr);gap:0 10px}
+#regs div{white-space:pre}
+#regs .rn{color:#5a6272}
+#regs .rv{color:var(--fg)}
+#regs .chg .rv{color:var(--hot);font-weight:600}
+#regs .fl{grid-column:1/-1;color:var(--dim)}
+#regs .fl b{color:var(--ok)}
+
 /* ---- assembly ---- */
 /* Rows are inline, not flex: browsers put a newline between flex items when
    copying, so a flex row pastes as one line per column. Fixed-width inline
@@ -87,12 +99,25 @@ body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
   <input id="ibox">
   <input type="range" id="slider" min="0" value="0">
   <span class="k" id="pos"></span>
+  <span class="sep"></span>
+  <button id="bPrevFn" title="previous function (shift+F)">&#9664; fn</button>
+  <button id="bNextFn" title="next function (F)">fn &#9654;</button>
+  <button id="bOver" title="step over the call at the cursor (O)">over</button>
+  <button id="bOut" title="run until this routine returns (U)">out &#8593;</button>
 </div>
 
 <div id="main">
   <div class="pane">
-    <div class="hd"><span>execution flow</span><span class="k" id="fnnow"></span></div>
+    <div class="hd">
+      <span>execution</span>
+      <span>
+        <span class="tab on" id="tabStep">step</span>
+        <span class="tab" id="tabBlk">blocks</span>
+      </span>
+    </div>
     <div class="bd" id="flow"></div>
+    <div class="hd"><span>registers</span><span class="k" id="regmeta"></span></div>
+    <div id="regs"></div>
   </div>
   <div class="pane">
     <div class="hd"><span id="asmttl">assembly</span><span class="k" id="asmmeta"></span></div>
@@ -130,8 +155,69 @@ function setInstr(i){
 }
 const step=d=>setInstr(INSTR+d);
 
-/* ---- chart: what executed, in order ---- */
+/* ---- step view: one row per instruction, with register state ----
+   Nothing is emulated. The trace holds the register file at every traced
+   instruction, so stepping is an array index and stepping backwards is free. */
+let STEP=true, PREVREGS=null;
+
+async function loadStep(){
+  const at=INSTR;
+  const r=await (await fetch(`/api/step?instr=${at}&before=30&after=120`)).json();
+  if(at!==INSTR) return;
+  const el=$('flow'); el.innerHTML='';
+  let cur=null;
+  for(const row of r.rows){
+    const d=document.createElement('div');
+    d.className='fr'+(row.instr===at?' cur':'');
+    d.dataset.instr=row.instr;
+    if(row.instr===at) cur=row;
+    const bios = row.regs===undefined;
+    d.innerHTML=`<span class="t">${fmt(row.instr)}  </span>`
+      +`<span class="a">${hx(row.addr)}  </span>`
+      +`<span class="m"${bios?' style="opacity:.45"':''}>${row.text}</span>`;
+    d.onclick=()=>setInstr(row.instr);
+    el.appendChild(d);
+  }
+  const c=el.querySelector('.cur');
+  if(c) c.scrollIntoView({block:'center'});
+  // Registers for the current instruction, with changes since the previous
+  // one highlighted.
+  const prev=r.rows.find(x=>x.instr===at-1);
+  showRegs(cur, prev);
+  if(cur) loadAsm(cur.addr);
+}
+
+function showRegs(cur, prev){
+  const el=$('regs');
+  if(!cur||!cur.regs){
+    el.innerHTML='<div class="fl">no register state (BIOS or handler)</div>';
+    $('regmeta').textContent='';
+    return;
+  }
+  const R=cur.regs, P=prev&&prev.regs?prev.regs:null;
+  const order=['ax','bx','cx','dx','si','di','bp','sp',
+               'ds','es','ss','cs'];
+  let h='';
+  for(const n of order){
+    const chg=P&&P[n]!==R[n];
+    h+=`<div class="${chg?'chg':''}"><span class="rn">${n.toUpperCase()}</span>`
+      +` <span class="rv">${hx(R[n],4)}</span></div>`;
+  }
+  // Flags word, decoded. Bit positions per the 8088 FLAGS register.
+  const f=R.flags;
+  const bits=[['OF',11],['DF',10],['IF',9],['TF',8],
+              ['SF',7],['ZF',6],['AF',4],['PF',2],['CF',0]];
+  h+='<div class="fl">'+bits.map(([n,b])=>
+      (f>>b)&1 ? '<b>'+n+'</b>' : '<span style="opacity:.35">'+n+'</span>'
+     ).join(' ')+'</div>';
+  el.innerHTML=h;
+  $('regmeta').textContent='DS:'+hx(R.ds,4)+' -> '
+    +hx(((R.ds*16)&0xFFFFF),5);
+}
+
+/* ---- block view: one row per block entered ---- */
 async function loadFlow(){
+  if(STEP) return loadStep();
   const at=INSTR;
   const r=await (await fetch(`/api/flow?instr=${at}&before=60&after=200`)).json();
   if(at!==INSTR) return;
@@ -238,6 +324,25 @@ async function loadScreen(){
 /* ---- wiring: one control ---- */
 $('slider').oninput=e=>setInstr(+e.target.value);
 $('ibox').onchange=e=>setInstr(+e.target.value);
+// Structural navigation. These are searches over the recorded timeline, so
+// "step out" lands on the instruction the routine actually returned to rather
+// than a prediction of where it should.
+async function seek(what,dir){
+  const r=await (await fetch(
+    `/api/seek?what=${what}&instr=${INSTR}&dir=${dir||1}`)).json();
+  if(r.instr!==INSTR) setInstr(r.instr);
+}
+$('bNextFn').onclick=()=>seek('fn',1);
+$('bPrevFn').onclick=()=>seek('fn',-1);
+$('bOver').onclick=()=>seek('over',1);
+$('bOut').onclick=()=>seek('out',1);
+
+$('tabStep').onclick=()=>{STEP=true;
+  $('tabStep').classList.add('on'); $('tabBlk').classList.remove('on');
+  loadFlow();};
+$('tabBlk').onclick=()=>{STEP=false;
+  $('tabBlk').classList.add('on'); $('tabStep').classList.remove('on');
+  loadFlow();};
 
 // Scrolling the chart moves time: the rows ARE the timeline.
 $('flow').onwheel=e=>{
@@ -245,14 +350,22 @@ $('flow').onwheel=e=>{
   step(e.deltaY>0 ? (e.shiftKey?2000:200) : (e.shiftKey?-2000:-200));
 };
 
+// Arrows step ONE instruction -- that is the useful motion now that register
+// state is per-instruction. Shift for 100, PgUp/PgDn for a broad sweep.
 addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT')return;
-  if(e.key==='ArrowRight'){e.preventDefault();step(e.shiftKey?10000:100);}
-  if(e.key==='ArrowLeft'){e.preventDefault();step(e.shiftKey?-10000:-100);}
+  if(e.key==='ArrowRight'){e.preventDefault();step(e.shiftKey?100:1);}
+  if(e.key==='ArrowLeft'){e.preventDefault();step(e.shiftKey?-100:-1);}
+  if(e.key==='ArrowDown'){e.preventDefault();step(1);}
+  if(e.key==='ArrowUp'){e.preventDefault();step(-1);}
   if(e.key==='.')step(1);
   if(e.key===',')step(-1);
-  if(e.key==='PageDown'){e.preventDefault();step(100000);}
-  if(e.key==='PageUp'){e.preventDefault();step(-100000);}
+  if(e.key==='PageDown'){e.preventDefault();step(10000);}
+  if(e.key==='PageUp'){e.preventDefault();step(-10000);}
+  // Structural navigation
+  if(e.key==='f'||e.key==='F'){e.preventDefault();seek('fn',e.shiftKey?-1:1);}
+  if(e.key==='o'||e.key==='O'){e.preventDefault();seek('over',1);}
+  if(e.key==='u'||e.key==='U'){e.preventDefault();seek('out',1);}
 });
 boot();
 </script>

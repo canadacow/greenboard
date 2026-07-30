@@ -29,6 +29,16 @@ PORT_DT = np.dtype([
     ("instr", "<u8"), ("port", "<u2"), ("cs", "<u2"), ("ip", "<u2"),
     ("data", "u1"), ("is_write", "u1"), ("_pad", "<u2"),
 ])
+# Full register state per traced instruction -- enough to resume the run at
+# any point, or to re-run a routine standalone. Field order matches
+# IC_8088::Reg16. 40 bytes, matching the static_assert in cfg_tracer.cpp.
+STAT_DT = np.dtype([
+    ("instr", "<u8"), ("addr", "<u4"),
+    ("ax", "<u2"), ("cx", "<u2"), ("dx", "<u2"), ("bx", "<u2"),
+    ("sp", "<u2"), ("bp", "<u2"), ("si", "<u2"), ("di", "<u2"),
+    ("es", "<u2"), ("cs", "<u2"), ("ss", "<u2"), ("ds", "<u2"),
+    ("flags", "<u2"), ("_pad", "<u2"),
+])
 
 
 class FastTrace:
@@ -42,6 +52,7 @@ class FastTrace:
         off = 8
         self.nodes = self.edges = self.writes = self.ports = None
         self.exec = None
+        self.states = None
 
         while off < len(buf):
             tag = bytes(buf[off:off + 4])
@@ -68,6 +79,9 @@ class FastTrace:
                 # position exact rather than inferred from first-execution.
                 self.exec = np.frombuffer(buf, "<u4", count, off)
                 off += count * 4
+            elif tag == b"STAT":
+                self.states = np.frombuffer(buf, STAT_DT, count, off)
+                off += count * STAT_DT.itemsize
             elif tag == b"PORT":
                 # PORT is the last section, so its record size must divide the
                 # bytes remaining. A mismatch means the file was written by a
@@ -212,6 +226,46 @@ class FastTrace:
         if end:
             m[self.writes["addr"][:end]] = True
         return m
+
+    REGS = ("ax", "cx", "dx", "bx", "sp", "bp", "si", "di",
+            "es", "cs", "ss", "ds", "flags")
+
+    def state_at(self, instr):
+        """Register state at instruction count `instr`.
+
+        Records are in execution order, so this is a binary search on the
+        `instr` column. Returns the state at or just before the requested
+        point, or None if nothing was recorded (BIOS and handler instructions
+        are not).
+        """
+        if self.states is None or not len(self.states):
+            return None
+        k = int(np.searchsorted(self.states["instr"], int(instr),
+                                side="right"))
+        if k == 0:
+            return None
+        s = self.states[k - 1]
+        out = {"instr": int(s["instr"]), "addr": int(s["addr"])}
+        out.update({r: int(s[r]) for r in self.REGS})
+        return out
+
+    def states_at_addr(self, addr, limit=64):
+        """Every recorded state for an address, in execution order.
+
+        A routine called many times yields one record per call, so this shows
+        how its inputs varied -- which is what tells you a register is an
+        argument rather than a constant.
+        """
+        if self.states is None or not len(self.states):
+            return []
+        m = np.flatnonzero(self.states["addr"] == int(addr))[:limit]
+        out = []
+        for i in m:
+            s = self.states[int(i)]
+            d = {"instr": int(s["instr"]), "addr": int(s["addr"])}
+            d.update({r: int(s[r]) for r in self.REGS})
+            out.append(d)
+        return out
 
     def pc_at(self, instr):
         """Address of the instruction executing at instruction count `instr`.

@@ -50,6 +50,31 @@ public:
         uint8_t  data;
     };
 
+    // Full register state at every traced instruction.
+    //
+    // Recorded for every instruction outside BIOS and interrupt handlers, in
+    // execution order, so any point in the run can be resumed exactly: load
+    // these registers, point a simulator at cs:ip, and it continues as it did
+    // here. That makes a routine re-runnable standalone instead of having to
+    // reconstruct its inputs by inference.
+    //
+    // The segment registers are the load-bearing part -- reading a data table
+    // out of the trace means knowing what DS actually held, and guessing it
+    // from nearby writes gets the address wrong.
+    //
+    // 28 bytes per instruction. There is no index field: the record's
+    // position corresponds to a position in the state timeline, and `instr`
+    // ties it back to the execution timeline.
+    struct StateRec {
+        uint64_t instr;
+        uint32_t addr;      // physical address of the instruction
+        uint16_t ax, cx, dx, bx;
+        uint16_t sp, bp, si, di;
+        uint16_t es, cs, ss, ds;
+        uint16_t flags;
+        uint16_t _pad;
+    };
+
     // One entry per executed instruction: where the CPU was, in order.
     //
     // The CFG says which instructions exist and how they connect; it cannot
@@ -115,6 +140,16 @@ public:
     void on_instruction(uint32_t cs_ip, uint16_t cs, uint16_t ip,
                         uint64_t instr, bool in_handler = false);
 
+    // Called at every traced instruction, before it executes. `regs16` points
+    // at the CPU's 16-bit register array; `flags` is the packed FLAGS word.
+    // Not called for BIOS or interrupt-handler instructions.
+    void on_state(uint32_t addr, const uint16_t* regs16, uint16_t flags,
+                  uint64_t instr);
+
+    // Whether an address is in an excluded region, so the CPU can skip
+    // building the flags word for instructions that will not be recorded.
+    bool is_excluded(uint32_t addr) const { return excluded(addr); }
+
     // Called from DRAM / ISA RAM / video when a byte lands in memory.
     // Fires for every write regardless of who drove the bus -- a DMA
     // transfer and a CPU store are the same event as far as the log is
@@ -144,6 +179,7 @@ public:
     size_t write_count() const { return writes_.size(); }
     size_t port_count()  const { return ports_.size(); }
     size_t exec_count()  const { return exec_.size(); }
+    size_t state_count() const { return states_.size(); }
     uint64_t dirty_events() const { return dirty_events_; }
     uint64_t handler_instrs() const { return handler_instrs_; }
 
@@ -181,6 +217,9 @@ private:
     // Execution timeline, one entry per instruction in execution order.
     // Index == instruction count, so no timestamp is stored.
     std::vector<uint32_t> exec_;
+
+    // Register state per traced instruction, in execution order.
+    std::vector<StateRec> states_;
 
     // Previous non-excluded instruction, for edge recording across an
     // excluded region (e.g. game code -> BIOS -> back to game code).

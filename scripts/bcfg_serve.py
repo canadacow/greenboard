@@ -247,14 +247,8 @@ def build_cfg():
 
     decoded = {}
     for a in addrs:
-        ins = next(MD.disasm(code.get(a, b"\x90"), a), None)
-        if ins is None:
-            decoded[a] = (1, "db ?", "")
-        else:
-            decoded[a] = (ins.size,
-                          "%s %s" % (ins.mnemonic, ins.op_str) if ins.op_str
-                          else ins.mnemonic,
-                          ins.mnemonic)
+        sz, txt, mn, _tgt = decode_at(a, code.get(a, b"\x90"))
+        decoded[a] = (sz, txt, mn)
     global CODE
     CODE = code
 
@@ -586,13 +580,12 @@ def flow_at(instr, before=40, after=120):
         # Show the instruction AT this address -- the one about to execute --
         # not the block's terminator. Those are different instructions and
         # pairing one address with the other's mnemonic is simply wrong.
-        ins = next(MD.disasm(CODE.get(a, b"\x90"), a), None)
+        _sz, _txt, _mn, _tgt = decode_at(a, CODE.get(a, b"\x90"))
         rows.append(dict(
             instr=i, addr=a, blk=blk,
             fn=FUNC_OF.get(blk, blk) if FUNC_OF else blk,
             n=b.get("n", 0),
-            t=("%s %s" % (ins.mnemonic, ins.op_str) if ins and ins.op_str
-               else (ins.mnemonic if ins else "?")),
+            t=_txt,
             term=b.get("term", ""),
             hits=b.get("hits", 0),
             kind="call" if b.get("term") in ("call", "lcall") else "blk",
@@ -637,12 +630,11 @@ def block_listing(lead, instr=None):
     for a in b["body"]:
         buf = (live[a:a + 8].tobytes() if live is not None
                else CODE.get(a, b"\x90"))
-        ins = next(MD.disasm(buf, a), None)
-        if ins is None:
+        sz, txt, mn, tgt = decode_at(a, buf)
+        if not sz:
             continue
-        out.append(dict(addr=a, bytes=ins.bytes.hex(),
-                        text="%s %s" % (ins.mnemonic, ins.op_str)
-                             if ins.op_str else ins.mnemonic))
+        out.append(dict(addr=a, bytes=buf[:sz].hex(), text=txt,
+                        target=tgt))
     return out
 
 
@@ -754,6 +746,106 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif u.path == "/api/seek":
+                # Navigate the execution timeline by structure rather than by
+                # a fixed instruction count. Nothing is simulated -- these are
+                # searches over what was recorded.
+                #
+                #   into  next instruction in a DIFFERENT function (a call, or
+                #         any transfer into other code)
+                #   out   where this routine returned: the first instruction
+                #         whose SP is above the current SP, which is what a
+                #         RET leaves behind
+                #   over  the instruction after the call at the cursor, found
+                #         by the same SP rule
+                #   fn    next entry to a different function, forwards or back
+                what = q.get("what", ["into"])[0]
+                instr = qi("instr", 0)
+                d = qi("dir", 1)
+                ex, st = TRACE.exec, TRACE.states
+                res = instr
+                if ex is not None and len(ex):
+                    n = max(0, min(len(ex) - 1, instr))
+                    limit = 4_000_000
+
+                    def fn_of(i):
+                        b = OWNER.get(int(ex[i]))
+                        return FUNC_OF.get(b, b) if (FUNC_OF and b is not None) else b
+
+                    if what in ("fn", "into"):
+                        cur = fn_of(n)
+                        i = n
+                        while 0 <= i < len(ex) and limit:
+                            i += d
+                            limit -= 1
+                            if not (0 <= i < len(ex)):
+                                break
+                            f = fn_of(i)
+                            if f is not None and f != cur:
+                                res = i
+                                break
+                    elif what in ("out", "over"):
+                        # SP at the cursor, from the recorded register state.
+                        k = int(np.searchsorted(st["instr"], n, "right")) - 1 \
+                            if st is not None and len(st) else -1
+                        if k >= 0:
+                            sp0 = int(st["sp"][k])
+                            ss0 = int(st["ss"][k])
+                            # For "over", the call has not pushed yet, so the
+                            # target SP is the current one; for "out" we want
+                            # SP strictly above, past this frame's return.
+                            want = sp0 if what == "over" else sp0 + 1
+                            j = k
+                            while j + 1 < len(st) and limit:
+                                j += 1
+                                limit -= 1
+                                if int(st["ss"][j]) != ss0:
+                                    continue
+                                if int(st["sp"][j]) >= want:
+                                    res = int(st["instr"][j])
+                                    break
+                self._send(json.dumps(dict(instr=res)))
+            elif u.path == "/api/step":
+                # One row per INSTRUCTION around a point in time, with the
+                # register state at each. This is the view that answers "what
+                # was BX here" without inferring it from anything.
+                instr = qi("instr", 0)
+                before = qi("before", 24)
+                after = qi("after", 80)
+                ex = TRACE.exec
+                st = TRACE.states
+                rows = []
+                if ex is not None and len(ex):
+                    lo = max(0, instr - before)
+                    hi = min(len(ex), instr + after)
+                    for i in range(lo, hi):
+                        a = int(ex[i])
+                        r = dict(instr=i, addr=a)
+                        # Decode from the bytes this instruction executed, at
+                        # its segment offset so relative targets resolve.
+                        buf = CODE.get(a, b"\x90")
+                        sz, txt, mn, tgt = decode_at(a, buf)
+                        r["text"] = txt
+                        r["bytes"] = buf[:sz].hex()
+                        r["target"] = tgt
+                        r["blk"] = OWNER.get(a)
+                        rows.append(r)
+                    # Attach register state. Records exist only for traced
+                    # (non-BIOS, non-handler) instructions, so match on the
+                    # instruction count rather than assuming alignment.
+                    if st is not None and len(st):
+                        k0 = int(np.searchsorted(st["instr"], lo, "left"))
+                        k1 = int(np.searchsorted(st["instr"], hi, "left"))
+                        by = {int(st["instr"][k]): k for k in range(k0, k1)}
+                        for r in rows:
+                            k = by.get(r["instr"])
+                            if k is None:
+                                continue
+                            s = st[k]
+                            r["regs"] = {n: int(s[n]) for n in (
+                                "ax", "cx", "dx", "bx", "sp", "bp", "si",
+                                "di", "es", "cs", "ss", "ds", "flags")}
+                self._send(json.dumps(dict(instr=instr, rows=rows)))
             elif u.path == "/api/flow":
                 # The chart: blocks in the order they actually executed around
                 # a point in time. Rows are timeline positions, so scrolling
@@ -856,6 +948,80 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(500, str(e))
 
 
+def decode_at(addr, buf, cs=None):
+    """Decode one instruction, resolving branch targets correctly.
+
+    Capstone must be given the instruction's OFFSET WITHIN ITS SEGMENT, not its
+    physical address. A near call or jump encodes a 16-bit displacement from
+    IP, and the target wraps at 16 bits. Decoding with a 20-bit physical base
+    instead computes `phys + size + disp` with no wrap, which produces targets
+    outside the address space -- `call 0x1262b` for an instruction whose real
+    target is 0262B, because the true sum wrapped past 0xFFFF.
+
+    `cs` comes from the recorded register state. Without it the physical base
+    is used and relative targets are only right when no wrap occurs, which is
+    why local jumps looked fine and calls did not.
+
+    Returns (size, text, mnemonic, target_phys or None).
+    """
+    if cs is None:
+        cs = CS_AT.get(addr)
+    if cs is None:
+        # No recorded segment: decode at the physical address. Non-relative
+        # operands are still correct; relative ones may not be.
+        ins = next(MD.disasm(buf, addr), None)
+        if ins is None:
+            return 1, "db ?", "", None
+        txt = "%s %s" % (ins.mnemonic, ins.op_str) if ins.op_str else ins.mnemonic
+        return ins.size, txt, ins.mnemonic, None
+
+    base = (cs << 4) & 0xFFFFF
+    ip = (addr - base) & 0xFFFF
+    ins = next(MD.disasm(buf, ip), None)
+    if ins is None:
+        return 1, "db ?", "", None
+
+    mn, ops = ins.mnemonic, ins.op_str
+    target = None
+    # Relative branches: rewrite the operand as a physical address so it can be
+    # followed. Capstone reports the target already wrapped to 16 bits because
+    # it decoded at the segment offset.
+    if ops.startswith("0x") and mn in _REL:
+        try:
+            off = int(ops, 16) & 0xFFFF
+            target = (base + off) & 0xFFFFF
+            ops = "%05X" % target
+        except ValueError:
+            pass
+    txt = "%s %s" % (mn, ops) if ops else mn
+    return ins.size, txt, mn, target
+
+
+_REL = {"call", "jmp", "je", "jne", "jz", "jnz", "jb", "jnb", "jbe", "jnbe",
+        "ja", "jae", "jl", "jle", "jg", "jge", "jo", "jno", "js", "jns",
+        "jp", "jnp", "jpe", "jpo", "jc", "jnc", "jcxz", "loop", "loope",
+        "loopne", "loopz", "loopnz"}
+
+# Physical address -> the CS it executed under, from the register trace.
+CS_AT = {}
+
+
+def build_cs_map():
+    """CS per executed address, so relative operands decode correctly."""
+    out = {}
+    st = TRACE.states
+    if st is None or not len(st):
+        return out
+    # One pass; first CS seen for an address wins. Code executing under two
+    # different CS values would need per-generation handling, but nothing in
+    # these traces does that.
+    for a, c in zip(st["addr"], st["cs"]):
+        a = int(a)
+        if a not in out:
+            out[a] = int(c)
+    return out
+
+
 def _load_page():
     """UI markup lives next to this file so it can be edited without a
     restart of anything but the browser."""
@@ -878,6 +1044,11 @@ def main():
     TRACE = FastTrace(path)
     print("indexing ...")
     META = build_meta()
+    # CS per address first: build_cfg decodes, and relative branch targets are
+    # only correct when decoded at the segment offset.
+    print("mapping segments ...")
+    CS_AT.update(build_cs_map())
+    print("  %d addresses with a recorded CS" % len(CS_AT))
     print("building CFG ...")
     CFG, DECODED, OWNER, _s, _p = build_cfg()
     META["blocks"] = len(CFG)
