@@ -1,9 +1,19 @@
 # Pirates! (MicroProse, 1987) -- structure
 
-Facts recovered from execution traces of the CGA build running on the Bench
-5150 emulator. Addresses are physical (20-bit) unless a segment is named.
-Segment-relative offsets are given as `SEG:off` where the segment register
-value is known.
+Facts recovered from execution traces running on the Bench 5150 emulator.
+Addresses are physical (20-bit) unless a segment is named. Segment-relative
+offsets are given as `SEG:off` where the segment register value is known.
+
+Two traces are referenced:
+
+| trace | adapter | notes |
+|---|---|---|
+| `bench_trace_cga.bcfg` | CGA | source of the CGA sections below |
+| `bench_trace.bcfg` | EGA | adds the `PLNW` plane-write section |
+
+Sections describing the frame pipeline, sprites and tile graphics are
+adapter-specific and say which build they came from. Boot/load, the world map
+decoder and audio are shared.
 
 ---
 
@@ -44,7 +54,7 @@ Drive number is never set; `DL` retains the BIOS boot drive throughout.
 
 ---
 
-## Frame pipeline
+## Frame pipeline (CGA)
 
 Three chained buffers:
 
@@ -123,14 +133,18 @@ values (`BX = 0x0320` = 800 at block row 20). One L1 entry covers 8x8 tiles;
 one L2 byte holds 4 tiles at 2 bits each, most significant field first
 (`(X & 3) ^ 3`).
 
-Rendering the L1 array at stride 40 produces recognisable Caribbean geography:
-Cuba, Hispaniola, Puerto Rico, the Lesser Antilles, Florida, the Bahamas, the
-Yucatan, and the Spanish Main. Strides of 56 and 64 produce noise.
+Rendering the L1 array at stride 40 produces Caribbean geography matching the
+real coastlines. Strides of 56 and 64 do not.
 
 L2 addresses observed in use reach `0x17797`, which is block 362, so the block
 library holds more than 256 entries.
 
-Block index `0x0F` is open ocean and is by far the most common entry.
+Block index `0x0F` is the most common entry, appearing 625 times in the L1
+array; the tiles it decodes to are ocean.
+
+The L1 array is meaningful for rows 0-24. From row 25 the byte statistics
+change (no `0x0F` entries, higher distinct-value counts), indicating different
+data follows.
 
 ### Terrain classes
 
@@ -168,29 +182,123 @@ Class-0 tile coordinates as observed:
 ( 72,184) ( 71,189)
 ```
 
-### Features drawn over the terrain
+### Map renderer (`0ABAA`-`0AD28`)
 
-Two mechanisms modify or add cells after the terrain class is resolved.
+`0ABAA` is the entry point. It executed 4 times in the 32M-instruction CGA
+trace and 4 times in the 30M-instruction EGA trace, called from `0CABC`, once
+per viewport redraw. It reads its window origin from `[0x93b9]` and `[0x93bb]`
+and manages all other state internally.
 
-A 16-entry table indexed by the low nybble of world X:
+Setup:
 
 ```
+0ABAA  mov ax, [0x93b9]        ; window origin X
+0ABAD  mov [0x6479], al
+0ABB0  mov ax, [0x93bb]        ; window origin Y
+0ABB3  mov [0x647a], al
+0ABB6  mov al, [0x6479]
+0ABB9  mov [0xc09e], al        ; X reset value for each row
+0ABBC  mov byte ptr [0x6475], 0x0b   ; 11 cells per row
+0ABC1  mov al, [0x647a]
+0ABC4  push ax
+0ABC5  dec byte ptr [0x647a]         ; probe the row above
+0ABC9  cmp byte ptr [0x647a], 0xff
+0ABCE  jne 0ABD5
+```
+
+Priming pass (`0ABD5`-`0ABF6`): walks one row calling the class decoder and
+seeding a 16-entry per-column parity table at `[si - 0x6c42]`
+(`0x1AB6E`-`0x1AB7D`):
+
+```
+0ABD5  call 0AB0D
+0ABD8  mov bx, ax
+0ABDA  mov al, [0x6479]
+0ABDD  and ax, 0xf
+0ABE0  mov si, ax
+0ABE2  mov al, [bx - 0x3f5f]
+0ABE6  and al, 8
+0ABE8  xor al, 8
+0ABEA  mov [si - 0x6c42], al
+0ABEE  inc byte ptr [0x6479]
+0ABF2  dec byte ptr [0x6475]
+0ABF6  jns 0ABD5
+```
+
+Main loop setup and bounds:
+
+```
+0ABF8  pop ax
+0ABF9  mov [0x647a], al
+0ABFC  mov al, [0xc09e]
+0ABFF  mov [0x6479], al
+0AC02  mov word ptr [0xc09f], 0x54
+0AC08  mov byte ptr [0x6476], 0x0e   ; 14 rows
+0AC0D  mov ax, 0x8ab1
+0AC10  mov [0x9a57], ax              ; working array cursor
+0AC13  mov byte ptr [0x6475], 0x0b   ; 11 cells per row
+0AC18  dec byte ptr [0x6479]         ; probe X-1 for row parity
+0AC1C  call 0AB0D
+0AC21  mov al, [bx - 0x3f5f]
+0AC25  and al, 8
+0AC27  xor al, 8
+0AC29  mov [0x93ce], al
+0AC2C  inc byte ptr [0x6479]
+0AC30  call 0AC55                    ; one cell
+0AC33  inc byte ptr [0x6479]
+0AC37  dec byte ptr [0x6475]
+0AC3B  jne 0AC30
+0AC3D  add word ptr [0x9a57], 0x2c
+0AC42  mov al, [0xc09e]
+0AC45  mov [0x6479], al
+0AC48  inc byte ptr [0x647a]
+0AC4C  dec byte ptr [0x6476]
+0AC50  jne 0AC13
+```
+
+Window is **11 cells wide by 14 rows**. Each cell produces 4 tile bytes wide
+by 2 rows tall, giving the 44 x 28 working array (25 rows used).
+
+Note `0AC2C` and `0AC33`: X is incremented both before entering the inner loop
+and inside it.
+
+### Per-cell routine (`0AC55`-`0ACFC`)
+
+```
+0AC55  call 0AB0D              ; terrain class 0..3
+0AC58  mov bx, ax
+0AC5A  mov al, [bx - 0x3f5f]   ; class -> tile byte, 4 entries
+0AC5E  or  al, 0x50
+0AC60  mov [0xc09d], al
+0AC63  and al, 8
+0AC65  mov [0x93bd], al
 0AC68  mov bl, [0x6479]
 0AC6C  and bx, 0xf
-0AC70  mov al, [bx - 0x6c42]   ; 16 entries, 0x1AB6E..0x1AB7D
+0AC70  mov al, [bx - 0x6c42]   ; per-column parity table
 0AC74  cmp al, [0x93bd]
 0AC78  jne 0AC7F
 0AC7A  xor byte ptr [0xc09d], 0x30
-```
-
-A conditional single-cell write, gated on a comparison of `[0x93bd]` against
-`[0x93ce]`:
-
-```
+0AC7F  mov al, [0x93bd]
+0AC82  xor al, 8
+0AC84  mov [bx - 0x6c42], al   ; flip this column's parity
+0AC88  mov al, [0x647a]
+0AC8D  shl ax, 1
+0AC8F  add ax, 0xbe90
+0AC92  mov [0x9a5b], ax        ; variant cursor = 0xBE90 + Y*2
+0AC95  mov dx, 0
+0AC98  mov si, 3               ; four tiles, high index to low
+0AC9B  mov bx, [0x9a5b]
+0AC9F  mov al, [bx + si]
+0ACA1  and al, 3
+0ACA3  or  al, [0xc09d]
+0ACA7  mov bx, [0x9a57]
+0ACAB  mov [bx + si], al
+0ACAD  dec si
+0ACAE  jns 0AC9B
 0ACB0  mov al, [0x93bd]
-0ACB3  cmp al, [0x93ce]        ; 0x1AB7E
+0ACB3  cmp al, [0x93ce]
 0ACB7  jne 0ACCF
-0ACB9  inc si
+0ACB9  inc si                  ; extra cell when row parity matches
 0ACBA  mov al, [0xc09d]
 0ACBD  and al, 0x10
 0ACBF  je  0ACC3
@@ -198,62 +306,55 @@ A conditional single-cell write, gated on a comparison of `[0x93bd]` against
 0ACC3  or  al, [0xc09d]
 0ACC7  or  al, 0x30
 0ACC9  mov bx, [0x9a57]
-0ACCD  mov [bx + si], al       ; extra cell
-```
-
-`[0x93bd]` = `0x1AB6D`, written 616 times by `0AC65`. `[0x93ce]` = `0x1AB7E`,
-written 616 times by `0ACF9` and 56 times by `0AC29`.
-
-Cities are class 0 in the terrain array (see above), so these two mechanisms
-select tile variants rather than place features.
-
-### Variant table
-
-The low 2 bits of the final tile byte come from a separate table, not from the
-terrain array:
-
-```
-0AC88  mov al, [0x647a]        ; world Y
-0AC8D  shl ax, 1
-0AC8F  add ax, 0xbe90
-0AC92  mov [0x9a5b], ax        ; = 0xBE90 + Y*2
-
-0AC98  mov si, 3               ; four tiles per pass, high to low
-0AC9B  mov bx, [0x9a5b]
-0AC9F  mov al, [bx + si]       ; variant source byte
-0ACA1  and al, 3
-0ACA3  or  al, [0xc09d]        ; merge with the class byte
-0ACA7  mov bx, [0x9a57]
-0ACAB  mov [bx + si], al       ; -> 44-wide working array
-0ACAD  dec si
-0ACAE  jns 0AC9B
-
-0ACD9  add word ptr [0x9a57], 0x2c   ; next working-array row
-0ACE3  add word ptr [0x9a5b], ax     ; advance variant cursor by world X
-0ACE8  cmp dx, 2                     ; two passes
+0ACCD  mov [bx + si], al
+0ACCF  mov al, [0xc09d]
+0ACD2  and al, 0xf
+0ACD4  or  al, 0x50
+0ACD6  mov [0xc09d], al
+0ACD9  add word ptr [0x9a57], 0x2c
+0ACDE  mov al, [0x6479]
+0ACE3  add word ptr [0x9a5b], ax
+0ACE7  inc dx
+0ACE8  cmp dx, 2
+0ACEB  jne 0AC98
+0ACED  mov ax, [0xc09f]
+0ACF0  sub word ptr [0x9a57], ax
+0ACF4  mov al, [0x93bd]
+0ACF7  xor al, 8
+0ACF9  mov [0x93ce], al
+0ACFC  ret
 ```
 
 | item | address (DS=`117B`) | notes |
 |---|---|---|
-| variant table | `DS:BE90` = `0x1D640` | indexed by `Y*2`, walked by X |
-| working-array cursor | `[0x9a57]` | advances 0x2C (44) per row |
-| variant cursor | `[0x9a5b]` | `0xBE90 + Y*2`, then `+= X` per row |
+| class -> tile byte | `[bx - 0x3f5f]` = `0x1D851`-`0x1D854` | values `{00, 0C, 04, 08}` |
+| per-column parity | `[bx - 0x6c42]` = `0x1AB6E`-`0x1AB7D` | 16 entries, flipped each visit |
+| variant source | `DS:BE90` = `0x1D640` | `+ Y*2`, `+= X` per pass |
+| current tile byte | `[0xc09d]` = `0x1D84D` | carried between cells |
+| column parity | `[0x93bd]` = `0x1AB6D` | |
+| row parity | `[0x93ce]` = `0x1AB7E` | |
+| working cursor | `[0x9a57]` | `+= 0x2C` per pass, `-= [0xc09f]` at end |
+| row-back constant | `[0xc09f]` | set to `0x54` at `0AC02` |
 
-Confirmed from recorded register state: at `0AC9F` with `BX = 0xBFDC`, the
-offset from the table base is 332 = 2 * 166, matching world Y = 166.
+Observed tile bytes in a rendered viewport: `0x50`-`0x5E` and `0x64`-`0x79`.
 
-### Final tile byte
+Observed values during one redraw: `[0x93bd]` = `0x08` and `[0x93ce]` = `0x00`
+throughout, so the `0ACB3` comparison never matched and the extra-cell write at
+`0ACCD` did not execute.
 
-```
-class      = 2 bits from L1/L2 at (X, Y)
-class_byte = [0x1D851 + class]          ; {00, 0C, 04, 08}
-base       = 0x50 | class_byte
-variant    = [0xBE90 + Y*2 + x_offset] & 3
-tile       = base | variant             ; plus the 0x30 toggle above
-```
+### Reproducing the renderer
 
-Observed tile bytes in a rendered viewport: `0x50`-`0x5E` and `0x64`-`0x79`,
-consistent with this construction.
+`runmap.py` interprets these instructions directly over a memory image taken
+from a trace snapshot, rather than reimplementing the rule. Running `0ABAA`
+with `[0x93b9]`/`[0x93bb]` set to the recorded window origin (145, 166)
+reproduces all 1100 bytes of the game's working array at `0x1A261` exactly, and
+the interpreter's instruction path matches the recorded execution path for
+every step there is trace data to compare against.
+
+Reimplementations of the tile rule as a formula reached 88% byte agreement and
+were sensitive to which terms were included; the failures were concentrated in
+column 0 of each row, which is the state established by the priming pass at
+`0ABD5`.
 
 ---
 
@@ -300,7 +401,7 @@ instructions. Between redraws only sprites are drawn.
 The row-pointer values change between redraws, which is what moves the
 viewport across the world.
 
-### Tile graphics
+### Tile graphics (CGA)
 
 16 bytes per tile, base `0x1B830` (`SI = 0xA080` with `DS = 117B`).
 Index scaling is `shl ax, 4` in the blitter.
@@ -326,7 +427,128 @@ Destination address: `[si + 0x3c6f]` indexed by row, plus column x 2.
 
 ---
 
-## Sprites
+## Adapter paths
+
+Three tile renderers exist. Selection is via `[0x3b98]`.
+
+| renderer | tile size | scaling | adapter |
+|---|---|---|---|
+| `019ED` | 16 bytes | `shl ax, 4` | CGA |
+| `01A33` | 32 bytes | `shl ax, 5` | 16-colour, 4 banks, word writes |
+| `01AAB` | 32 bytes | `shl ax, 5` | EGA, 4 banks, byte writes |
+
+Sprite blitters follow the same split: `0A4F6` (CGA), `0A438` (16-colour),
+`0A5C6` (EGA).
+
+Comparing CFG nodes between the two traces:
+
+| set | count |
+|---|---|
+| CGA trace nodes | 7931 |
+| EGA trace nodes | 8307 |
+| shared | 6843 |
+| CGA only | 1088 |
+| EGA only | 1464 |
+
+`0ABAA` (the map renderer) appears in both. `019ED` and `0A4F6` appear only in
+the CGA trace; `01AAB`, `0A5C6` and `01C4C` only in the EGA trace. `01A33` and
+`0A438` appear in neither, so the 16-colour path did not execute in either
+trace.
+
+---
+
+## Tile graphics (EGA)
+
+32 bytes per tile, base `0x1B830` -- the same base as CGA, with index scaling
+`shl ax, 5` instead of `shl ax, 4`. Tiles `0x50`-`0x79` therefore occupy
+`0x1C230`-`0x1C76F`, confirmed by the `READ` records of the blitter's `lodsb`
+instructions.
+
+Renderer `01AAB`-`01B7A`, fully unrolled, 32 `lodsb`/`mov` pairs. Destination
+offsets in source order:
+
+| bytes | destination offsets |
+|---|---|
+| 1-8 | `0x0000` `0x0028` `0x0050` `0x0078` `0x00A0` `0x00C8` `0x00F0` `0x0118` |
+| 9-16 | `0x2000` + the same eight |
+| 17-24 | `0x4000` + the same eight |
+| 25-32 | `0x6000` + the same eight |
+
+`0x28` is 40 bytes, the EGA row pitch at 320 pixels wide. `0x2000` is the
+plane stride. So byte `k` of a tile is plane `k / 8`, row `k % 8`, eight
+pixels MSB-first -- one byte per plane per row.
+
+Setup is identical in form to the CGA renderer:
+
+```
+01AAB  mov bx, [0x3b7a]        ; row
+01AAF  shl bx, 1
+01AB1  mov di, [bx + 0x3c6f]   ; row pointer table
+01AB5  add di, [0x3b78]        ; + column (1 byte per tile, not 2)
+01AB9  mov cl, 5
+01ABB  shl ax, cl              ; tile index * 32
+01ABD  add si, ax
+```
+
+Decoding the bank this way and comparing against a frame reconstructed from
+the trace's plane records: 947 of 1000 8x8 cells match a tile exactly. The 53
+non-matching cells are the positions where ship and cloud sprites overlap the
+terrain.
+
+### Screen push (`01C30`-`01C5A`)
+
+The EGA build composes a full 4-plane frame in main RAM and copies it to the
+card one plane at a time, rather than writing planes during tile drawing.
+
+```
+01C30  mov ax, [0xc]           ; ES = video segment
+01C33  mov es, ax
+01C35  mov ax, 0xff08          ; GC bit mask = FF
+01C38  mov dx, 0x3ce
+01C3B  out dx, ax
+01C3C  xor si, si
+01C3E  mov ah, 1               ; plane mask, shifted left each pass
+01C40  mov al, 2               ; Sequencer Map Mask index
+01C42  mov dx, 0x3c4
+01C45  out dx, ax
+01C46  xor di, di
+01C48  mov cx, 0x1000
+01C4B  rep movsw               ; 8KB into the selected plane
+01C4D  shl ah, 1
+01C4F  cmp ah, 0x10
+01C52  jb  01C40
+```
+
+`01C4C` is the highest-frequency plane-writing instruction in the EGA trace
+(20,398,080 plane records past instruction 25,000,000). Source segment is
+`27FE`, the same staging buffer the CGA build uses as its composed viewport.
+
+### Video mode
+
+Registers replayed from the port log at instruction 29,000,000:
+
+| register | value | meaning |
+|---|---|---|
+| Misc Output | `0x23` | colour base `3Dx`, RAM enable |
+| Sequencer 1 | `0x0B` | bit 3 set: dot clock halved (320 wide) |
+| Sequencer 4 | `0x06` | bit 2 set: sequential addressing |
+| GC 5 | `0x00` | write mode 0, odd/even off |
+| GC 6 | `0x05` | graphics mode, window `B8000` 32K |
+| CRTC 1 | `0x27` | 40 characters displayed |
+| CRTC 18 | `0xC7` | 200 lines displayed |
+| CRTC 19 | `0x14` | offset 20 words = 40 bytes per row |
+
+Frame total is under 300 lines, so the monitor runs at 15.7 kHz and decodes
+RGBI rather than 6-bit rgbRGB (see `ega_color()` in
+`src/display/ega_display.cpp`).
+
+Attribute palette registers observed: `11 20 02 00 20 20 06 07 10 11 12 13 14
+00 16 17`. Colour indices present in a rendered frame: 0, 2, 6, 7, 8, 9, 10,
+11, 13, 14, 15.
+
+---
+
+## Sprites (CGA)
 
 Separate system from the terrain tiles.
 
@@ -484,8 +706,8 @@ Output: voices OR together, are masked by `BP` (`0x2FF`, with bit 9 toggled
 periodically), and are written to port `61h` twice per pass -- `mov al, 0x4c`
 then the computed value. Bit 1 of port `61h` is the speaker line.
 
-Because both voices OR onto a single bit, the audible result is their
-interference pattern rather than two separable tones.
+Both voices OR onto a single bit, so the speaker output is their combined
+square-wave sum, not two independent channels.
 
 An abort-check stub is called at `11245`. The byte at `0x11229` is
 self-modified between `C3` (`ret`) and `90` (`nop`) -- the only code byte in
@@ -518,6 +740,69 @@ the speaker bit-banging. Counter 0 is reprogrammed to `0x4DAE` (60 Hz) by
 | `117B` | `0x117B0` | game state, map row table, tile graphics |
 | `1038` | `0x10380` | audio player and song data |
 | `1EB6` | `0x1EB60` | sprite atlas |
-| `27FE` | `0x27FE0` | composed viewport buffer |
+| `27FE` | `0x27FE0` | composed viewport buffer; EGA plane staging source |
 | `3000` | `0x30000` | back buffer |
-| `B800` | `0xB8000` | CGA video memory |
+| `B800` | `0xB8000` | CGA video memory; EGA window in the observed mode |
+
+The segment table is at `CS:0000` with `CS = 0050`. Values read from the EGA
+trace:
+
+| offset | value | base |
+|---|---|---|
+| `0` | `117B` | `0x117B0` |
+| `2` | `1038` | `0x10380` |
+| `4` | `1EB6` | `0x1EB60` |
+| `6` | `27FE` | `0x27FE0` |
+| `8` | `26BE` | `0x26BE0` |
+| `A` | `B800` | `0xB8000` |
+| `C` | `3000` | `0x30000` |
+
+`01B7B` loads `DS` from `cs:[0]` and `ES` from `cs:[6]` before dispatching to
+a tile renderer, so all three renderers read tiles from the same base.
+
+In the EGA trace the video BIOS at `C0000` also executes (`C007F`-`C03DE`
+among others); the CGA trace has no nodes there.
+
+---
+
+## Trace facts
+
+### EGA plane capture
+
+CPU-side write records cannot reconstruct EGA video memory: the byte on the
+bus is transformed by set/reset, the ALU against the latches, the bit mask and
+the plane mask before it lands, and write mode 1 discards the CPU data
+entirely. The `PLNW` section records the post-pipeline byte per plane instead,
+written from `ISA_EGA::on_mmio_write`.
+
+Record layout (20 bytes on disk): `instr` u64, `off` u32, `cs` u16, `ip` u16,
+`plane` u8, `data` u8, pad u16. `off` is an offset within the plane, not a
+physical address, because the CPU-visible window moves with Graphics Misc bits
+2-3.
+
+`FastTrace.plane_snapshot(instr)` in `scripts/bcfg_fast.py` returns a
+`(4, 65536)` array by scatter, the same way `snapshot()` builds the flat 1 MB
+image.
+
+### Trace sizes
+
+| section | CGA trace | EGA trace |
+|---|---|---|
+| writes | 43,502,059 | 13,805,944 |
+| reads | 19,912,723 | 16,502,146 |
+| ports | 533,185 | 1,867,736 |
+| states | 28,123,616 | 26,540,542 |
+| exec | -- | 30,744,903 |
+| planes | -- | 52,189,975 |
+
+Plane write distribution across the four planes in the EGA trace:
+13,507,748 / 13,163,246 / 12,501,348 / 13,017,633.
+
+### Full-map render
+
+`pirates/map_tiles.npy` (400 x 640 tile bytes, produced by interpreting
+`0ABAA`) is adapter-independent, since `0ABAA` is shared. Rendering it through
+the CGA bank at 16-byte stride gives `pirates/map_full.png`; through the EGA
+bank at 32-byte stride gives `pirates/map_ega.png`. Both are 5120 x 3200.
+
+Colour indices used across the whole EGA map: 0, 2, 6, 8, 10, 13, 14.

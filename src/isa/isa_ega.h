@@ -1,6 +1,9 @@
 #pragma once
 #include "isa/isa_card.h"
 #include "core/component.h"
+#if BENCH_CFG_TRACE
+#include "debug/traced_writer.h"
+#endif
 #include <cereal/cereal.hpp>
 #include <cstdint>
 #ifndef NOMINMAX
@@ -40,7 +43,11 @@ namespace bench {
 // every CLK cycle and stamps per-scanline register state + the VRAM row
 // the beam fetched (all 4 planes) into a ring buffer; a GPU compute
 // shader (ega_display.cpp) renders from that buffer.
-class ISA_EGA final : public ISA_Card, public Component {
+class ISA_EGA final : public ISA_Card, public Component
+#if BENCH_CFG_TRACE
+                    , public TracedWriter
+#endif
+{
 public:
     ISA_EGA();
 

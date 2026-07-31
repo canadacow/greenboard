@@ -347,14 +347,21 @@ void ISA_EGA::on_mmio_write(uint32_t addr, uint8_t val) {
                     : rot;
                 v = alu(v, latch_[p]);
                 vram_[p][eff] = (v & mask) | (latch_[p] & ~mask);
+#if BENCH_CFG_TRACE
+                trace_plane_write((uint8_t)p, eff, vram_[p][eff]);
+#endif
             }
             break;
         }
         case 1:
             // Latches copied straight to memory (no rotate/ALU/mask).
             for (int p = 0; p < 4; ++p)
-                if (planes & (1 << p))
+                if (planes & (1 << p)) {
                     vram_[p][eff] = latch_[p];
+#if BENCH_CFG_TRACE
+                    trace_plane_write((uint8_t)p, eff, vram_[p][eff]);
+#endif
+                }
             break;
         case 2:
             // Color expand: data bit n fills plane n.
@@ -364,6 +371,9 @@ void ISA_EGA::on_mmio_write(uint32_t addr, uint8_t val) {
                 uint8_t v = (val & (1 << p)) ? 0xFF : 0x00;
                 v = alu(v, latch_[p]);
                 vram_[p][eff] = (v & mask) | (latch_[p] & ~mask);
+#if BENCH_CFG_TRACE
+                trace_plane_write((uint8_t)p, eff, vram_[p][eff]);
+#endif
             }
             break;
         default:

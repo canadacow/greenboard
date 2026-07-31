@@ -123,6 +123,34 @@ public:
         uint8_t  is_write;  // 0 = IN (machine input), 1 = OUT
     };
 
+    // EGA plane writes, recorded AFTER the write pipeline has run.
+    //
+    // On a planar card the byte the CPU puts on the bus is not the byte that
+    // lands in memory. Set/reset substitutes a plane-fill value, the ALU
+    // combines with the latches, the bit mask merges latch bits back in, and
+    // the plane mask decides which of the four planes move at all. Write mode
+    // 1 discards the CPU data outright and copies the latches. So the WRIT
+    // log -- which records the bus byte -- cannot reconstruct EGA video
+    // memory, and no amount of offline replay fixes that without also
+    // modelling the latches, whose contents depend on read history.
+    //
+    // Recording the post-pipeline value per plane sidesteps all of it: the
+    // reader scatters these into four plane arrays exactly the way snapshot()
+    // scatters WRIT into one flat image. No pipeline emulation offline.
+    //
+    // `off` is the offset within the plane (0..PLANE_SIZE-1), not a physical
+    // address -- the CPU-visible aperture moves with the Graphics Misc
+    // window bits, and the plane offset is what the beam actually fetches.
+    struct PlaneRec {
+        uint64_t instr;
+        uint32_t off;      // offset within the plane
+        uint16_t cs;
+        uint16_t ip;
+        uint8_t  plane;    // 0-3
+        uint8_t  data;     // value AFTER set/reset, ALU, and bit mask
+        uint16_t _pad;
+    };
+
     // A CFG node: one instruction, recorded the first time it executes (or the
     // first time it executes after being overwritten).
     struct Node {
@@ -198,6 +226,11 @@ public:
     void on_port_write(uint16_t port, uint8_t data,
                        uint16_t cs, uint16_t ip, uint64_t instr);
 
+    // Called from the EGA once per plane per write, after the write pipeline
+    // has produced the final byte. See PlaneRec.
+    void on_plane_write(uint8_t plane, uint32_t off, uint8_t data,
+                        uint16_t cs, uint16_t ip, uint64_t instr);
+
     // ---- Output ----
 
     // Write the trace to disk. Called at power-off.
@@ -211,6 +244,7 @@ public:
     size_t port_count()  const { return ports_.size(); }
     size_t exec_count()  const { return exec_.size(); }
     size_t state_count() const { return states_.size(); }
+    size_t plane_count() const { return planes_.size(); }
     uint64_t dirty_events() const { return dirty_events_; }
     uint64_t handler_instrs() const { return handler_instrs_; }
 
@@ -245,6 +279,7 @@ private:
     std::vector<WriteRec> writes_;
     std::vector<ReadRec>  reads_;
     std::vector<PortRec>  ports_;
+    std::vector<PlaneRec> planes_;
 
     // Execution timeline, one entry per instruction in execution order.
     // Index == instruction count, so no timestamp is stored.

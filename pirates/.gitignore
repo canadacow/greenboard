@@ -1,5 +1,6 @@
 # Large capture artifacts, regenerable from a trace.
 *.wav
 map_full.png
+map_ega.png
 map.png
 __pycache__/

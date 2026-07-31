@@ -339,6 +339,9 @@ static void bind_debug(System& sys) {
     // which makes a replay of the write log reproducible as an image.
     if (sys.cga) sys.cga->set_tracer(sys.tracer.get(), ctx);
     if (sys.mda) sys.mda->set_tracer(sys.tracer.get(), ctx);
+    // EGA is planar: the bus byte is not what lands in memory, so it reports
+    // post-pipeline per-plane values into the PLNW section instead.
+    if (sys.ega) sys.ega->set_tracer(sys.tracer.get(), ctx);
     spdlog::info("[CFG] tracer armed (BIOS F0000-FFFFF excluded from CFG)");
 #endif
 }

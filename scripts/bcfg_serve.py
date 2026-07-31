@@ -121,8 +121,141 @@ def png_bytes(px):
             + chunk(b"IEND", b""))
 
 
+def ega_regs(instr):
+    """Replay the EGA's indexed register files up to `instr`.
+
+    Every one of these is write-only on the card, so the port log is the only
+    record of them. The attribute controller shares one port with an
+    index/data flip-flop that a status read resets, so the reads matter too.
+    """
+    po = TRACE.ports
+    if po is None or not len(po):
+        return None
+    end = int(np.searchsorted(po["instr"], instr, side="right"))
+    w = po[:end]
+    seq, gc, crtc, attr = {}, {}, {}, {}
+    misc = None
+    si = gi = ci = ai = 0
+    flip = False
+    for r in w:
+        pt, v, isw = int(r["port"]), int(r["data"]), int(r["is_write"])
+        if pt in (0x3BA, 0x3DA):
+            if not isw:
+                flip = False          # status read resets the flip-flop
+            continue
+        if not isw:
+            continue
+        if pt == 0x3C2:   misc = v
+        elif pt == 0x3C4: si = v & 7
+        elif pt == 0x3C5: seq[si] = v
+        elif pt == 0x3CE: gi = v & 15
+        elif pt == 0x3CF: gc[gi] = v
+        elif pt in (0x3B4, 0x3D4): ci = v & 0x1F
+        elif pt in (0x3B5, 0x3D5): crtc[ci] = v
+        elif pt == 0x3C0:
+            if not flip:
+                ai = v & 0x1F
+            else:
+                attr[ai] = v
+            flip = not flip
+    if misc is None:
+        return None
+    return {"misc": misc, "seq": seq, "gc": gc, "crtc": crtc, "attr": attr}
+
+
+def ega_color(c, rgbi):
+    """Palette register to RGB.
+
+    Transcribed from ega_color() in src/display/ega_display.cpp so the viewer
+    and the emulator's shader agree. 200-line modes are 15.7 kHz, where the
+    monitor decodes RGBI: bit 4 is intensity, secondary red/blue are ignored,
+    and colour 6 gets the CGA brown treatment.
+    """
+    if rgbi:
+        idx = (((c >> 4) & 1) << 3) | (c & 7)
+        i = (idx >> 3) & 1
+        r = ((idx >> 2) & 1) * 0xAA + i * 0x55
+        g = ((idx >> 1) & 1) * 0xAA + i * 0x55
+        b = ((idx >> 0) & 1) * 0xAA + i * 0x55
+        if idx == 6:
+            g = 0x55
+        return (r, g, b)
+    r = (((c >> 2) & 1) * 2 + ((c >> 5) & 1)) * 85
+    g = (((c >> 1) & 1) * 2 + ((c >> 4) & 1)) * 85
+    b = (((c >> 0) & 1) * 2 + ((c >> 3) & 1)) * 85
+    return (r, g, b)
+
+
+def render_ega(instr):
+    """Render from the PLNW section, or None if this is not an EGA trace.
+
+    The planes are recorded post-pipeline, so nothing here has to model
+    set/reset, the ALU, the latches or the bit mask -- the bytes are already
+    what the beam would fetch.
+    """
+    pl = TRACE.plane_snapshot(instr)
+    if pl is None:
+        return None
+    reg = ega_regs(instr)
+    if reg is None:
+        return None
+
+    crtc, seq, attr = reg["crtc"], reg["seq"], reg["attr"]
+    # Geometry straight off the CRTC rather than assumed.
+    w_chars = crtc.get(1, 39) + 1
+    stride = crtc.get(19, 40) * 2 or w_chars
+    vde = crtc.get(18, 0xC7) | ((crtc.get(7, 0) & 0x02) << 7) \
+                             | ((crtc.get(7, 0) & 0x40) << 3)
+    height = vde + 1
+    if not (64 <= height <= 480):
+        height = 200
+    # Sequencer Clocking bit 3 halves the dot clock: 8 px/char at 320 wide.
+    width = w_chars * 8
+    if width < 8 or width > 800:
+        width = 320
+    height = min(height, 480)
+
+    vt = crtc.get(6, 0) | ((crtc.get(7, 0) & 1) << 8)
+    rgbi = 1 if (vt + 2) < 300 else 0
+
+    lut = [ega_color(attr.get(i, 0), rgbi) for i in range(16)]
+    # Index 0 is a palette entry like any other -- it is NOT black. Filling
+    # with lut[0] and skipping all-zero bytes would be equivalent, but doing
+    # it explicitly keeps the two paths from drifting apart.
+    px = [[lut[0]] * width for _ in range(height)]
+    nbytes = min(stride, (width + 7) // 8)
+    for y in range(height):
+        base = y * stride
+        if base + stride > 0x10000:
+            break
+        row = px[y]
+        p0, p1, p2, p3 = (pl[0][base:base + stride], pl[1][base:base + stride],
+                          pl[2][base:base + stride], pl[3][base:base + stride])
+        for xb in range(nbytes):
+            b0, b1, b2, b3 = int(p0[xb]), int(p1[xb]), int(p2[xb]), int(p3[xb])
+            if not (b0 | b1 | b2 | b3):
+                continue          # already lut[0] from the fill
+            for k in range(8):
+                x = xb * 8 + k
+                if x >= width:
+                    break
+                sh = 7 - k
+                row[x] = lut[((b0 >> sh) & 1)
+                             | (((b1 >> sh) & 1) << 1)
+                             | (((b2 >> sh) & 1) << 2)
+                             | (((b3 >> sh) & 1) << 3)]
+    return px, "EGA %dx%d %s stride %d" % (
+        width, height, "RGBI" if rgbi else "rgbRGB", stride)
+
+
 def render_screen(instr):
     t = TRACE
+    # EGA first: if the trace has plane records, the CGA aperture is not
+    # where the picture is.
+    e = render_ega(instr)
+    if e is not None:
+        return e
+
     mode = t.last_port_write(0x3D8, instr)
     color = t.last_port_write(0x3D9, instr) or 0
     fb = t.region_fast(CGA_BASE, CGA_SIZE, instr)

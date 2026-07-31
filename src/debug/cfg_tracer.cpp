@@ -15,6 +15,9 @@ CFGTracer::CFGTracer()
     states_.reserve(1ull << 28);
     writes_.reserve(1ull << 27);
     reads_.reserve(1ull << 28);   // reads outnumber writes several to one
+    // Up to 4 records per EGA store (one per plane), but only for writes that
+    // land in video memory.
+    planes_.reserve(1ull << 26);
 }
 
 void CFGTracer::exclude_range(uint32_t lo, uint32_t hi_exclusive) {
@@ -115,6 +118,11 @@ void CFGTracer::on_port_read(uint16_t port, uint8_t data,
 void CFGTracer::on_port_write(uint16_t port, uint8_t data,
                               uint16_t cs, uint16_t ip, uint64_t instr) {
     ports_.push_back(PortRec{instr, port, cs, ip, data, 1});
+}
+
+void CFGTracer::on_plane_write(uint8_t plane, uint32_t off, uint8_t data,
+                               uint16_t cs, uint16_t ip, uint64_t instr) {
+    planes_.push_back(PlaneRec{instr, off, cs, ip, plane, data, 0});
 }
 
 // ------------------------------------------------------------------------
@@ -233,15 +241,29 @@ bool CFGTracer::dump(const std::string& path) {
         put<uint16_t>(f, 0);
     }
 
+    // EGA plane writes, post-pipeline. Field by field for the same reason as
+    // WRIT and READ: the uint64_t first member aligns the struct to 8.
+    put_tag(f, "PLNW");
+    put<uint64_t>(f, planes_.size());
+    for (const auto& p : planes_) {
+        put(f, p.instr);
+        put(f, p.off);
+        put(f, p.cs);
+        put(f, p.ip);
+        put(f, p.plane);
+        put(f, p.data);
+        put<uint16_t>(f, 0);
+    }
+
     std::fclose(f);
 
     spdlog::info("[CFG] wrote {}: {} nodes, {} edges, {} instrs "
                  "({} in handlers, excluded from CFG), {} writes, "
                  "{} reads, {} port ops, {} reg states, "
-                 "{} code-overwrite events",
+                 "{} EGA plane writes, {} code-overwrite events",
                  path, nodes_.size(), edges_.size(), exec_.size(),
                  handler_instrs_, writes_.size(), reads_.size(), ports_.size(),
-                 states_.size(), dirty_events_);
+                 states_.size(), planes_.size(), dirty_events_);
     return true;
 }
 

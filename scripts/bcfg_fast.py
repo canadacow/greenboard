@@ -46,6 +46,16 @@ STAT_DT = np.dtype([
     ("es", "<u2"), ("cs", "<u2"), ("ss", "<u2"), ("ds", "<u2"),
     ("flags", "<u2"), ("_pad", "<u2"),
 ])
+# EGA plane writes, recorded after the write pipeline has run. On a planar
+# card the byte on the bus is not the byte that lands: set/reset, the ALU
+# against the latches, the bit mask and the plane mask all intervene, and
+# write mode 1 ignores the CPU data entirely. So WRIT cannot reconstruct EGA
+# video memory and these can -- `off` is the offset within the plane, which
+# is what the beam fetches, not a CPU-visible address.
+PLNW_DT = np.dtype([
+    ("instr", "<u8"), ("off", "<u4"), ("cs", "<u2"), ("ip", "<u2"),
+    ("plane", "u1"), ("data", "u1"), ("_pad", "<u2"),
+])
 
 
 class FastTrace:
@@ -61,6 +71,7 @@ class FastTrace:
         self.exec = None
         self.states = None
         self.reads = None
+        self.planes = None
 
         while off < len(buf):
             tag = bytes(buf[off:off + 4])
@@ -94,20 +105,22 @@ class FastTrace:
                 self.states = np.frombuffer(buf, STAT_DT, count, off)
                 off += count * STAT_DT.itemsize
             elif tag == b"PORT":
-                # PORT is the last section, so its record size must divide the
-                # bytes remaining. A mismatch means the file was written by a
-                # different build -- say so instead of misparsing it.
-                rem = len(buf) - off
-                if count and rem != count * PORT_DT.itemsize:
-                    raise ValueError(
-                        "PORT section is %d bytes for %d records (%.2f each); "
-                        "this reader expects %d. Trace and binary are out of "
-                        "sync -- rebuild and re-record."
-                        % (rem, count, rem / count, PORT_DT.itemsize))
                 self.ports = np.frombuffer(buf, PORT_DT, count, off)
                 off += count * PORT_DT.itemsize
+            elif tag == b"PLNW":
+                self.planes = np.frombuffer(buf, PLNW_DT, count, off)
+                off += count * PLNW_DT.itemsize
             else:
                 raise ValueError("unknown tag %r" % (tag,))
+
+            # Every section must land exactly on the next tag. Overshooting the
+            # file means a record size here disagrees with the writer, which
+            # otherwise shows up as a bogus tag or silently misparsed data.
+            if off > len(buf):
+                raise ValueError(
+                    "section %r for %d records overruns the file by %d bytes. "
+                    "Trace and reader are out of sync -- rebuild and re-record."
+                    % (tag, count, off - len(buf)))
 
         self._build_index()
 
@@ -193,6 +206,30 @@ class FastTrace:
         if end:
             mem[self.writes["addr"][:end]] = self.writes["data"][:end]
         return mem
+
+    def plane_snapshot(self, instr=None):
+        """EGA video memory as 4 planes of 64KB, as of `instr`.
+
+        Same scatter as snapshot(), one array per plane. These records are
+        post-pipeline, so this is literally what the beam would fetch -- no
+        set/reset, ALU, latch or bit-mask emulation is involved.
+
+        Returns a (4, 65536) array, or None if the trace has no PLNW section
+        (recorded before EGA plane tracing existed, or a non-EGA run).
+        """
+        if self.planes is None or not len(self.planes):
+            return None
+        if instr is None:
+            end = len(self.planes)
+        else:
+            end = int(np.searchsorted(self.planes["instr"], instr, side="right"))
+        out = np.zeros((4, 0x10000), dtype="u1")
+        if end:
+            p = self.planes["plane"][:end].astype(np.intp)
+            o = self.planes["off"][:end].astype(np.intp)
+            # Flatten to one index so a single scatter keeps write order.
+            out.reshape(-1)[p * 0x10000 + o] = self.planes["data"][:end]
+        return out
 
     def code_bytes(self, span=8):
         """Bytes each instruction actually executed, per generation.
