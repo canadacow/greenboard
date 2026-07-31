@@ -968,23 +968,39 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
             }
             float3 shade(float3 content) { return (content * vid.y + vid.x) * vid.z; }
 
-            // Aperture grille -- cgwg's magenta/green subpixel pattern,
-            // locked to the PHYSICAL output-pixel grid (SV_Position). Even
-            // output columns get magenta (R+B), odd get green (G); on any RGB
-            // LCD this drives the actual subpixels into three evenly spaced
-            // R,G,B lines -- a real aperture grille at 1080p, finer at 4K --
-            // with no arbitrary-width tiling to beat against the panel grid
-            // and produce moire/rainbows. mask.x = triad scale (physical
-            // px per mask cell, >=1); off-phosphor leakage is fixed.
-            float3 aperture(float3 col, float screen_x) {
+            // Phosphor mask, locked to the PHYSICAL output-pixel grid
+            // (SV_Position) so there is no arbitrary-width tiling to beat
+            // against the panel grid and produce moire/rainbows.
+            // mask.x = scale (physical px per mask cell, >=1);
+            // mask.z selects the pattern:
+            //   1 = cgwg magenta/green aperture grille (5153-era look):
+            //       even columns magenta (R+B), odd green.
+            //   2 = RGB triad stripes (5154 ECD look). Deliberately NOT
+            //       the row-staggered VGA shadow mask: the tube holds
+            //       baked scanlines (~5px pitch after the warp resample)
+            //       and any mask with vertical structure at a similar
+            //       period beats against them into moire. A real 5154's
+            //       triads are several times finer than a scanline;
+            //       stripes are the finest beat-free equivalent here.
+            // Both patterns have no row structure, stay orthogonal to
+            // the scanline profile, and normalize their own average
+            // energy so APL matches the unmasked image.
+            float3 aperture(float3 col, float2 screen_px) {
                 const float ml = 0.45;
-                uint cell = (uint)floor(screen_x / max(mask.x, 1.0)) & 1u;
+                if (mask.z > 1.5) {
+                    uint stripe = (uint)floor(screen_px.x / max(mask.x, 1.0)) % 3u;
+                    float3 m = (stripe == 0u) ? float3(1.0, ml, ml)
+                             : (stripe == 1u) ? float3(ml, 1.0, ml)
+                                              : float3(ml, ml, 1.0);
+                    // per-channel average over the 3-cell period = (1+2ml)/3
+                    return col * m * (3.0 / (1.0 + 2.0 * ml));
+                }
+                uint cell = (uint)floor(screen_px.x / max(mask.x, 1.0)) & 1u;
                 // magenta = (1, ml, 1), green = (ml, 1, ml)
-                float3 m = (cell == 0u) ? float3(1.0, ml, 1.0)
-                                        : float3(ml, 1.0, ml);
-                // energy compensation: pattern averages (1+2ml)/... per
-                // channel over the 2-cell period -> normalize APL.
-                return col * m * (2.0 / (1.0 + ml));
+                float3 m2 = (cell == 0u) ? float3(1.0, ml, 1.0)
+                                         : float3(ml, 1.0, ml);
+                // per-channel average over the 2-cell period = (1+ml)/2
+                return col * m2 * (2.0 / (1.0 + ml));
             }
 
             // Per-lobe measured transport: mean footprint + covariance ->
@@ -1037,9 +1053,9 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
                         content = lin3(tube.SampleLevel(sLin,
                                 float2(fb.x, frac(fb.y + mask.w)), 0).rgb);
                     content = shade(content);
-                    // aperture grille on the glass, in screen space
+                    // phosphor mask on the glass, in screen space
                     if (mask.z > 0.5)
-                        content = aperture(content, i.pos.x);
+                        content = aperture(content, i.pos.xy);
                     // mask.y = cathode emission: tube light needs both the
                     // power switch (misc.y, gates EHT) and a hot cathode.
                     c += content * misc.y * mask.y;
@@ -1481,7 +1497,10 @@ void DxState::render_display() {
                         0.008f, 0.970f, 0.079f, 0.956f,   // visible tube UV window
                         bz_glow * hv_glow, bz_power ? 1.0f : 0.0f,
                         (float)TUBE_W, (float)TUBE_H,
-                        triad_px, emission, crt_scaler ? 1.0f : 0.0f, v_roll
+                        // Mask pattern: CGA gets the 5153-era magenta/green
+                        // grille, EGA the 5154's RGB triad stripes.
+                        triad_px, emission,
+                        crt_scaler ? (ega ? 2.0f : 1.0f) : 0.0f, v_roll
                     };
                     memcpy(mapped.pData, bcb, sizeof(bcb));
                     ctx->Unmap(bezel_cb.Get(), 0);
