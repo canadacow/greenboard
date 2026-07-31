@@ -15,6 +15,16 @@ class ISA_Bus final : public CallbackComponent {
 public:
     static constexpr int MAX_SLOTS = 5;
 
+    // Bus oscillator reference (OSC, slot pin B30): the 14.318 MHz
+    // crystal, invariant on every PC-family machine regardless of CPU
+    // speed. The 8284A generates CLK as OSC/3, so one card on_cycle()
+    // (= one CLK) is exactly 3 OSC cycles. Cards with their own
+    // crystals pace them as a ratio against this reference -- never
+    // against an assumed CPU rate (that's what broke cards in turbo
+    // clones).
+    static constexpr uint32_t OSC_HZ = 14318181;
+    static constexpr uint32_t OSC_PER_CLK = 3;
+
     ISA_Bus();
 
     // Wire to ISA slot signals. Call once after board wiring.

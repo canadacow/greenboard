@@ -290,12 +290,15 @@ private:
     uint64_t last_vsync_clk_ = 0;
 
     // --- Beam state ---
-    // System CLK is 4.772727 MHz; the EGA dot clock is 14.318181 or
-    // 16.257 MHz (Misc Output clock select), optionally divided by 2
-    // (Sequencer Clocking Mode bit 3). Neither is an integer multiple
-    // of CLK, so dots are accumulated in Hz units.
-    static constexpr uint32_t CPU_HZ = 4772727;
-    uint32_t dot_acc_ = 0;      // Hz accumulator
+    // Dot clock select (Misc Output bits 2-3): the bus OSC line
+    // (exactly 3 dots per CLK) or the card's own 16.257 MHz crystal
+    // (paced as a ratio against the bus OSC reference), optionally
+    // divided by 2 (Sequencer Clocking Mode bit 3).
+    uint32_t dot_acc_ = 0;      // fractional-dot accumulator (units of dot_den_)
+    // Current accumulator denominator; a change means the clock source
+    // switched and the phase restarts. Deliberately not serialized
+    // (worst case: one dot of phase after a save-state load).
+    uint32_t dot_den_ = 0;
     uint32_t dot_counter_ = 0;  // dots within current character clock
     uint32_t hcc_ = 0;          // horizontal character counter
     uint32_t line_ = 0;         // scanline counter within frame

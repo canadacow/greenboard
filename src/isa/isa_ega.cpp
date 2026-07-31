@@ -444,16 +444,37 @@ bool ISA_EGA::displaying() const {
 }
 
 void ISA_EGA::on_cycle(Fiber) {
-    // Dot rate from Misc Output clock select, halved by Sequencer
-    // Clocking Mode bit 3 (320-wide modes).
-    uint32_t dot_hz = ((misc_ >> 2) & 3) == 0 ? 14318181u : 16257000u;
+    // Dot clock per Misc Output clock select:
+    //   00: "14 MHz from the processor I/O channel" -- the bus OSC
+    //       line, which is exactly 3x CLK (8284A divide-by-3), so
+    //       3 dots per CLK with no rate constants (like the CGA card).
+    //   01: the card's own 16.257 MHz crystal, free-running -- paced
+    //       as a ratio against the bus OSC reference.
+    //   1x: external/unused -- treat as the onboard crystal.
+    // Sequencer Clocking Mode bit 3 divides the dot clock by 2
+    // (320-wide modes). No CPU clock rate is assumed anywhere.
+    uint32_t num, den;
+    if (((misc_ >> 2) & 3) == 0) {
+        num = ISA_Bus::OSC_PER_CLK;
+        den = 1;
+    } else {
+        num = ISA_Bus::OSC_PER_CLK * 16257000u;
+        den = ISA_Bus::OSC_HZ;
+    }
     if (seq_[SEQ_CLOCKING] & 0x08)
-        dot_hz >>= 1;
+        den *= 2;
 
-    // Fractional dot accumulation: dots per CLK = dot_hz / CPU_HZ.
-    dot_acc_ += dot_hz;
-    uint32_t dots = dot_acc_ / CPU_HZ;
-    dot_acc_ -= dots * CPU_HZ;
+    // The accumulator's residue is in units of `den`; a clock-source
+    // switch changes the unit, so restart the phase (real hardware
+    // glitches through clock switches too -- the BIOS wraps them in a
+    // sequencer sync reset).
+    if (den != dot_den_) {
+        dot_den_ = den;
+        dot_acc_ = 0;
+    }
+    dot_acc_ += num;
+    uint32_t dots = dot_acc_ / den;
+    dot_acc_ -= dots * den;
 
     uint32_t char_w = (seq_[SEQ_CLOCKING] & 0x01) ? 8 : 9;
     dot_counter_ += dots;

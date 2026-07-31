@@ -179,10 +179,10 @@ static System build_system(const SystemConfig& cfg,
     }
 #endif
 
-    // J4: RAM expansion
+    // J4: AST SixPakPlus (384KB RAM expansion + COM1/COM2 serial)
     if (cfg.expansion_kb > 0) {
         sys.ram_exp = std::make_unique<ISA_RAM>(0x40000, cfg.expansion_kb * 1024);
-        sys.isa_bus->insert_card(3, sys.ram_exp.get());
+        sys.isa_bus->insert_card(3, sys.ram_exp.get(), 0, 0x18);  // IRQ4 + IRQ3
         sys.board->add_expansion_kb(cfg.expansion_kb);
     }
 
