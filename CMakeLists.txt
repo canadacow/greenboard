@@ -84,11 +84,13 @@ add_executable(bench
     src/isa/isa_fdc.cpp
     src/isa/isa_mda.cpp
     src/isa/isa_cga.cpp
+    src/isa/isa_ega.cpp
     src/audio/pc_speaker.cpp
     src/audio/speaker_driver.cpp
     src/display/renderer.cpp
     src/display/mda_display.cpp
     src/display/cga_display.cpp
+    src/display/ega_display.cpp
     src/display/board_view.cpp
     src/debug/cfg_tracer.cpp
     src/test/test_keyboard.cpp

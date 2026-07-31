@@ -19,6 +19,9 @@ public:
     ID3D11ShaderResourceView* output_srv() const override { return out_srv_.Get(); }
     ID3D11ShaderResourceView* index_srv() const override { return idx_srv_.Get(); }
 
+    int out_width() const override { return OUT_W; }
+    int out_height() const override { return OUT_H; }
+
     // Crop: 640x200 visible portion from the 912x262 full frame.
     // The buffer starts at VSYNC end (monitor retrace).  Active display
     // (VCC=0) begins after top overscan.  Compute the offset from

@@ -32,8 +32,10 @@
 #include "display/rasterizer.h"
 #include "display/mda_display.h"
 #include "display/cga_display.h"
+#include "display/ega_display.h"
 #include "display/board_view.h"
 #include "isa/isa_cga.h"
+#include "isa/isa_ega.h"
 #include "core/scheduler.h"
 #include "ic/ic_8088.h"
 #include "isa/isa_mda.h"
@@ -252,8 +254,13 @@ struct DxState {
     float drive_b_screen_y = 0;  // screen Y of drive B row
     ISA_FloppyController* fdc = nullptr;
     const ISA_CGA* cga = nullptr;
+    const ISA_EGA* ega = nullptr;
     IC_8284A* clk_gen = nullptr;
     SystemInfo sys_info;
+
+    // Dot-resolution canvas of the active texture-based rasterizer
+    // (CGA 912x262, EGA 912x512). Sizes the CRT/bezel intermediates.
+    int src_w = 0, src_h = 0;
 
     // Save/load state
     Renderer* renderer_owner = nullptr;  // for signaling load requests to main
@@ -852,10 +859,15 @@ bool DxState::init(HWND hw, int w, int h, const ISA_MDA* mda_card) {
         tsrv.Buffer.NumElements = 1024;
         device->CreateShaderResourceView(comp_table_buf.Get(), &tsrv, &comp_table_srv);
 
-        // CRT scaler intermediate RT (decoded source at dot resolution)
+        // CRT scaler intermediate RT (decoded source at dot resolution,
+        // sized for the active rasterizer's canvas)
+        src_w = (rasterizer && rasterizer->out_width()) ? rasterizer->out_width()
+                                                        : CgaRasterizer::OUT_W;
+        src_h = (rasterizer && rasterizer->out_height()) ? rasterizer->out_height()
+                                                         : CgaRasterizer::OUT_H;
         D3D11_TEXTURE2D_DESC td = {};
-        td.Width = CgaRasterizer::OUT_W;
-        td.Height = CgaRasterizer::OUT_H;
+        td.Width = src_w;
+        td.Height = src_h;
         td.MipLevels = 1;
         td.ArraySize = 1;
         td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1207,8 +1219,8 @@ void DxState::render_display() {
                 float cb_data[20] = {
                     u0, v0, u1, v1,
                     comp_flag,
-                    (float)CgaRasterizer::OUT_W,
-                    (float)CgaRasterizer::OUT_H,
+                    (float)src_w,
+                    (float)src_h,
                     comp_grayscale ? 1.0f : 0.0f,
                     comp_ri, comp_rq, comp_gi, comp_gq,
                     comp_bi, comp_bq, 0.0f /* sharpness */, linear_src,
@@ -1222,10 +1234,10 @@ void DxState::render_display() {
                 // ---- Bezel monitor composite (fullscreen) ----
                 // P1: decode the full scan 1:1 into the dot intermediate.
                 upload_cb(0, 0, 1, 1, composite_on ? 1.0f : 0.0f, 0.0f,
-                          (float)CgaRasterizer::OUT_W, (float)CgaRasterizer::OUT_H);
+                          (float)src_w, (float)src_h);
                 ctx->OMSetRenderTargets(1, crt_src_rtv.GetAddressOf(), nullptr);
                 D3D11_VIEWPORT src_vp = { 0, 0,
-                    (float)CgaRasterizer::OUT_W, (float)CgaRasterizer::OUT_H, 0, 1 };
+                    (float)src_w, (float)src_h, 0, 1 };
                 ctx->RSSetViewports(1, &src_vp);
                 ID3D11ShaderResourceView* p1_srvs[3] = {
                     srv, comp_table_srv.Get(), rasterizer->index_srv()
@@ -1360,10 +1372,11 @@ void DxState::render_display() {
                     // mode change emits one short/long field). That timing error
                     // displaces the sweep; the weak injection lock then pulls it
                     // back over several fields. vosc_phase = current offset.
-                    if (cga && clk_cycles) {
+                    if ((cga || ega) && clk_cycles) {
                         const double kClkHz = 4772727.0;
                         uint64_t vnow = *clk_cycles;
-                        uint64_t vs = cga->last_vsync_clk();
+                        uint64_t vs = cga ? cga->last_vsync_clk()
+                                          : ega->last_vsync_clk();
                         if (vosc_last_vsync == 0 || vs < vosc_last_vsync)
                             vosc_last_vsync = vs;  // init / sim reset
                         if (vs != vosc_last_vsync && vs > 0 && vs <= vnow) {
@@ -1430,11 +1443,12 @@ void DxState::render_display() {
                         // with an arbitrary phase relative to the signal --
                         // derived from where in the field the switch landed
                         // (emulated time, no RNG). Entrainment was lost.
-                        if (bz_power && !prev_bz_power && cga) {
+                        if (bz_power && !prev_bz_power && (cga || ega)) {
                             double vfield = (vosc_period > 0.0)
                                 ? vosc_period : 1.0 / 59.92;
                             double fpos = std::fmod(
-                                (double)(cnow - cga->last_vsync_clk())
+                                (double)(cnow - (cga ? cga->last_vsync_clk()
+                                                     : ega->last_vsync_clk()))
                                 / 4772727.0, vfield) / vfield;
                             vosc_phase = fpos - 0.5;  // +/- half a field
                             v_roll = (float)vosc_phase;
@@ -1510,10 +1524,10 @@ void DxState::render_display() {
                 // Pass 1: decode source (composite or raw) 1:1 into the
                 // dot-resolution intermediate.
                 upload_cb(0, 0, 1, 1, composite_on ? 1.0f : 0.0f, 0.0f,
-                          (float)CgaRasterizer::OUT_W, (float)CgaRasterizer::OUT_H);
+                          (float)src_w, (float)src_h);
                 ctx->OMSetRenderTargets(1, crt_src_rtv.GetAddressOf(), nullptr);
                 D3D11_VIEWPORT src_vp = { 0, 0,
-                    (float)CgaRasterizer::OUT_W, (float)CgaRasterizer::OUT_H, 0, 1 };
+                    (float)src_w, (float)src_h, 0, 1 };
                 ctx->RSSetViewports(1, &src_vp);
                 ID3D11ShaderResourceView* p1_srvs[3] = {
                     srv, comp_table_srv.Get(), rasterizer->index_srv()
@@ -2483,7 +2497,7 @@ void DxState::render_system_window() {
         ImGui::TextColored(dim, "RAM: %d KB (256 KB planar + %d KB expansion)", total_kb, sys_info.expansion_kb);
     else
         ImGui::TextColored(dim, "RAM: 256 KB planar DRAM");
-    ImGui::TextColored(dim, "Display: %s", cga ? "CGA" : "MDA");
+    ImGui::TextColored(dim, "Display: %s", ega ? "EGA" : cga ? "CGA" : "MDA");
 
     // ROM set selector -- picking a different set swaps the chips and
     // power-cycles the machine (chip swap on a live board is bad form).
@@ -2506,20 +2520,23 @@ void DxState::render_system_window() {
             ImGui::SetTooltip("Swap BIOS ROMs and cold-boot the machine.");
     }
 
-    // --- Monitor (CGA only): composite vs RGBI ---
-    if (cga) {
+    // --- Monitor (texture-based rasterizers: CGA, EGA) ---
+    if (cga || ega) {
         ImGui::Separator();
         ImGui::TextColored(grn, "Monitor");
-        if (ImGui::Checkbox("Composite mode", &composite_mode)) {
-            spdlog::info("[System] CGA composite mode {}", composite_mode ? "ON" : "OFF");
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Simulate an NTSC composite monitor.\n"
-                              "Color bleed and hi-res text artifact colors.");
-        if (composite_mode) {
-            ImGui::TextColored(dim, "mode=%02X -> %s",
-                cga->mode_register(),
-                comp_grayscale ? "grayscale (BW bit)" : "color");
+        // Composite NTSC decode is CGA-only (needs the RGBI dot stream).
+        if (cga) {
+            if (ImGui::Checkbox("Composite mode", &composite_mode)) {
+                spdlog::info("[System] CGA composite mode {}", composite_mode ? "ON" : "OFF");
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Simulate an NTSC composite monitor.\n"
+                                  "Color bleed and hi-res text artifact colors.");
+            if (composite_mode) {
+                ImGui::TextColored(dim, "mode=%02X -> %s",
+                    cga->mode_register(),
+                    comp_grayscale ? "grayscale (BW bit)" : "color");
+            }
         }
         ImGui::Checkbox("CRT scaler", &crt_scaler);
         if (ImGui::IsItemHovered())
@@ -3157,7 +3174,10 @@ void Renderer::render_loop(std::stop_token stop) {
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassW(&wc);
 
-    HWND hwnd = CreateWindowW(L"BenchRenderer", L"IBM 5150 - MDA",
+    const wchar_t* title = ega_ ? L"IBM 5150 - EGA"
+                         : cga_ ? L"IBM 5150 - CGA"
+                                : L"IBM 5150 - MDA";
+    HWND hwnd = CreateWindowW(L"BenchRenderer", title,
         WS_OVERLAPPEDWINDOW, x, y,
         wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, wc.hInstance, nullptr);
@@ -3182,11 +3202,14 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.drive_a_loaded = disk_a_path_;
     dx.fdc = fdc_;
     dx.cga = cga_;
+    dx.ega = ega_;
     dx.clk_gen = clk_gen_;
     dx.sys_info = sys_info_;
     dx.renderer_owner = this;
     // Create rasterizer based on installed display card
-    if (cga_)
+    if (ega_)
+        dx.rasterizer = std::make_unique<EgaRasterizer>(ega_);
+    else if (cga_)
         dx.rasterizer = std::make_unique<CgaRasterizer>(cga_);
     else if (vram_)
         dx.rasterizer = std::make_unique<MdaRasterizer>(mda_card_, vram_);
@@ -3254,7 +3277,8 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      IC_8284A* clk_gen,
                      const SystemInfo& sys_info,
                      const IC_8259A* pic,
-                     const IC_8253* pit) {
+                     const IC_8253* pit,
+                     const ISA_EGA* ega) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -3266,6 +3290,7 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
     mda_card_ = mda_card;
     bus_probe_ = bus;
     cga_ = cga;
+    ega_ = ega;
     kbd_ = kbd;
     fdc_ = fdc;
     clk_gen_ = clk_gen;

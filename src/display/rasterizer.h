@@ -48,6 +48,11 @@ public:
     struct UVRect { float u0, v0, u1, v1; };
     virtual UVRect output_uv_rect() const { return {0, 0, 1, 1}; }
 
+    // Dot-resolution canvas size of output_srv(). Sizes the renderer's
+    // CRT-scaler/bezel intermediate targets. 0 = not texture-based.
+    virtual int out_width() const { return 0; }
+    virtual int out_height() const { return 0; }
+
     // Whether this rasterizer renders directly to the back buffer via D2D.
     virtual bool uses_d2d() const { return false; }
 

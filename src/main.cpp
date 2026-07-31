@@ -10,6 +10,7 @@
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
 #include "isa/isa_cga.h"
+#include "isa/isa_ega.h"
 #include "isa/isa_ram.h"
 #include "display/renderer.h"
 #include "debug/memory_view.h"
@@ -34,7 +35,8 @@ using namespace bench;
 
 // Display card selection: uncomment ONE
 //#define DISPLAY_MDA   // MDA 80x25 monochrome
-#define DISPLAY_CGA   // CGA color
+//#define DISPLAY_CGA   // CGA color
+#define DISPLAY_EGA   // EGA (Phoenix video BIOS option ROM at C0000)
 
 // ========================================================================
 // System -- owns the entire simulation, can be rebuilt from a save file.
@@ -90,6 +92,7 @@ struct System {
     std::unique_ptr<ISA_TestCard> testcard;
     std::unique_ptr<ISA_FloppyController> fdc;
     std::unique_ptr<ISA_CGA> cga;
+    std::unique_ptr<ISA_EGA> ega;
     std::unique_ptr<ISA_MDA> mda;
     std::unique_ptr<ISA_RAM> ram_exp;
     std::unique_ptr<TestKeyboard> keyboard;
@@ -155,6 +158,12 @@ static System build_system(const SystemConfig& cfg,
     sys.board->add_floppy_drives(2);
 
     // J3: Display card
+#if defined(DISPLAY_EGA)
+    sys.ega = std::make_unique<ISA_EGA>();
+    sys.ega->set_clk_counter(&sys.board->clk_gen->clk_cycles_ref());
+    sys.isa_bus->insert_card(2, sys.ega.get(), 0, 0x04);  // IRQ2 vertical interrupt
+    sys.board->set_video(Board::NONE);  // SW1 video 00 = EGA / option ROM
+#else
 #ifdef DISPLAY_CGA
     if (cfg.use_cga) {
         sys.cga = std::make_unique<ISA_CGA>();
@@ -168,6 +177,7 @@ static System build_system(const SystemConfig& cfg,
         sys.isa_bus->insert_card(2, sys.mda.get());
         sys.board->set_video(Board::MDA);
     }
+#endif
 
     // J4: RAM expansion
     if (cfg.expansion_kb > 0) {
@@ -231,6 +241,17 @@ static void bind_debug(System& sys) {
         sys.memview.map(ISA_CGA::FB_BASE, ISA_CGA::FB_SIZE,
             [&sys](uint32_t addr) -> uint8_t {
                 return sys.cga->vram()[addr - ISA_CGA::FB_BASE];
+            });
+    }
+    if (sys.ega) {
+        // CPU-view of the current EGA memory window + video BIOS ROM.
+        sys.memview.map(0xA0000, 0x20000,
+            [&sys](uint32_t addr) -> uint8_t {
+                return sys.ega->debug_peek(addr);
+            });
+        sys.memview.map(ISA_EGA::ROM_BASE, ISA_EGA::ROM_SIZE,
+            [&sys](uint32_t addr) -> uint8_t {
+                return sys.ega->debug_peek(addr);
             });
     }
     if (sys.mda) {
@@ -334,7 +355,13 @@ static void start_renderer(Renderer& renderer, System& sys) {
         sys_info.rom_sets.push_back(rs.name);
     sys_info.rom_set = sys.config.rom_set;
 
-    if (sys.cga) {
+    if (sys.ega) {
+        renderer.start(nullptr, &sys.board->clk_gen->clk_cycles_ref(),
+            sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
+            nullptr, &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
+            nullptr, sys.board->clk_gen, sys_info,
+            sys.board->pic, sys.board->pit_ic, sys.ega.get());
+    } else if (sys.cga) {
         renderer.start(nullptr, &sys.board->clk_gen->clk_cycles_ref(),
             sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
             nullptr, &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
