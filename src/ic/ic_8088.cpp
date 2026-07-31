@@ -925,6 +925,14 @@ EUTask<void> IC_8088::eu_run() {
             if (i_reg_ < 4) {
                 scratch_uint_ %= i_reg_ / 2 + top_bit();
                 RMEM_(rm_addr_, scratch2_uint_);
+            } else if (scratch_uint_ > 31) {
+                // Full 8-bit count, no 186-style 5-bit mask -- but C++ shifts
+                // of these 32-bit temporaries are UB for counts >= 32 (the
+                // x86 host masks to 5 bits, which IS the 186 behavior and
+                // made detection software report an 80188). Counts >= the
+                // operand width all give the same result (0 / sign fill /
+                // CF=0), so 31 is exact for 8/16-bit operands.
+                scratch_uint_ = 31;
             }
             if (i_reg_ & 1) {
                 RMEM_(rm_addr_, op_dest_); op_source_ = scratch_uint_;
@@ -1368,8 +1376,6 @@ EUTask<void> IC_8088::eu_run() {
         op_result_ = d & s;
         break;
     }
-    case 48: // 0F xx (emulator-specific, not used on real hardware)
-        break;
     case 53: { // HLT
         bool irq = (regs8()[FLAG_IF] && pin_intr_.level() == Level::High) || nmi_pending_;
         advanceIp = irq;
@@ -1422,12 +1428,19 @@ EUTask<void> IC_8088::eu_run() {
         if (set_flags_type_ & FLAGS_UPDATE_OC_LOGIC) { set_CF(0); set_OF(0); }
     }
 
+    // Interrupt shadow: loading a segment register (MOV sreg,r/m or POP
+    // sreg) inhibits interrupt recognition until after the NEXT instruction,
+    // so MOV SS / MOV SP pairs cannot be split by an IRQ on a half-switched
+    // stack. Applies to INTR, NMI, and single-step trap.
+    bool sreg_shadow = raw_opcode_id_ == 0x8E || xlat_opcode_id_ == 26;
+
     // Trap flag
-    if (trap_flag_) { PC_INTERRUPT_(1); }
+    if (trap_flag_ && !sreg_shadow) { PC_INTERRUPT_(1); }
     trap_flag_ = regs8()[FLAG_TF];
 
     // Interrupt check (not taken during HLT -- handled after HaltAwaiter)
-    if (regs8()[FLAG_IF] && !seg_override_en_ && !rep_override_en_ && !regs8()[FLAG_TF]) {
+    if (!sreg_shadow &&
+        regs8()[FLAG_IF] && !seg_override_en_ && !rep_override_en_ && !regs8()[FLAG_TF]) {
         if (nmi_pending_) {
             nmi_pending_ = false;
             PC_INTERRUPT_(2);
