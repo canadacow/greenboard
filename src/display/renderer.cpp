@@ -1488,7 +1488,12 @@ void DxState::render_display() {
                     // green subpixel trick needs to drive the panel's actual
                     // RGB subpixels), stepping to 2px only past ~1440p so the
                     // grille doesn't vanish on very high-DPI panels.
-                    float triad_px = (dst_h * bz_zoom > 1600.0f) ? 2.0f : 1.0f;
+                    // The EGA triad-stripe mask stays at 1px at any DPI: a
+                    // 3px triad period on a 4K picture (~870 triads across)
+                    // matches the 5154's 0.31mm dot pitch (~775 triads across
+                    // the 9.5" visible width); 2px cells would halve that
+                    // density and make the mask twice as coarse as the tube.
+                    float triad_px = (!ega && dst_h * bz_zoom > 1600.0f) ? 2.0f : 1.0f;
                     float bcb[24] = {
                         0, 0, 1, 1,
                         bz_hsize * hv_size, bz_vsize * hv_size,
