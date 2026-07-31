@@ -164,10 +164,25 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
         EMIT(border);
     }
 
+    // Palette RAM owned by the CPU (Palette Address Source = 0):
+    // video data cannot address the palette -- active display blanks.
+    // The overscan register is separate, so the border stays.
+    if (flags & 4) {
+        output_tex[dtid.xy] = float4(0, 0, 0, 1);
+        return;
+    }
+
     // --- Active display ---
-    uint eff = (region_px >> div2) + (pel_pan & 7);
-    uint word_mode = (crtc_mode & 0x40) ? 0 : 1;
-    uint stride = word_mode ? 2 : 1;
+    // Pel pan: 8-dot chars shift 0-7. In 9-dot (monochrome text) the
+    // sequence is 8,0,1..7 = shifts of 0,1,2..8.
+    uint pan = (char_w == 9) ? ((pel_pan == 8) ? 0 : min(pel_pan, 7) + 1)
+                             : (pel_pan & 7);
+    uint eff = (region_px >> div2) + pan;
+    // Fetch address per character: word mode = 2 bytes/char (MA*2).
+    // Count-by-two (CRTC Mode Control bit 3) halves the MA clock, so
+    // word mode + count-by-two is byte-linear again (modes E/F).
+    // Byte mode is linear by definition.
+    uint fetch_mul = ((crtc_mode & 0x48) == 0) ? 2 : 1;
 
     uint pal_idx;
     if (attr_mode & 1) {
@@ -177,15 +192,15 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
             // Shift register mode: CGA-compatible 2bpp. Each byte pair
             // is chained: pixels 0-3 from the plane 0 byte, 4-7 from
             // the plane 1 byte (2 bits per pixel, MSB first).
-            uint b0 = plane_byte(sl_base, 0, col * stride);
-            uint b1 = plane_byte(sl_base, 1, col * stride);
+            uint b0 = plane_byte(sl_base, 0, col * fetch_mul);
+            uint b1 = plane_byte(sl_base, 1, col * fetch_mul);
             uint pin = eff & 7;
             pal_idx = (pin < 4) ? ((b0 >> (6 - 2 * pin)) & 3)
                                 : ((b1 >> (6 - 2 * (pin - 4))) & 3);
         } else {
             // Planar 4bpp: one bit from each plane.
             uint bit = 7 - (eff & 7);
-            uint boff = col * stride;
+            uint boff = col * fetch_mul;
             pal_idx = ((plane_byte(sl_base, 0, boff) >> bit) & 1)
                     | (((plane_byte(sl_base, 1, boff) >> bit) & 1) << 1)
                     | (((plane_byte(sl_base, 2, boff) >> bit) & 1) << 2)
@@ -195,8 +210,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
         // ----- Alphanumeric -----
         uint col = eff / char_w;
         uint din = eff % char_w;
-        uint ch = plane_byte(sl_base, 0, col * stride);
-        uint at = plane_byte(sl_base, 1, col * stride);
+        uint ch = plane_byte(sl_base, 0, col * fetch_mul);
+        uint at = plane_byte(sl_base, 1, col * fetch_mul);
 
         uint fg = at & 0x0F;
         uint bg = (at >> 4) & 0x0F;
@@ -271,19 +286,43 @@ Rasterizer::UVRect EgaRasterizer::output_uv_rect() const {
     return { u0, v0, u1, v1 };
 }
 
+// The 5154's sweep amplitude and centering are preset per rate mode
+// (15.7 kHz CGA-compatible vs 21.8 kHz enhanced), tuned so every
+// standard mode frames the same: the active picture fills the face
+// with a thin overscan ring, and the rest of the scan (large in
+// 200-line modes: 262-line frame, 200 active) lands off the tube.
+// Unlike the CGA -- where IBM's tables put active video at a fixed
+// sync offset in every mode -- the EGA's 200- and 350-line timings
+// share no common sync-to-active layout, so the painted window is
+// anchored on the active area with proportional margins rather than
+// on a fixed time-after-hsync.
 Rasterizer::UVRect EgaRasterizer::painted_rect() const {
     uint32_t h_total = ega_card_->h_total_chars();
     uint32_t hsync_pos = ega_card_->hsync_pos_chars();
     uint32_t dpc = ega_card_->dots_per_char_out();
     uint32_t total = h_total * dpc;
     uint32_t active = (h_total > hsync_pos) ? (h_total - hsync_pos) * dpc : 0;
-    if (total < 64 || total > (uint32_t)OUT_W || active >= total)
+    uint32_t width = ega_card_->h_displayed_dots();
+    uint32_t top = ega_card_->active_start_scanline();
+    uint32_t lines = ega_card_->v_displayed_lines();
+    if (total < 64 || total > (uint32_t)OUT_W || width == 0 ||
+        active + width > total || lines < 100 || lines > (uint32_t)OUT_H ||
+        top + lines > (uint32_t)OUT_H)
         return {0, 0, 1, 1};
-    uint32_t left = (active > 32) ? active - 32 : 0;
-    uint32_t lines = ega_card_->frame_total_lines();
-    if (lines > (uint32_t)OUT_H) lines = OUT_H;
-    return { float(left) / OUT_W, 0.0f,
-             float(total) / OUT_W, float(lines) / OUT_H };
+
+    // Overscan ring: 5% of the active width, 4% of the active height
+    // per side (about what the tuned CGA bezel shows).
+    float mh = width * 0.05f;
+    float mv = lines * 0.04f;
+    float u0 = ((float)active - mh) / OUT_W;
+    float u1 = ((float)active + width + mh) / OUT_W;
+    float v0 = ((float)top - mv) / OUT_H;
+    float v1 = ((float)top + lines + mv) / OUT_H;
+    if (u0 < 0.0f) u0 = 0.0f;
+    if (v0 < 0.0f) v0 = 0.0f;
+    if (u1 > 1.0f) u1 = 1.0f;
+    if (v1 > 1.0f) v1 = 1.0f;
+    return { u0, v0, u1, v1 };
 }
 
 bool EgaRasterizer::init(const RenderContext& rc) {

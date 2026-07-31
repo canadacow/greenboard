@@ -169,6 +169,8 @@ public:
         // bit1: RGBI monitor decode (200-line modes: palette bit 4 is
         //       the intensity bit, secondary bits ignored -- the monitor
         //       runs in CGA-compatible 15.7 kHz mode)
+        // bit2: palette RAM owned by the CPU (Palette Address Source =
+        //       0): active display blanks
         uint32_t flags;
         uint32_t _pad[3];
         // The 4 plane rows the beam fetched (64 uint32s = 256B each)
@@ -183,7 +185,10 @@ public:
 
     // --- Geometry helpers for the rasterizer's crop rect ---
     uint32_t h_total_chars() const { return (uint32_t)crtc_[CRTC_HTOTAL] + 2; }
-    uint32_t hsync_pos_chars() const { return crtc_[CRTC_HSYNC_S]; }
+    // Retrace start plus the R5 bits 5-6 delay skew (0-3 chars).
+    uint32_t hsync_pos_chars() const {
+        return (uint32_t)crtc_[CRTC_HSYNC_S] + ((crtc_[CRTC_HSYNC_E] >> 5) & 3);
+    }
     // Output dots per character clock (pixel-doubled when dot clock /2).
     uint32_t dots_per_char_out() const {
         uint32_t w = (seq_[SEQ_CLOCKING] & 0x01) ? 8 : 9;

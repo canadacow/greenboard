@@ -106,7 +106,7 @@ uint8_t ISA_EGA::on_io_read(uint16_t port) {
     bool color = (misc_ & 0x01) != 0;  // CRTC/status base: 3Dx vs 3Bx
 
     switch (port) {
-        // Input Status 0: switch sense + CRT interrupt pending.
+        // Input Status 0: switch sense + CRT interrupt status.
         // CLKSEL (Misc bits 2-3) selects which of the 4 DIP switches is
         // read on bit 4.
         case 0x3C2: {
@@ -114,7 +114,11 @@ uint8_t ISA_EGA::on_io_read(uint16_t port) {
             uint8_t clksel = (misc_ >> 2) & 3;
             if (SWITCHES & (8 >> clksel))
                 st |= 0x10;
-            if (crt_int_)
+            // Bit 7 per the tech ref: "a logical 1 indicates video is
+            // being displayed; a logical 0 indicates that vertical
+            // retrace is occurring" -- live status, not a latched
+            // interrupt flag (the IRQ2 line latch is separate).
+            if (!in_vsync_)
                 st |= 0x80;
             return st;
         }
@@ -127,10 +131,16 @@ uint8_t ISA_EGA::on_io_read(uint16_t port) {
                 return 0xFF;
             attr_flip_ = false;
             uint8_t st = 0;
-            if (!displaying())
-                st |= 0x01;    // 1 = blanking (border or retrace)
+            // Bit 0 is the EGA's one status inversion vs CGA/VGA: the
+            // tech ref defines it as the REAL display enable ("logical
+            // 0 indicates the raster is in a retrace interval"), and
+            // the EGA BIOS listing's snow-avoidance loop (write-char,
+            // TEST AL,1 / JNZ twice) waits for bit 0 = 0 before writing
+            // VRAM. So 1 = active display, 0 = blanking/retrace.
+            if (displaying())
+                st |= 0x01;
             if (in_vsync_)
-                st |= 0x08;
+                st |= 0x08;    // 1 = vertical retrace (same as CGA/VGA)
             return st;
         }
 
@@ -545,13 +555,18 @@ void ISA_EGA::stamp_scanline() {
     sr.ma           = row_ma_;
     sr.ra           = ra_;
     sr.h_displayed  = (uint32_t)crtc_[CRTC_HDISP_END] + 1;
-    sr.hsync_pos    = crtc_[CRTC_HSYNC_S];
+    // Retrace delay skew (R5 bits 5-6) shifts the whole retrace pulse
+    // later by 0-3 character clocks (IBM uses it for screen centering:
+    // mode 10h programs 1, mode F programs 3).
+    sr.hsync_pos    = hsync_pos_chars();
     sr.hsync_width  = ((crtc_[CRTC_HSYNC_E] & 0x1F) - (crtc_[CRTC_HSYNC_S] & 0x1F)) & 0x1F;
     sr.h_total      = h_total_chars();
     sr.pel_pan      = attr_[ATTR_PEL_PAN] & 0x0F;
     sr.plane_enable = attr_[ATTR_PLANE_EN] & 0x0F;
     sr.border       = attr_[ATTR_OVERSCAN] & 0x3F;
-    sr.char_map     = seq_[SEQ_CHAR_MAP];
+    // Character map select only works with the memory expansion
+    // installed (Memory Mode bit 1); otherwise bank 0 is forced.
+    sr.char_map     = (seq_[SEQ_MEM_MODE] & 0x02) ? seq_[SEQ_CHAR_MAP] : 0;
     sr.underline    = crtc_[CRTC_UNDERLINE] & 0x1F;
     for (int i = 0; i < 4; ++i) {
         sr.palette[i] = (uint32_t)attr_[i * 4]
@@ -562,9 +577,12 @@ void ISA_EGA::stamp_scanline() {
     // Display enable: rows between VDE and VTOTAL are border. A frame
     // under 300 lines means 15.7 kHz CGA-compatible timing -- the
     // monitor decodes the color signal as RGBI (palette bit 4 =
-    // intensity) instead of 6-bit rgbRGB.
+    // intensity) instead of 6-bit rgbRGB. While the Palette Address
+    // Source bit is 0 the CPU owns the palette RAM and video data
+    // cannot address it -- active display blanks.
     sr.flags = (line_ < v_displayed_lines() ? 1u : 0u)
-             | (frame_total_lines() < 300 ? 2u : 0u);
+             | (frame_total_lines() < 300 ? 2u : 0u)
+             | (palette_source_ ? 0u : 4u);
     sr._pad[0] = sr._pad[1] = sr._pad[2] = 0;
 
     // Capture the plane rows the beam fetches this scanline.

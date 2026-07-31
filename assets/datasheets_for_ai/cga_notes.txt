@@ -1,0 +1,141 @@
+Hello!
+
+I'm the founder of Blur Busters and TestUFO, and I'm the resident expert of the "Present()-to-photons" black box on PC based systems.
+
+Most of you have figured this out by now, but, I'd like to provide a useful diagram that enlightens many people a bit more quickly.
+
+The display is not "deciding". It's definitely something digital before the analog side (either spewing out of the CRTC, or some digital trigger circuit between the CRTC or the display itself)
+
+Terminology vary a lot between communities, e.g. broadcast vs programmers vs manufacturers vs API naming nomenclature. e.g. "Overscan" = "Porch", or "VBLANK" = "VSYNC", but they can be different, if one community considers VBLANK as (VSYNC + vertical porches), but another community does not. It is sort of a "Semantics Shemantics" rabbit hole, but for simplicity, I'll stick to Blur Busters's usual terminologies for the purposes of this post. A specific API or register named "SyncLength" might refer to only the sync pulse, or the entire blanking interval (sync and porches) -- on different platforms. I don't know what 5150 does terminologically / signally, but it merits keeping in mind.
+
+So, here are some generalities:
+
+What the software thinks is not always aligned with the analog signal.
+What some elsewhere call HBLANK often accidentally includes horizontal back porch (left overscan) and vertical back porch (right overscan), in addition to the real HBLANK.
+What some elsewhere call VBLANK often accidentally includes vertical back porch (top overscan) and vertical front porch (bottom overscan), in addition to the real VBLANK.
+What some elsewhere call OVERSCAN (for borders) isn't always pixel-aligned with signal-level horizontal back porch and vertical back porch.
+Most color-border overscan is actually not part of the signal vertical back porch nr vertical front porch!
+The (turned-off but sometimes still spewing a few latent electrons) CRT beam is held stationary beyond left edge of tube if it's finished moving there during true horizontal signal blanking (HBLANK analog side)
+The CRT beam yoke electromagnets instantly starts deflecting left-to-right upon analog signal edge transition from HBLANK to signal-level overscan (horizontal back porch)
+Thus, horizontal image position on a real tube is typically very dependant on the exit out of signal HSYNC (transition from signal HSYNC to left overscan).
+So you've got two terminological overscans (sometimes three!) involved in concentric rectangles around your addressable graphics -- the color borders overscan and the signal overscan.
+
+Most are usually unaware that overscan actually contains two overscans on some platforms.
+
+Here is a modified version of my earlier signal structure diagram, to highlight the two overscans.
+
+SignalStructureForRetroEmulatorCoders.jpg
+
+Sometimes on some platforms, the overscan merges both only on a certain platform (e.g. border color in front porches, and using a very thin black-color back porch). Or, depending on platform, signal, and signal type, there can be three concentric overscan rectangles, e.g. a different-color padding between the outer signal overscan and inner border-colors overscan, depending on the signal used.
+
+In programming some platforms, there can be some transfers between all, e.g. most CRTs will be fine if you randomly transfer pixel between inner/outer every line (horizontals) or every frame (verticals), as like color in actual signal overscan, or signal overscan in what was normally border color. It's typically harmless to "slush" a little that way, as long as you don't bleep around with those "blanking"->"porch" signal transitions, and you don't bleep around with those clocks per line or per refresh. Since overscan is really just usually black pixels historically. In some signal standards like NTSC, porches are simply same as black pixel voltage (7.5 IRE) and sync is below black pixel voltage (0 IRE). RGBI does not work the same way, but they still have use signal blanking and signal porches too on the analog side.
+
+Sometimes you've got some weirdnesses on some signals of merged overscans only on certain edges, where the back porch is normal specification but the front porch is out-of-spec with non-black pixels (merged bordercolor with front porch) -- whether by programming tricks or quirks on specific platforms. This, too, typically works on real tubes, though can create side effects, like edge distortions or slight black level risings from the electron backscatter of the beam hitting the inside of the tube outside the phosphor mask area. So it's not always concentric rectangles.
+
+If there are still problems after some debugging -- perhaps some dummy padding is being kicked/slushed around a bit from abusing CRTC like a TIA. Your logical sync stuff may or may not line up with the signal sync stuff.
+
+I am not an expert on the CRTC, just the generic signal layout found in all video signals, analog and digital, including components that modifies analog horizontal position.
+
+From the existing registers, some math between HorizontalSyncPosition and SyncWidth may allow you to determine where the signal HSYNC ends (overscan starts), since that's the important image-positioner dependency on a real CRT, unless some black box circuitry is executing some automatic compensation.
+
+There's possibly three components (horizontal front porch, horizontal overscan, horizontal back porch) you're going to have to math-out from the registers you are successfully emulating. Depending on what the registers really creates analog-side, it is possible to ignore the front porch as part of your mathematics, if you don't need it to determine the size of back porch. But if you aren't emulating enough data in order to determine the exact moment signal HSYNC falling from true->false (transition from HSYNC to overscan) that dictates horizontal image positioning on a real CRT tube, then you're going to have to reverse-engineer with an oscilloscope next.
+
+You might be witnessing a situation where you've got thicker/thinner HBLANK and thinner/thicker porches (still same clocks per line). Or where you've got your HBLANK offsetting left/right ("thinner back porch/thicker front porch" situation) Either way same clocks per line. Most CRTs work fine that way, although the image position usually shifts left/right if you transfer timings between the front-vs-back horizontal porch.
+
+However, your situation of:
+- Horizontally shifted image in the emulator
+- Constantly centered image on real machine
+Might be from the emulator assuming incorrect end-of-hblank position, like not knowing where the signal-hblank transitions to signal-hbackporch, which might not be easy to determine (?) without a bit of further reverse engineering. Most emulators simply treat the blanking intervals as one monolithic block without all those pesky little components...
+
+There's some sheningans that seems to shift blanks around a bit -- but it's definitely something before the analog side, as the beam electromagnets only starts deflecting the cathode ray from left-to-right upon the edge-transition from hblank to horizontal back porch. So reverse engineer that edge transition with an oscilloscope! The signal HSYNC and VSYNC (also called HBLANK or VBLANK, if it's not including the porches) "holds" the turned-off beam stationary at the very left (when in HSYNC) and very top (when in VSYNC) if it's already finished moving there, and the beam doesn't start moving until the edge-transition into porch (signal overscan).
+
+To help debug how the CRTC decides to mis-align signal blanks/overscan timings with assumed blanks/overscans -- I suggest connecting an oscilloscope.
+
+There may be multiple possible oscilloscope-debug workflows, such as connecting Oscillope Input #1 to the analog signal of a real IBM CGA monitor during executing 8088 MPH as well as AREA 5150, while connecting oscilloscope input #2 to some debugging trigger (e.g. an Arduino logic-monitor "listening into a CRTC pin and triggering a marker pulse when a specific value is written to specific registers") -- and watching the offsets between #1 and #2 on the oscilloscope screen. Finding the certain patterns where the Ground Truth changes (signal edge of hblank suddenly transitioning to horizontal back porch), and modifying the emulator to be more compatible, perhaps. There may be easier oscilloscope debugging workflows, but an oscilloscope may be needed to debug the offset between assumed vs actual. Reverse engineer those sync->porch transitions. This Is The Way </mandalorian>
+
+(Did you know? This signal structure has been around for a century, still in 2020s DisplayPort, even in a 240Hz DSC G-SYNC signal! It is the topology found from 1930s analog TV broadcast signal through 2020s DisplayPort (in digital format), so it's impressive we've stuck to the same raster topology for a century! The digital transition kept the analog timings like time-paddings and comma separators so precisely that a generic passive synchronous 1:1 VGA->HDMI adaptor (in the era before full HDMI packetization) works perfectly timing-wise. So everything's still there digitally in a 2020s DisplayPort signal as an analog signal of the same timing parameters. Although modern DP/HDMI packetization and multiplex (audio packets, etc) jitters by an error margin of about 1 scanline nowadays. But that, today, even is still good enough for line-based beam racing today. It's just an obvious defacto serialization of 2D imagery into a 1D spew threw a cable / radio / drinking straw / etc)
+
+_____
+
+Some more background: I am in 25 research papers (purple "Research" tab at Blur Busters website). I don't have much demoscene cred, but I cut my teeth on Commodore 64, with 6502 and beam racing experience.
+
+I'm the author of the still-WIP Tearline Demo (volunteers welcome) for treating any tearing-capable GeForces/Radeons/Intel like an Atari TIA (beam racing modern GPUs), I posted videos at pouet.net including real-raster Kefrens Bars on NVIDIA GeForce GTX 1080 GPU a few years ago ("Tearlines Are Just Rasters"), under Windows in mere C# HLE and the cross-platform MonoGame game engine. I also recompiled it on a Mac, and most of it worked, so it was crossplatform-capable, albiet with lots of raster jitters. Code was shelved, but with some babying, could become the world's first crossplatform rasterdemo, tolerating a bit of very fun raster jitter from all the varying error margins of the various platforms, abusing a number of modern GPUs like an Atari TIA, rendering unscreenshottable beamraced graphics on the fly. If any democoder would like to resurrect this concept and/or teamup and include me in the credits, I'm open. Time is limited on my side, but I can teach modern-GPU beamracing basics.
+
+Some emulators (Toni's WinUAE and Tom Harte's CLK) now use my findings to create a new lagless VSYNC mode, with sub-refresh latencies, by Present()ing frameslices during VSYNC OFF mode later blocks of scanlines to the GPU even while the GPU is already video-outputting earlier scanlines, from an invention of mine called "frameslice beam racing", which has been named "lagless vsync" by Toni of WinUAE Amiga Emulator. Windows D3DKMTGetScanLine() is sometimes used, or a raster-estimate via time-offset between consecutive VSYNCs, with Present()+Flush() precisely timed by CPU busywait loops, during a Full Screen Exclusive VSYNC OFF mode (that has ugly tearing unless the tearing is hidden by beamracing). This works just fine since there's a performance jitter safety margin in frameslice beamracing. Since WinUAE/CLK respective lagless vsync races ahead of the real displays' raster, VSYNC OFF never tears, and is a solid lagless "perfect VSYNC ON lookalike" emulated mode, e.g. 600fps VSYNC OFF at 10 frameslices per emulated 60Hz refresh cycles. And tearing/glitching never appears unless the system jitters 1/600sec "late", etc. Assuming the realworld raster is inside the jitter margin of one frameslice ago, aka (0.5 + 1)/600sec, this is only ~1.5/600sec input lag behind a real machine! (Configurable higher or lower, e.g. 1200fps, 1800fps, etc). Thin VSYNC OFF frameslices that are beamraced onto the screen, appended to the still-invisible "tearline" before the beam hits it. That way, you can stay tearingless. That creates subrefresh-latency "VSYNC ON" done via raster beam racing software tricks on VSYNC OFF -- with no tearing! Some GPUs can do over 2000 frameslices per second in WinUAE, creating sub-1ms lag relative to original machine! While not useful for emulators playing demoscene content, but great for gaming in an emulator to have original-machine lagfeel -- it is pretty clever.
+
+[Edited again for corrections; grammar; terminology. May still contain slip-ups, like interchanges between HBLANK vs HSYNC]
+
+GloriousCow wrote on 2023-07-01, 13:14:
+Hi! This is a wealth of information, and I appreciate you sharing it. It will take me a while to digest it all.
+
+No rush. It's a hobby of mine to dabble in all of this on the side!
+
+GloriousCow wrote on 2023-07-01, 13:14:
+My assumption was there was something in say, the IBM 5153, that would do an hsync if the CGA/CRTC did not otherwise trigger one, otherwise, what happens? The beam just sits on the right side of the screen forever?
+
+Only within the tight confines' of the display horizontal scanrate specifications.
+
+For example, if your CRT tube supports 31.5KHz-67KHz horizontal scan rate, you have to begin deflecting the beam again 1/67000sec and 1/31500sec or the tube is gonna go out of sync (e.g. roll, tear, skew, whatever). At higher scanrates, the beam has little time to be parked, while at lower scanrates, the beam have lots of time to be parked. Some deflectors are so slow (especially on early fixed-sync tubes), that there's no time for the beam to loiter at the left edge of the screen waiting for the HSYNC to disappear from the signal.
+
+It is just analog electronics behavior. Metaphorically, like a fully charged capacitor no longer accepting electrons -- depending on how quickly you interrupt the charging. If your scanrate is really high, and the horizontal deflector is slow, the beam has no time to park itself. If your scanrate is low and/or the horizontal deflector is powerful, the beam can be parked for a long time.
+
+I only simply explain this, only to explain why the horizontal picture position changes on an analog tube if you vary the HSYNC edge position in a signal. Fixed-sync CRTs are very forgiving with slightly early / slightly out-of-spec late HSYNC -- as long everything else is in-spec. It just merely simply affects horizontal picture position. I only explained it only to explain horizontal picture position behaviors on a real CRT, which affected by whatever you slush between the left/right porches (overscan) at the HSYNC signal edge.
+
+The (turned-off) beam may or may not loiter parked motionless at left edge. The CRT tube's "horizontal scan rate" range simply make sure there's enough time for the beam to reach the left side (and enough beam acceleration/deceleration room in the porches -- that's why linearity is often compressed if you try to put picture data inside signal overscan area) -- whether or not it immediately scans the next scanline, or just loiters parked until signal HSYNC ends. Hope this makes sense.
+
+Also you have to keep a fixed scanrate through the entire refresh cycle, or you will have really bad glitches (Pictures will be very unstable on raster CRTs if you vary the horizontal scanrate).
+
+Also, in many platforms (dont know if applies to CRTC) there are electronics that forces a fixed-size HSYNC and a fixed-size VSYNC. The respective graphics chip of the platform simply triggers it, and downstream electronics emits it on a fixed-time. Which is why if you trigger it, it's always the same number of black pixels or black scanlines artifacts in mid-refresh-cycle. If CRTC behaves this way, the great thing is you can simply use constants from knowing the signal specifications (e.g. number of cycles that a HSYNC takes) and just call it a day. You can simply subtract sizes/offsets and come up with the signal-overscan numbers (e.g. Horizontal Back Porch and Horizontal Front Porch). You're simply only concerned with the offset (position) of the HSYNC, and you can simply use a math constant to assume the size of HSYNC for specific video modes (e.g. 320x240, 512x384, 60Hz, 70Hz, etc). I assume you can do so. Then you can simply calculate the front porch and back porch that way by already knowing the constant size of HSYNC (if the electronics always emits fixed-size unchangeable-size HSYNCs). This means, if overscanned text modes and-nonoverscanned text modes create different video modes (e.g. different number of CPU cycles per scanline, or different number of CPU cycles per refresh cycle), then you will have to do different calibrations (lookup tables) for different video modes on a multisync display. Since horizontal picture position behaviors will be different for different video modes (different signal timings).
+
+I don't know how big the rabbit hole we're dealing with here, but isn't the 5150 display a single-video-mode fixed-frequency display -- essentially 40x25 and 80x25 are refreshing exactly the same number of cycles per line and per refresh? If so, your job is probably some simple adjustments. Otherwise...
+
+GloriousCow wrote on 2023-07-01, 13:14:
+mdrejhon wrote on 2023-07-01, 05:24:
+[*]The (turned-off but sometimes still spewing a few latent electrons) CRT beam is held stationary beyond left edge of tube if it's finished moving there during true horizontal signal blanking (HBLANK analog side)
+[*]The CRT beam yoke electromagnets instantly starts deflecting left-to-right upon analog signal edge transition from HBLANK to signal-level overscan (horizontal back porch)
+[*]Thus, horizontal image position on a real tube is typically very dependant on the exit out of signal HSYNC (transition from signal HSYNC to left overscan).
+
+Thanks, that's exactly the sort of thing I was curious about. I wasn't sure if the beam ever stopped moving or not.
+
+It may be, or it may not be. It depends on how fast the deflector managed to move the turned-off beam back to the left edge. Don't worry about that, it's /somewhat/ of red herring wrong tree in forest for the trees. I only simply explained only to explain analog horizontal-picture-positioning behavior -- the problem we're dealing with -- and the infodump to try to help you out on this specific other forest tree to focus on.
+
+Picture positioning flexibility may behave differently in different modes (e.g. 40x25 vs 80x25 vs non-standard modes), but it's still the offset of the HSYNC within the combined horizontal blanking (signal HSYNC + signal horizontal porches), that is affecting horizontal picture position. Theoretically easy to determine if you're permanently dealing with a single fixed-frequency mode (same clocks per line, same clocks per refresh). But if you're treating IBM's CRTC like an Atari TIA, I know that you could add/remove scanlines from refresh cycles on an Atari -- like having weird too-long or too-short refresh cycles. If you're going out of that one fixed-frequency spec of whatever standard (NTSC or RGBI or whatever), you'll definitely need to compensate as horizontal position during out-of-spec operation will be unpredictable, and will need to be validated by reverse engineering (comparing real system behavior to emulator behavior).
+
+mdrejhon wrote on 2023-07-01, 05:24:
+From the existing registers, some math between HorizontalSyncPosition and SyncWidth may allow you to determine where the signal HSYNC ends (overscan starts), since that's the important image-positioner dependency on a real CRT, unless some black box circuitry is executing some automatic compensation.
+
+GloriousCow wrote on 2023-07-01, 13:14:
+I think I have the end of HSYNC dialed in pretty well now, at least, everything appears well-centered if I assume that hsync lasts 80 hdots.
+
+That's a fair assumption.
+
+Since you're dealing with a fixed-frequency mode, the specifications of a fixed-frequency mode is conveniently hardcodeable -- so using magic numbers (80 hdots) for cycles are perfectly fair game here.
+
+Just make sure you've hardcoded the right numbers for the fixed-frequency analog timings that all the digital modes run through. Proceed with your path, if it worked. If it is flawless position sync vs real machine, then thank goodness you don't have to reverse engineer with an oscilloscope!
+
+...Unless you abuse the spec (different scanrate, different refresh rate, excessively large/tiny porches, etc).
+
+GloriousCow wrote on 2023-07-01, 13:14:
+This returns my virtual raster to the left side of the screen to draw the remaining hblank period (back porch?), which pushes the display area to the right. So things like 40 column vs 80 column modes now line up, and effects in Area 5150 that use a sync width of 15 also work.
+
+Good. I get the feeling you are doing it correctly now. (I think)
+
+GloriousCow wrote on 2023-07-01, 13:14:
+I've done some scope work on the CGA, particularly in terms of vsync/vblank timings, as I was curious about the exact timings of the last raster line of vblank where you kind of have vblank and hblank overlapping. The vsync output from the IN connector does seem to correlate with the vblank output from the CRTC, at least. There's more to be done there, certainly, my poor CGA card is bristling with test point wires at this point.
+
+There may be a HSYNC pulse embedded in the last VSYNC scanline, simply to make sure the beam is really at the left edge. HSYNC embedded early in VSYNC is ypically meaningless because it doesn't matter what the (turned off) CRT beam horizontally does when it's being moved vertically back to the top of the screen, as long as you have at least one HBLANK pulse before the next active scanline (time-aligned with previous HBLANK pulses).
+
+Simple analog circuits (lowest cost) expect to see a continuous VSYNC signal for a time period (with no HSYNC pulses in VSYNC scanlines) to move the beam more quickly to the top edge. But a bit of optional spec-violating (or spec-meeting!) HSYNC pulse late inside a final VSYNC scanline(s) is harmless, and just makes sure the beam is already leftwards when at the top.
+
+GloriousCow wrote on 2023-07-01, 13:14:
+Some good ideas there. An Arduino might be a little slow for the 14Mhz CGA clock but I'm working on 5v Teensy board that might be able to do the job. I thought it might even be a fun project to make a Teensy CGA.
+
+The latest Teensy can be overclocked to about a gigahertz too, if necessary. Spewing out RGBI in realtime would be a fun microcontroller project! You won't have time to do interrupts (USB communications etc), but I suspect we're reaching an era where it's becoming possible to software-generate RGBI in realtime.
+
+Semi-related, but my Tearline Jedi Kefrens Bars animation [YouTube] on a GeForce GTX 1080 Ti running at 8000fps is half NTSC scanrate (GPU generating 8000fps in 1-pixel-row frameslices). Every single pixel row is a VSYNC OFF tearline right above/below! So it's all one pixel row with approximately ~100-150 VSYNC OFF tearlines per refresh cycle at 60Hz, in a super-abuse of VSYNC OFF tearing to generate true-raster Kefrens Bars via any DirectX/OGL/Vulkan API in VSYNC OFF mode!
+
+So, that means if I had a GPU capable of 15750fps, and I could trust a RTOS to spew the scanlines deterministicaly enough, I could just Atari-TIA-style spew emulator scanlines out at NTSC scanrate! (Though unfortunately won't work in practice, as horizontal jitter is too imprecise, and the GPUs don't support low scanrates).
+
+However, scaled to destination resolution, and displayed on modern HDTVs, this would be an ultra-low emulator with only one scanline latency behind original machine connected to the same HDTV display!!! (Ideally two or three raceahead margin, as a computer-performance jitter safety margin).
+
+[EDIT -- one reply block was forked to a new thread. See below]
