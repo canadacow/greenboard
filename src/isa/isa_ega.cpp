@@ -167,7 +167,7 @@ void ISA_EGA::on_io_write(uint16_t port, uint8_t val) {
     switch (port) {
         case 0x3C2:
             misc_ = val;
-            spdlog::info("[EGA] misc=0x{:02X} (io={}, clk={}, page={})",
+            spdlog::debug("[EGA] misc=0x{:02X} (io={}, clk={}, page={})",
                          val, (val & 1) ? "3Dx" : "3Bx", (val >> 2) & 3, (val >> 5) & 1);
             return;
 
@@ -185,7 +185,7 @@ void ISA_EGA::on_io_write(uint16_t port, uint8_t val) {
         case 0x3C5:
             if (seq_index_ < 5) {
                 if (seq_[seq_index_] != val)
-                    spdlog::info("[EGA] seq[{}]=0x{:02X}", seq_index_, val);
+                    spdlog::debug("[EGA] seq[{}]=0x{:02X}", seq_index_, val);
                 seq_[seq_index_] = val;
             }
             return;
@@ -200,7 +200,7 @@ void ISA_EGA::on_io_write(uint16_t port, uint8_t val) {
                 // pipeline registers churn constantly during drawing.
                 if ((gc_index_ == GFX_MODE || gc_index_ == GFX_MISC) &&
                     gc_[gc_index_] != val)
-                    spdlog::info("[EGA] gc[{}]=0x{:02X}", gc_index_, val);
+                    spdlog::debug("[EGA] gc[{}]=0x{:02X}", gc_index_, val);
                 gc_[gc_index_] = val;
             }
             return;
@@ -219,7 +219,7 @@ void ISA_EGA::on_io_write(uint16_t port, uint8_t val) {
             } else {
                 if (attr_index_ < 20) {
                     if (attr_index_ >= 0x10 && attr_[attr_index_] != val)
-                        spdlog::info("[EGA] attr[0x{:02X}]=0x{:02X}", attr_index_, val);
+                        spdlog::debug("[EGA] attr[0x{:02X}]=0x{:02X}", attr_index_, val);
                     attr_[attr_index_] = val;
                 }
             }
@@ -241,7 +241,7 @@ void ISA_EGA::on_io_write(uint16_t port, uint8_t val) {
                 // churn on every scroll and cursor move).
                 if ((crtc_index_ < CRTC_START_H || crtc_index_ > CRTC_CURSOR_L) &&
                     crtc_[crtc_index_] != val)
-                    spdlog::info("[EGA] crtc[{}]=0x{:02X}", crtc_index_, val);
+                    spdlog::debug("[EGA] crtc[{}]=0x{:02X}", crtc_index_, val);
                 crtc_[crtc_index_] = val;
                 // Vertical Retrace End bit 4: a 0 clears the vertical
                 // interrupt latch (and the IRQ2 line).

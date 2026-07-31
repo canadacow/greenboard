@@ -175,7 +175,9 @@ struct DxState {
     uint64_t cath_clk = 0;
     bool prev_bz_power = true;
 
-    // Tuner values (exported from the web console session)
+    // Tuner values (exported from the web console session). The size/
+    // center trims are CGA-tuned; the EGA painted window needs none
+    // (overridden to 1.0/0.0 at startup when an EGA is installed).
     float bz_hsize = 1.075f, bz_vsize = 1.229f, bz_hpos = 0.022f, bz_vpos = 0.030f;
     float bz_hv_droop = 1.0f;  // HV droop strength (0 = perfectly regulated supply)
     float bz_vhold = 59.92f;   // V-HOLD: 59.92 = locked; lower = rolls
@@ -3196,6 +3198,14 @@ void Renderer::render_loop(std::stop_token stop) {
     dx.fdc = fdc_;
     dx.cga = cga_;
     dx.ega = ega_;
+    if (ega_) {
+        // The CGA-tuned bezel size/center trims don't apply to the
+        // EGA's CRTC-derived painted window.
+        dx.bz_hsize = 1.0f;
+        dx.bz_vsize = 1.0f;
+        dx.bz_hpos = 0.0f;
+        dx.bz_vpos = 0.0f;
+    }
     dx.clk_gen = clk_gen_;
     dx.sys_info = sys_info_;
     dx.renderer_owner = this;
