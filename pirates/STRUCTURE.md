@@ -572,22 +572,72 @@ Record format:
 Record size is `4 + width*height`. Verified: slot 25 pointer `0x1C1E`,
 slot 26 pointer `0x1CD2`, difference 180 = `4 + 16*11`.
 
-Pixel bytes are a **stencil**, not colour. Observed values are `0x00`
-(transparent), `0x55`, `0xFF`. The colour comes from `es:[0x408d]`, split into
-four pre-shifted 2-bit fields at `0A502`-`0A51E` and stored at `[0x1c]`-`[0x1f]`
-for the four pixel positions within a CGA byte.
-
 The atlas is loaded from disk by the boot loader (`0035C`), not generated.
 
-### Known slot ranges
+### Atlas extent
 
-| slots | dimensions | contents |
-|---|---|---|
-| 25-30 | 16 wide, 10-12 tall | clouds, six variants |
-| 48-62 | 9-20 wide, 12-14 tall | ship, one per heading |
+The table has no count field. Its length follows from the data: every record
+ends exactly where the next one begins, and that chain holds unbroken for 129
+slots. Slot 129's pointer yields dimensions 163x94, which is not a sprite.
 
-Sprite data regions touched in one trace: `1ECA6`-`1EDA1`, `1FC50`-`1FF13`,
-`20782`-`20BA5` (clouds), `21709`-`21C00` (ships), `21E7C`-`22233`.
+| item | value |
+|---|---|
+| slots | 129 |
+| pointer table | `0x1EBA0`-`0x1ECA2` (129 words) |
+| sprite records | `0x1ECA2`-`0x26BDF` (32,573 bytes) |
+| largest sprite | 46 x 42 |
+
+The 129-word table ends precisely where the first record starts, so the table
+size is fixed by the layout rather than inferred.
+
+### Pixel encoding
+
+In the CGA build the pixel bytes are a stencil: observed values `0x00`
+(transparent), `0x55`, `0xFF`, with colour supplied from `es:[0x408d]`, split
+into four pre-shifted 2-bit fields at `0A502`-`0A51E` and stored at
+`[0x1c]`-`[0x1f]` for the four pixel positions within a CGA byte.
+
+In the EGA build the bytes carry colour directly. Every value across all 129
+sprites is a doubled nybble, and the low nybble is an EGA colour index:
+
+| value | count | value | count |
+|---|---|---|---|
+| `00` | 18911 | `88` | 192 |
+| `11` | 826 | `BB` | 75 |
+| `22` | 808 | `CC` | 344 |
+| `33` | 455 | `DD` | 6123 |
+| `44` | 93 | `EE` | 10 |
+| `66` | 253 | `FF` | 2298 |
+| `77` | 1669 | | |
+
+`0x00` is transparent, 18,911 of 32,057 pixel bytes.
+
+### Slot contents (EGA trace)
+
+| slots | contents |
+|---|---|
+| 0-12 | cursor arrow, sword, smoke puffs, small icons |
+| 13-18 | clouds, six variants |
+| 19-51 | ships, several hull classes with roughly eight headings each |
+| 52-55, 84-87 | full-body figures |
+| 56-75, 88-107 | sword and arm poses, held in separate slots from the bodies |
+| 76, 108 | figure with arms raised |
+| 77-83 | legs, blue breeches |
+| 109-115 | legs, green breeches, same poses as 77-83 |
+
+Duel figures are composited from separate body, leg and arm slots rather than
+stored as whole frames.
+
+The CGA-trace slot numbers differ: clouds were observed at 25-30 and ships at
+48-62 there.
+
+Sprite data regions touched in one CGA trace: `1ECA6`-`1EDA1`,
+`1FC50`-`1FF13`, `20782`-`20BA5` (clouds), `21709`-`21C00` (ships),
+`21E7C`-`22233`.
+
+`pirates/sprite_atlas.json` holds slot, hotspot, dimensions and address for
+all 129 entries; `scripts/sprite_atlas.py` regenerates it and the contact
+sheet from a trace.
 
 ### Blitter (`0A340`-`0A5C5`)
 
