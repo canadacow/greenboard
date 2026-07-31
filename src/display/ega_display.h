@@ -26,6 +26,12 @@ public:
     // Vertical: starts at active_start (first frame line after VSYNC).
     UVRect output_uv_rect() const override;
 
+    // Painted window for the bezel monitor: 32 dots of left border
+    // before active video through the end of the line, and only the
+    // current frame's scanlines (the 512-line canvas can hold stale
+    // rows from a taller previous mode).
+    UVRect painted_rect() const override;
+
     // Output canvas in dot resolution. 912 dots covers the widest
     // standard line (CGA-compatible 200-line modes: 114 chars x 8 dots);
     // 350-line modes use 744 (93 x 8). 512 lines covers the EGA's 9-bit

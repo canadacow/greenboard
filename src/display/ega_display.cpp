@@ -49,16 +49,29 @@ uint plane_byte(uint sl_base, uint plane, uint byte_idx) {
     return (word >> ((byte_idx & 3) * 8)) & 0xFF;
 }
 
-// EGA 6-bit rgbRGB color to RGB. Primary bit = 2/3 amplitude, secondary
-// bit = 1/3: channel = primary*2 + secondary, scaled by 85.
-float4 ega_color(uint c) {
+// Color signal to RGB.
+// 350-line modes: 6-bit rgbRGB, primary bit = 2/3 amplitude, secondary
+// = 1/3 (channel = primary*2 + secondary, scaled by 85).
+// 200-line modes (rgbi != 0): the monitor runs at 15.7 kHz and decodes
+// RGBI -- bit 4 is the intensity bit, secondary red/blue are ignored,
+// and color 6 gets the CGA brown treatment (green halved).
+float4 ega_color(uint c, uint rgbi) {
+    if (rgbi) {
+        uint idx = (((c >> 4) & 1) << 3) | (c & 7);
+        uint i = (idx >> 3) & 1;
+        uint r = ((idx >> 2) & 1) * 0xAA + i * 0x55;
+        uint g = ((idx >> 1) & 1) * 0xAA + i * 0x55;
+        uint b = ((idx >> 0) & 1) * 0xAA + i * 0x55;
+        if (idx == 6) g = 0x55;
+        return float4(r / 255.0, g / 255.0, b / 255.0, 1.0);
+    }
     uint r = (((c >> 2) & 1) * 2 + ((c >> 5) & 1)) * 85;
     uint g = (((c >> 1) & 1) * 2 + ((c >> 4) & 1)) * 85;
     uint b = (((c >> 0) & 1) * 2 + ((c >> 3) & 1)) * 85;
     return float4(r / 255.0, g / 255.0, b / 255.0, 1.0);
 }
 
-#define EMIT(c6) { output_tex[dtid.xy] = ega_color(c6); return; }
+#define EMIT(c6) { output_tex[dtid.xy] = ega_color(c6, flags & 2); return; }
 
 // =========================================================================
 // EGA CRT beam model.
@@ -100,6 +113,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     uint border       = scanline_buf[sl_base + 13];
     uint char_map     = scanline_buf[sl_base + 14];
     uint underline    = scanline_buf[sl_base + 15];
+    uint flags        = scanline_buf[sl_base + 20];
 
     // Palette entry i (6-bit), packed 4 per uint32 in header words 16-19.
     // (inlined below as pal(i))
@@ -142,6 +156,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
 
     if (region_px >= active_dots) {
         EMIT(border);  // right overscan to end of line
+    }
+
+    // Border rows: vertical display enable is off between VDE and the
+    // frame end (bottom overscan / retrace region).
+    if (!(flags & 1)) {
+        EMIT(border);
     }
 
     // --- Active display ---
@@ -249,6 +269,21 @@ Rasterizer::UVRect EgaRasterizer::output_uv_rect() const {
     float u1 = float(start_dots + view_w) / float(OUT_W);
     float v1 = float(top + view_h) / float(OUT_H);
     return { u0, v0, u1, v1 };
+}
+
+Rasterizer::UVRect EgaRasterizer::painted_rect() const {
+    uint32_t h_total = ega_card_->h_total_chars();
+    uint32_t hsync_pos = ega_card_->hsync_pos_chars();
+    uint32_t dpc = ega_card_->dots_per_char_out();
+    uint32_t total = h_total * dpc;
+    uint32_t active = (h_total > hsync_pos) ? (h_total - hsync_pos) * dpc : 0;
+    if (total < 64 || total > (uint32_t)OUT_W || active >= total)
+        return {0, 0, 1, 1};
+    uint32_t left = (active > 32) ? active - 32 : 0;
+    uint32_t lines = ega_card_->frame_total_lines();
+    if (lines > (uint32_t)OUT_H) lines = OUT_H;
+    return { float(left) / OUT_W, 0.0f,
+             float(total) / OUT_W, float(lines) / OUT_H };
 }
 
 bool EgaRasterizer::init(const RenderContext& rc) {

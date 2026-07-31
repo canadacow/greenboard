@@ -53,6 +53,11 @@ public:
     virtual int out_width() const { return 0; }
     virtual int out_height() const { return 0; }
 
+    // Canvas subrect the monitor actually paints onto the tube: border
+    // included, hsync/retrace and unused canvas excluded. The bezel
+    // monitor maps this window onto the tube face.
+    virtual UVRect painted_rect() const { return {0, 0, 1, 1}; }
+
     // Whether this rasterizer renders directly to the back buffer via D2D.
     virtual bool uses_d2d() const { return false; }
 

@@ -1278,19 +1278,12 @@ void DxState::render_display() {
                 }
 
                 // P2: CRT-scale the PAINTED scan (border included) into the
-                // mipped tube texture. The monitor's horizontal sweep is a
-                // property of the MONITOR, not the signal: retrace takes the
-                // same fixed time in every mode, so the painted window is a
-                // fixed region of the sync-anchored canvas. 160 dots covers
-                // the widest standard sync (10 chars x 16 dots in 40-col
-                // timing); with active video at dot 192 in all modes, every
-                // mode paints identically: 32-dot left border, 640 active,
-                // 80-dot right border. This is what keeps the picture from
-                // shifting when programs switch text/graphics modes.
-                constexpr float kRetraceDots = 160.0f;
-                float painted_u0 = kRetraceDots / 912.0f;
+                // mipped tube texture. The painted window comes from the
+                // rasterizer: hsync/retrace excluded, border included, and
+                // only the current frame's scanlines (see painted_rect()).
+                auto pr = rasterizer->painted_rect();
                 mask_scale = -1.0f;  // clean signal: no aperture mask in the tube
-                upload_cb(painted_u0, 0, 1.0f, 1, 0.0f, 2.0f,
+                upload_cb(pr.u0, pr.v0, pr.u1, pr.v1, 0.0f, 2.0f,
                           (float)TUBE_W, (float)TUBE_H);
                 ctx->OMSetRenderTargets(1, tube_rtv.GetAddressOf(), nullptr);
                 D3D11_VIEWPORT tube_vp = { 0, 0, (float)TUBE_W, (float)TUBE_H, 0, 1 };

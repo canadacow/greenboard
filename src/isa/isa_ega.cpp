@@ -549,7 +549,13 @@ void ISA_EGA::stamp_scanline() {
                       | ((uint32_t)attr_[i * 4 + 2] << 16)
                       | ((uint32_t)attr_[i * 4 + 3] << 24);
     }
-    sr._pad[0] = sr._pad[1] = sr._pad[2] = sr._pad[3] = 0;
+    // Display enable: rows between VDE and VTOTAL are border. A frame
+    // under 300 lines means 15.7 kHz CGA-compatible timing -- the
+    // monitor decodes the color signal as RGBI (palette bit 4 =
+    // intensity) instead of 6-bit rgbRGB.
+    sr.flags = (line_ < v_displayed_lines() ? 1u : 0u)
+             | (frame_total_lines() < 300 ? 2u : 0u);
+    sr._pad[0] = sr._pad[1] = sr._pad[2] = 0;
 
     // Capture the plane rows the beam fetches this scanline.
     // Word mode (CRTC Mode Control bit 6 = 0): byte address = MA * 2,

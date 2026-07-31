@@ -158,7 +158,12 @@ public:
         uint32_t char_map;       // sequencer 03h
         uint32_t underline;      // CRTC 14h
         uint32_t palette[4];     // 16 palette regs, one byte each
-        uint32_t _pad[4];
+        // bit0: display enable (0 = border row between VDE and VTOTAL)
+        // bit1: RGBI monitor decode (200-line modes: palette bit 4 is
+        //       the intensity bit, secondary bits ignored -- the monitor
+        //       runs in CGA-compatible 15.7 kHz mode)
+        uint32_t flags;
+        uint32_t _pad[3];
         // The 4 plane rows the beam fetched (64 uint32s = 256B each)
         uint32_t plane_row[4][SCANLINE_ROW_U32S];
     };
@@ -183,6 +188,10 @@ public:
     uint32_t v_displayed_lines() const {
         return ((((uint32_t)crtc_[CRTC_OVERFLOW] >> 1) & 1) << 8 |
                 crtc_[CRTC_VDISP_END]) + 1;
+    }
+    uint32_t frame_total_lines() const {
+        uint32_t vt = (((uint32_t)crtc_[CRTC_OVERFLOW] & 1) << 8) | crtc_[CRTC_VTOTAL];
+        return vt ? vt : 262;
     }
 
     // Bind to the 8284A's CLK cycle counter for vsync timestamping.

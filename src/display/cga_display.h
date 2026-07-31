@@ -22,6 +22,17 @@ public:
     int out_width() const override { return OUT_W; }
     int out_height() const override { return OUT_H; }
 
+    // The monitor's sweep is fixed: retrace takes the same time in every
+    // mode, so the painted window is a fixed region of the sync-anchored
+    // canvas. 160 dots covers the widest standard sync (10 chars x 16
+    // dots in 40-col timing); with active video at dot 192 in all modes,
+    // every mode paints identically: 32-dot left border, 640 active,
+    // 80-dot right border. This is what keeps the picture from shifting
+    // when programs switch text/graphics modes.
+    UVRect painted_rect() const override {
+        return { 160.0f / OUT_W, 0.0f, 1.0f, 1.0f };
+    }
+
     // Crop: 640x200 visible portion from the 912x262 full frame.
     // The buffer starts at VSYNC end (monitor retrace).  Active display
     // (VCC=0) begins after top overscan.  Compute the offset from
