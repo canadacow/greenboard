@@ -316,6 +316,21 @@ BIUTask IC_8088::biu_run() {
             bus_op_.read_data = read_data();
             if (trace_bus) spdlog::info("[BIU] {} | RD {:05X} T4 data={:02X}", bs(), bus_op_.addr & 0xFFFFF, bus_op_.read_data);
             last_bus_tx_ = {bus_op_.addr & 0xFFFFF, bus_op_.read_data, bus_type};
+#if BENCH_CFG_TRACE
+            // Memory reads. Only MEM_READ -- an instruction fetch is also a
+            // read on the bus, but the execution timeline already says what
+            // ran, and recording every opcode byte would multiply the volume
+            // for nothing.
+            //
+            // This is what makes "which table did this routine index into"
+            // answerable. Writes show where data was produced; reads show
+            // where it was consumed, and a lookup table is read-only.
+            if (tracer_ && kind == BusOp::MEM_READ && !in_int_handler()
+                && !tracer_->is_excluded(16u * regs16()[REG_CS] + reg_ip_)) {
+                tracer_->on_read(bus_op_.addr & 0xFFFFF, bus_op_.read_data,
+                                 regs16()[REG_CS], reg_ip_, instr_count_);
+            }
+#endif
             bus_t_ = BusT::T1;
             check_nmi();
             co_await std::suspend_always{};

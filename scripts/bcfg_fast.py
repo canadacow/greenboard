@@ -25,6 +25,13 @@ NODE_DT = np.dtype([
     ("first", "<u8"), ("hits", "<u8"),
 ])
 EDGE_DT = np.dtype([("src", "<u4"), ("dst", "<u4")])
+# Memory reads -- same layout as WRIT. Writes say where data was produced;
+# reads say where it was consumed, which is the only way to see a lookup table
+# that is never written after load.
+READ_DT = np.dtype([
+    ("instr", "<u8"), ("addr", "<u4"), ("cs", "<u2"), ("ip", "<u2"),
+    ("data", "u1"), ("_r", "u1"), ("_pad", "<u2"),
+])
 PORT_DT = np.dtype([
     ("instr", "<u8"), ("port", "<u2"), ("cs", "<u2"), ("ip", "<u2"),
     ("data", "u1"), ("is_write", "u1"), ("_pad", "<u2"),
@@ -53,6 +60,7 @@ class FastTrace:
         self.nodes = self.edges = self.writes = self.ports = None
         self.exec = None
         self.states = None
+        self.reads = None
 
         while off < len(buf):
             tag = bytes(buf[off:off + 4])
@@ -79,6 +87,9 @@ class FastTrace:
                 # position exact rather than inferred from first-execution.
                 self.exec = np.frombuffer(buf, "<u4", count, off)
                 off += count * 4
+            elif tag == b"READ":
+                self.reads = np.frombuffer(buf, READ_DT, count, off)
+                off += count * READ_DT.itemsize
             elif tag == b"STAT":
                 self.states = np.frombuffer(buf, STAT_DT, count, off)
                 off += count * STAT_DT.itemsize
@@ -229,6 +240,47 @@ class FastTrace:
 
     REGS = ("ax", "cx", "dx", "bx", "sp", "bp", "si", "di",
             "es", "cs", "ss", "ds", "flags")
+
+    def reads_by(self, addr, limit=200000):
+        """Every memory read performed by the instruction at `addr`.
+
+        This is how a lookup table is found: the table is written once at load
+        time and never again, so it is invisible in the write log, but the
+        code that indexes into it reads it constantly.
+        """
+        if self.reads is None or not len(self.reads):
+            return []
+        r = self.reads
+        m = np.flatnonzero(((r["cs"].astype(np.uint32) << 4)
+                            + r["ip"]) == int(addr))[:limit]
+        return [dict(instr=int(r["instr"][i]), addr=int(r["addr"][i]),
+                     data=int(r["data"][i])) for i in m]
+
+    def read_span(self, lo, hi, instr_lo=None, instr_hi=None):
+        """Which instructions read from an address range, and how often.
+
+        Returns {reader_phys_addr: (count, min_addr, max_addr)} -- enough to
+        tell a table scan from an incidental access.
+        """
+        if self.reads is None or not len(self.reads):
+            return {}
+        r = self.reads
+        m = (r["addr"] >= lo) & (r["addr"] < hi)
+        if instr_lo is not None:
+            m &= r["instr"] >= instr_lo
+        if instr_hi is not None:
+            m &= r["instr"] <= instr_hi
+        idx = np.flatnonzero(m)
+        out = {}
+        for i in idx:
+            k = int((int(r["cs"][i]) << 4) + int(r["ip"][i])) & 0xFFFFF
+            a = int(r["addr"][i])
+            if k in out:
+                n, mn, mx = out[k]
+                out[k] = (n + 1, min(mn, a), max(mx, a))
+            else:
+                out[k] = (1, a, a)
+        return out
 
     def state_at(self, instr):
         """Register state at instruction count `instr`.

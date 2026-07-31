@@ -14,6 +14,7 @@ CFGTracer::CFGTracer()
     exec_.reserve(1ull << 28);
     states_.reserve(1ull << 28);
     writes_.reserve(1ull << 27);
+    reads_.reserve(1ull << 28);   // reads outnumber writes several to one
 }
 
 void CFGTracer::exclude_range(uint32_t lo, uint32_t hi_exclusive) {
@@ -101,6 +102,11 @@ void CFGTracer::on_state(uint32_t addr, const uint16_t* r, uint16_t flags,
     });
 }
 
+void CFGTracer::on_read(uint32_t addr, uint8_t data,
+                        uint16_t cs, uint16_t ip, uint64_t instr) {
+    reads_.push_back(ReadRec{instr, addr & 0xFFFFF, cs, ip, data, 0, 0});
+}
+
 void CFGTracer::on_port_read(uint16_t port, uint8_t data,
                              uint16_t cs, uint16_t ip, uint64_t instr) {
     ports_.push_back(PortRec{instr, port, cs, ip, data, 0});
@@ -180,6 +186,24 @@ bool CFGTracer::dump(const std::string& path) {
 
     // Execution timeline. Bulk-written: index k is instruction k, so there is
     // nothing per-record to encode.
+    // Memory reads, in the same 20-byte on-disk layout as WRIT.
+    //
+    // Written field by field, not bulk: a uint64_t first member aligns the
+    // struct to 8, so sizeof(ReadRec) is 24 and a bulk fwrite would emit
+    // padding the reader does not expect. WriteRec has the same shape and is
+    // written the same way for the same reason.
+    put_tag(f, "READ");
+    put<uint64_t>(f, reads_.size());
+    for (const auto& r : reads_) {
+        put(f, r.instr);
+        put(f, r.addr);
+        put(f, r.cs);
+        put(f, r.ip);
+        put(f, r.data);
+        put<uint8_t>(f, 0);
+        put<uint16_t>(f, 0);
+    }
+
     put_tag(f, "EXEC");
     put<uint64_t>(f, exec_.size());
     if (!exec_.empty())
@@ -213,9 +237,10 @@ bool CFGTracer::dump(const std::string& path) {
 
     spdlog::info("[CFG] wrote {}: {} nodes, {} edges, {} instrs "
                  "({} in handlers, excluded from CFG), {} writes, "
-                 "{} port ops, {} reg states, {} code-overwrite events",
+                 "{} reads, {} port ops, {} reg states, "
+                 "{} code-overwrite events",
                  path, nodes_.size(), edges_.size(), exec_.size(),
-                 handler_instrs_, writes_.size(), ports_.size(),
+                 handler_instrs_, writes_.size(), reads_.size(), ports_.size(),
                  states_.size(), dirty_events_);
     return true;
 }

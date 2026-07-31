@@ -10,10 +10,19 @@
 //   3. Port in  -- every I/O read result. These are inputs to the machine and
 //                  are NOT derivable from anything else in the trace.
 //
-// Memory READS are deliberately not recorded: given the full write log, the
-// value at any address at any point in the trace is exactly the last write to
-// that address at or before that point. Reads carry no information that the
-// writes do not already carry.
+//   4. Reads     -- every memory read, with the instruction that made it.
+//
+// Reads were originally left out on the reasoning that the write log already
+// determines the value at any address at any time, so a read adds nothing.
+// That is true of the VALUE and false of everything else. A lookup table is
+// written once when it loads and never again, so the write log cannot say who
+// indexes into it or over what range -- only the reads can. Finding which
+// table a routine walks is exactly the question reads answer and writes
+// cannot.
+//
+// Instruction fetches are excluded: they are reads on the bus, but the
+// execution timeline already records what ran, and recording every opcode
+// byte would multiply the volume for nothing.
 //
 // There is no initial memory image because tracing starts at RESET. Every
 // meaningful byte in the machine got there via a recorded write.
@@ -89,6 +98,22 @@ public:
         uint32_t addr;   // 20-bit physical address of the opcode byte
     };
 
+    // Memory reads. Same shape as WriteRec, kept separate so the two can be
+    // scanned independently -- reads outnumber writes several to one.
+    //
+    // Writes say where data was produced; reads say where it was consumed.
+    // A lookup table is never written after load, so it is invisible in the
+    // write log and only the reads reveal what indexed into it.
+    struct ReadRec {
+        uint64_t instr;
+        uint32_t addr;
+        uint16_t cs;
+        uint16_t ip;
+        uint8_t  data;
+        uint8_t  _r;
+        uint16_t _pad;
+    };
+
     struct PortRec {
         uint64_t instr;
         uint16_t port;
@@ -150,6 +175,11 @@ public:
     // building the flags word for instructions that will not be recorded.
     bool is_excluded(uint32_t addr) const { return excluded(addr); }
 
+    // Called from the CPU when a memory read completes. Instruction fetches
+    // are not recorded -- see the call site.
+    void on_read(uint32_t addr, uint8_t data,
+                 uint16_t cs, uint16_t ip, uint64_t instr);
+
     // Called from DRAM / ISA RAM / video when a byte lands in memory.
     // Fires for every write regardless of who drove the bus -- a DMA
     // transfer and a CPU store are the same event as far as the log is
@@ -177,6 +207,7 @@ public:
     size_t node_count()  const { return nodes_.size(); }
     size_t edge_count()  const { return edges_.size(); }
     size_t write_count() const { return writes_.size(); }
+    size_t read_count()  const { return reads_.size(); }
     size_t port_count()  const { return ports_.size(); }
     size_t exec_count()  const { return exec_.size(); }
     size_t state_count() const { return states_.size(); }
@@ -212,6 +243,7 @@ private:
     std::vector<uint8_t> executed_;
 
     std::vector<WriteRec> writes_;
+    std::vector<ReadRec>  reads_;
     std::vector<PortRec>  ports_;
 
     // Execution timeline, one entry per instruction in execution order.
