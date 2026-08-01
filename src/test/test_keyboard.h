@@ -54,7 +54,14 @@ private:
     bool armed_ = false;
     bool waiting_ack_ = false;
     bool deliver_pending_ = false;  // deliver next scancode on next cycle
-    bool reset_pending_ = false;    // PB6 went Low -- waiting for release
+    // Cycles PB6 (KBD CLK inhibit) has been held Low. A real keyboard
+    // treats the clock held low >= ~20ms as a reset request; shorter
+    // inhibits (the 8255 mode-set blip during BIOS init) are ignored.
+    uint32_t pb6_low_cycles_ = 0;
+    // ~4ms at 4.77 MHz CLK: orders of magnitude above the BIOS init
+    // blip (a few instructions), safely below any deliberate ms-scale
+    // reset hold (real hardware wants ~20ms).
+    static constexpr uint32_t RESET_HOLD_CYCLES = 20000;
     int  reset_delay_ = 0;          // cycles to wait before delivering 0xAA
     Level ready_prev_ = Level::HiZ;
     Level ack_prev_ = Level::HiZ;

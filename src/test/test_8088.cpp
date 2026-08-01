@@ -402,6 +402,9 @@ int main() {
 #ifdef BENCH_PIN_VALIDATION
             SignalPool::enable_validation();
 #endif
+            // The benchmark measures engine speed, not the real-time
+            // pacing: run the oscillator flat out.
+            clk_gen->set_throttle(false);
             clk_gen->power_on();
             clk_gen->psu_power_on();
 
@@ -411,16 +414,19 @@ int main() {
             std::this_thread::sleep_for(std::chrono::seconds(BENCH_SECONDS));
             clk_gen->psu_nmi_raise();
 
-            // Wait for CPU to halt (NMI handler does HLT).
+            // Wait for the CPU to stop (the NMI handler is an int3, which
+            // parks the CPU in breakpoint state -- same condition as the
+            // per-test wait loop above).
             auto halt_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-            while (!cpu->halted() && std::chrono::steady_clock::now() < halt_deadline)
+            while (!cpu->halted() && !cpu->breakpoint() &&
+                   std::chrono::steady_clock::now() < halt_deadline)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             auto end = std::chrono::steady_clock::now();
 
             double elapsed = std::chrono::duration<double>(end - start).count();
 
-            if (!cpu->halted())
-                spdlog::warn("  benchmark timeout -- CPU did not halt");
+            if (!cpu->halted() && !cpu->breakpoint())
+                spdlog::warn("  benchmark timeout -- CPU did not stop on NMI");
 
             // Power off.
             clk_gen->psu_nmi_lower();

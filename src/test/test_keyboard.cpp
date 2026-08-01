@@ -64,11 +64,13 @@ void TestKeyboard::on_power_on() {
     // We only start driving PA (Low = idle) after being armed.
     waiting_ack_ = false;
     deliver_pending_ = false;
-    reset_pending_ = false;
+    pb6_low_cycles_ = 0;
     reset_delay_ = 0;
     ready_prev_ = Level::HiZ;
     ack_prev_ = Level::HiZ;
-    pb6_prev_ = Level::Low;  // PPI resets Port B to 0; match that so init OUT doesn't false-trigger
+    // 8255 reset tri-states all ports (input mode); the line floats
+    // High at its TTL loads until the BIOS programs Port B.
+    pb6_prev_ = Level::HiZ;
     pb7_prev_ = Level::HiZ;
     pa_driven_ = 0;
     pin_irq1_.drive(Level::Low);
@@ -129,17 +131,30 @@ void TestKeyboard::on_cycle(Fiber /*caller*/) {
     Level pb6_cur = pin_pb6_.level();
     Level pb7_cur = pin_pb7_.level();
 
-    // Detect keyboard reset protocol via PB6 (KBD CLK inhibit):
-    // PB6 Low = CLK pulled low (reset start).
-    // PB6 High after Low = CLK released (reset complete) -> send 0xAA.
-    if (pb6_cur == Level::Low && pb6_prev_ == Level::High) {
-        reset_pending_ = true;
-    }
-    if (reset_pending_ && pb6_cur == Level::High && pb6_prev_ != Level::High) {
-        reset_pending_ = false;
-        queue_.insert(queue_.begin() + static_cast<ptrdiff_t>(queue_pos_), 0xAA);
-        armed_ = true;
-        reset_delay_ = 100;
+    // Keyboard reset protocol via PB6 (KBD CLK inhibit): the clock line
+    // held Low for >= ~20ms is a reset request; on release the keyboard
+    // runs its self-test and sends 0xAA. The DURATION is what a real
+    // keyboard keys on -- the 8255 mode-set during BIOS init clears
+    // Port B (a microseconds-long Low blip on PB6) and real keyboards
+    // ignore it. After 8255 reset the ports are tri-stated (input
+    // mode, per the datasheet) and the line floats High at its TTL
+    // loads, so anything other than a driven Low counts as High.
+    if (pb6_cur == Level::Low) {
+        if (pb6_low_cycles_ < RESET_HOLD_CYCLES)
+            ++pb6_low_cycles_;
+    } else {
+        if (pb6_low_cycles_ >= RESET_HOLD_CYCLES && pb6_prev_ == Level::Low) {
+            queue_.insert(queue_.begin() + static_cast<ptrdiff_t>(queue_pos_), 0xAA);
+            armed_ = true;
+            // Basic Assurance Test: the real 83-key keyboard self-tests
+            // for 150-500 ms after the clock is released before it
+            // transmits 0xAA. Model the fast end. POST's stuck-key
+            // check reads Port A shortly after enabling the interface
+            // and must see 0 -- only the keyboard-interrupt test that
+            // deliberately waits sees the AA.
+            reset_delay_ = 716000;   // ~150 ms at 4.77 MHz
+        }
+        pb6_low_cycles_ = 0;
     }
 
     // Countdown for delayed reset delivery.
@@ -165,7 +180,13 @@ void TestKeyboard::on_cycle(Fiber /*caller*/) {
 
     // Deferred delivery: IRQ1 was lowered last cycle, now raise with new scancode.
     // This ensures the PIC sees a clean Low->High edge.
-    if (deliver_pending_) {
+    // While PB7 is High (U24 CLEAR asserted) the interface is held
+    // cleared -- no scancode can latch, so delivery waits until the
+    // BIOS re-enables the interface. On real hardware the self-test
+    // 0xAA arrives hundreds of ms after clock release, long after the
+    // BIOS has dropped PB7; delivering into an asserted CLEAR would
+    // raise IRQ1 with PA already zeroed.
+    if (deliver_pending_ && pb7_cur != Level::High) {
         deliver_pending_ = false;
         deliver_next();
     }
