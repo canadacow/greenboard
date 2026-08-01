@@ -397,6 +397,7 @@ int main() {
             spdlog::error("  benchmark skipped -- cannot load binary");
         }
         else {
+            cpu->set_reset_vector(0x0100, 0x0100);
             cpu->clear_halt();
 #ifdef BENCH_PIN_VALIDATION
             SignalPool::enable_validation();

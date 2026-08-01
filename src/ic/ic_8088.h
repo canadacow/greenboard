@@ -286,7 +286,16 @@ public:
     void clear_halt() { halted_ = false; }
     bool breakpoint() const { return breakpoint_; }
     void clear_breakpoint() { breakpoint_ = false; }
-    void set_reset_vector(uint16_t cs, uint16_t ip) { start_cs_ = cs; start_ip_ = ip; }
+    // Set the power-on CS:IP and apply a full CPU reset (test bench
+    // only, on a powered-off CPU). Since the save-state refactor,
+    // power-on does NOT reset register state -- it belongs to the
+    // constructor (cold boot) or the archive (save-state load) -- so
+    // overriding the vector must reset the live registers here.
+    void set_reset_vector(uint16_t cs, uint16_t ip) {
+        start_cs_ = cs;
+        start_ip_ = ip;
+        cpu_reset();
+    }
 
     const uint16_t* regs16_ro() const { return reinterpret_cast<const uint16_t*>(regs_); }
     const uint8_t*  regs8_ro()  const { return regs_; }
