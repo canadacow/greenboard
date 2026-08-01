@@ -36,6 +36,7 @@
 #include "display/board_view.h"
 #include "isa/isa_cga.h"
 #include "isa/isa_ega.h"
+#include "isa/serial_mouse.h"
 #include "core/scheduler.h"
 #include "ic/ic_8088.h"
 #include "isa/isa_mda.h"
@@ -3043,6 +3044,49 @@ void DxState::apply_resize() {
 static TestKeyboard* s_kbd = nullptr;  // set by render_loop before window creation
 static DxState* s_dx = nullptr;       // for drop handler
 
+// --- Serial mouse capture ---
+// A click on the display grabs the host mouse for the guest (cursor
+// hidden, clipped to the client area, recentered each move so relative
+// deltas keep flowing). Ctrl+Alt (either side) frees it.
+static SerialMouse* s_mouse = nullptr;
+static bool s_mouse_captured = false;
+static bool s_mbtn_l = false, s_mbtn_r = false;
+static wchar_t s_title[160];           // base window title (uncaptured)
+
+static void mouse_clip_to_client(HWND hwnd) {
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    POINT tl = { rc.left, rc.top }, br = { rc.right, rc.bottom };
+    ClientToScreen(hwnd, &tl);
+    ClientToScreen(hwnd, &br);
+    RECT clip = { tl.x, tl.y, br.x, br.y };
+    ClipCursor(&clip);
+}
+
+static void mouse_capture(HWND hwnd) {
+    s_mouse_captured = true;
+    s_mbtn_l = s_mbtn_r = false;
+    ShowCursor(FALSE);
+    mouse_clip_to_client(hwnd);
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    POINT c = { rc.right / 2, rc.bottom / 2 };
+    ClientToScreen(hwnd, &c);
+    SetCursorPos(c.x, c.y);
+    wchar_t t[200];
+    swprintf(t, 200, L"%s  [mouse captured -- Ctrl+Alt frees]", s_title);
+    SetWindowTextW(hwnd, t);
+}
+
+static void mouse_release(HWND hwnd) {
+    s_mouse_captured = false;
+    ClipCursor(nullptr);
+    ShowCursor(TRUE);
+    if (s_mouse)
+        s_mouse->host_update(0, 0, false, false);  // no stuck buttons
+    SetWindowTextW(hwnd, s_title);
+}
+
 // OLE IDropTarget for live drag highlighting + drop onto drive rows.
 class DropTarget : public IDropTarget {
     LONG ref_ = 1;
@@ -3121,6 +3165,51 @@ public:
 };
 
 static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    // While the mouse is captured for the guest, mouse messages bypass
+    // ImGui entirely and feed the serial mouse.
+    if (s_mouse_captured) {
+        switch (msg) {
+            case WM_MOUSEMOVE: {
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                int cx = rc.right / 2, cy = rc.bottom / 2;
+                int mx = (short)LOWORD(lp), my = (short)HIWORD(lp);
+                int dx = mx - cx, dy = my - cy;
+                if (dx || dy) {
+                    if (s_mouse)
+                        s_mouse->host_update(dx, dy, s_mbtn_l, s_mbtn_r);
+                    POINT c = { cx, cy };
+                    ClientToScreen(hwnd, &c);
+                    SetCursorPos(c.x, c.y);  // recenter (echoes a 0-delta move)
+                }
+                return 0;
+            }
+            case WM_LBUTTONDOWN: case WM_LBUTTONUP:
+            case WM_RBUTTONDOWN: case WM_RBUTTONUP: {
+                s_mbtn_l = (msg == WM_LBUTTONDOWN) ? true
+                         : (msg == WM_LBUTTONUP)   ? false : s_mbtn_l;
+                s_mbtn_r = (msg == WM_RBUTTONDOWN) ? true
+                         : (msg == WM_RBUTTONUP)   ? false : s_mbtn_r;
+                if (s_mouse)
+                    s_mouse->host_update(0, 0, s_mbtn_l, s_mbtn_r);
+                return 0;
+            }
+            case WM_KILLFOCUS:
+                mouse_release(hwnd);
+                break;  // fall through to normal handling
+            case WM_KEYDOWN: case WM_SYSKEYDOWN:
+                // Ctrl+Alt (either side) frees the mouse. The modifier
+                // keydowns still reach the guest keyboard below.
+                if ((wp == VK_CONTROL || wp == VK_MENU) &&
+                    (GetKeyState(VK_CONTROL) & 0x8000) &&
+                    (GetKeyState(VK_MENU) & 0x8000))
+                    mouse_release(hwnd);
+                break;
+            default:
+                break;
+        }
+    }
+
     // Function keys belong to the guest -- DOS applications lean on them
     // heavily. Route F1-F12 straight to the emulated keyboard without
     // letting ImGui see them (no UI shortcut uses a function key).
@@ -3130,6 +3219,17 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
     if (!is_fkey && ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
         return true;
+
+    // A LEFT click on the display (not on an ImGui window) captures
+    // the mouse for the guest while the sim is running; the capturing
+    // click itself is swallowed. Right-click stays the UI context menu
+    // (uncaptured) -- once captured, both buttons belong to the guest.
+    if (!s_mouse_captured && s_mouse && msg == WM_LBUTTONDOWN &&
+        ImGui::GetCurrentContext() && !ImGui::GetIO().WantCaptureMouse &&
+        s_dx && s_dx->scheduler && !s_dx->scheduler->is_paused()) {
+        mouse_capture(hwnd);
+        return 0;
+    }
 
     // Alt+Enter: toggle borderless fullscreen. Swallow the key entirely
     // so it neither reaches the emulated keyboard nor beeps.
@@ -3145,6 +3245,8 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     // The swap chain resize is applied between frames.
     if (msg == WM_SIZE && s_dx && wp != SIZE_MINIMIZED) {
         s_dx->request_resize(LOWORD(lp), HIWORD(lp));
+        if (s_mouse_captured)
+            mouse_clip_to_client(hwnd);  // keep the clip rect current
         return 0;
     }
 
@@ -3174,6 +3276,8 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
 void Renderer::render_loop(std::stop_token stop) {
     s_kbd = kbd_;
+    s_mouse = mouse_;
+    s_mouse_captured = false;
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     int monW = GetSystemMetrics(SM_CXSCREEN);
@@ -3196,6 +3300,7 @@ void Renderer::render_loop(std::stop_token stop) {
     const wchar_t* title = ega_ ? L"IBM 5150 - EGA"
                          : cga_ ? L"IBM 5150 - CGA"
                                 : L"IBM 5150 - MDA";
+    wcscpy_s(s_title, title);
     HWND hwnd = CreateWindowW(L"BenchRenderer", title,
         WS_OVERLAPPEDWINDOW, x, y,
         wr.right - wr.left, wr.bottom - wr.top,
@@ -3305,7 +3410,8 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      const SystemInfo& sys_info,
                      const IC_8259A* pic,
                      const IC_8253* pit,
-                     const ISA_EGA* ega) {
+                     const ISA_EGA* ega,
+                     SerialMouse* mouse) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -3318,6 +3424,7 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
     bus_probe_ = bus;
     cga_ = cga;
     ega_ = ega;
+    mouse_ = mouse;
     kbd_ = kbd;
     fdc_ = fdc;
     clk_gen_ = clk_gen;

@@ -230,6 +230,9 @@ void IC_8259A::on_bus_write() {
     if (!initialized_) return;
 
     if (a0) {
+        if (imr_ != data)
+            spdlog::info("[8259A] IMR {:02X} -> {:02X} (IRR={:02X} ISR={:02X})",
+                         imr_, data, irr_, isr_);
         imr_ = data;
         evaluate_int();
         return;
@@ -280,13 +283,31 @@ void IC_8259A::on_inta_falling() {
 
     if (inta_count_ == 1) {
         inta_level_ = highest_priority_irq(irr_ & ~imr_);
-        if (inta_level_ >= 0) {
-            if (inta_level_ == 6)
-                spdlog::info("[8259A] INTA: acknowledging IRQ6, vector={:02X}", vector_base_ | 6);
+        inta_default_ir7_ = (inta_level_ < 0);
+        if (!inta_default_ir7_) {
+            if (inta_level_ != 0 && inta_level_ != 1)
+                spdlog::info("[8259A] INTA: acknowledging IRQ{}, vector={:02X} "
+                             "(IRR={:02X} IMR={:02X} ISR={:02X})",
+                             inta_level_, vector_base_ | inta_level_,
+                             irr_, imr_, isr_);
             isr_ |= (1 << inta_level_);
             irr_ &= ~(1 << inta_level_);
-            int_.drive(Level::Low);
+        } else {
+            // Default IR7 (datasheet): "If no interrupt request is
+            // present at [the first INTA] (i.e., the request was too
+            // short in duration) the 8259A will issue an interrupt
+            // level 7" -- WITHOUT setting the ISR bit, so the level-7
+            // handler's plain IRET cleans it up. This happens when
+            // software masks a request in the IMR after INT has
+            // already gone high (e.g. a mouse driver masking IRQ4 at
+            // the PIC while it reprograms the UART as bytes arrive).
+            // Never drive nothing here: the CPU would read a floating
+            // bus as its vector and jump through garbage.
+            inta_level_ = 7;
+            spdlog::info("[8259A] default IR7: IRR={:02X} IMR={:02X} ISR={:02X}",
+                         irr_, imr_, isr_);
         }
+        int_.drive(Level::Low);
     } else if (inta_count_ == 2) {
         if (inta_level_ >= 0) {
             uint8_t vector;
@@ -296,7 +317,7 @@ void IC_8259A::on_inta_falling() {
                 vector = vector_base_ | (inta_level_ << 2);
             drive_data(vector);
 
-            if (auto_eoi_)
+            if (auto_eoi_ && !inta_default_ir7_)
                 isr_ &= ~(1 << inta_level_);
         }
         evaluate_int();

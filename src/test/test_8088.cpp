@@ -176,6 +176,7 @@ int main() {
         "io",
         "alu",
         "call_ret",
+        "alias",
         "jumps",
         "int",
         "string",

@@ -39,7 +39,7 @@ public:
     template <class Archive> void serialize(Archive& ar) {
         ar(irr_, isr_, imr_, vector_base_, icw1_, icw4_needed_, single_mode_,
            edge_triggered_, auto_eoi_, mode_8086_, ir_prev_, read_isr_,
-           inta_count_, inta_level_, init_state_, initialized_,
+           inta_count_, inta_level_, inta_default_ir7_, init_state_, initialized_,
            wr_prev_, cs_prev_, rd_prev_, inta_prev_, write_latched_);
     }
 
@@ -104,6 +104,9 @@ private:
     // INTA state: track first/second pulse
     int inta_count_ = 0;
     int inta_level_ = -1;  // which IRQ is being acknowledged
+    // Default IR7 in progress (no qualifying request at INTA #1): the
+    // level-7 vector is delivered but no ISR bit is set (datasheet).
+    bool inta_default_ir7_ = false;
 
     // Initialization state
     InitState init_state_ = InitState::Ready;

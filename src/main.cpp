@@ -12,6 +12,7 @@
 #include "isa/isa_cga.h"
 #include "isa/isa_ega.h"
 #include "isa/isa_ram.h"
+#include "isa/serial_mouse.h"
 #include "display/renderer.h"
 #include "debug/memory_view.h"
 #if BENCH_CFG_TRACE
@@ -95,6 +96,7 @@ struct System {
     std::unique_ptr<ISA_EGA> ega;
     std::unique_ptr<ISA_MDA> mda;
     std::unique_ptr<ISA_RAM> ram_exp;
+    std::unique_ptr<SerialMouse> mouse;
     std::unique_ptr<TestKeyboard> keyboard;
     std::unique_ptr<PCSpeaker> pc_speaker;
     std::unique_ptr<SpeakerDriver> speaker_driver;
@@ -184,6 +186,9 @@ static System build_system(const SystemConfig& cfg,
         sys.ram_exp = std::make_unique<ISA_RAM>(0x40000, cfg.expansion_kb * 1024);
         sys.isa_bus->insert_card(3, sys.ram_exp.get(), 0, 0x18);  // IRQ4 + IRQ3
         sys.board->add_expansion_kb(cfg.expansion_kb);
+        // Microsoft serial mouse on COM1 (host input wiring comes later).
+        sys.mouse = std::make_unique<SerialMouse>();
+        sys.ram_exp->set_com_device(0, sys.mouse.get());
     }
 
     sys.board->compute_switches();
@@ -363,19 +368,19 @@ static void start_renderer(Renderer& renderer, System& sys) {
             sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
             nullptr, &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
             nullptr, sys.board->clk_gen, sys_info,
-            sys.board->pic, sys.board->pit_ic, sys.ega.get());
+            sys.board->pic, sys.board->pit_ic, sys.ega.get(), sys.mouse.get());
     } else if (sys.cga) {
         renderer.start(nullptr, &sys.board->clk_gen->clk_cycles_ref(),
             sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
             nullptr, &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
             sys.cga.get(), sys.board->clk_gen, sys_info,
-            sys.board->pic, sys.board->pit_ic);
+            sys.board->pic, sys.board->pit_ic, nullptr, sys.mouse.get());
     } else if (sys.mda) {
         renderer.start(sys.mda->framebuffer(), &sys.board->clk_gen->clk_cycles_ref(),
             sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
             sys.mda.get(), &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
             nullptr, sys.board->clk_gen, sys_info,
-            sys.board->pic, sys.board->pit_ic);
+            sys.board->pic, sys.board->pit_ic, nullptr, sys.mouse.get());
     }
 
     renderer.bind_board_signals(sys.board->brd_net_map());

@@ -31,6 +31,7 @@ class IC_8284A;
 class ISA_MDA;
 class ISA_CGA;
 class ISA_EGA;
+class SerialMouse;
 class ISA_FloppyController;
 class MemoryView;
 class TestKeyboard;
@@ -86,7 +87,8 @@ public:
                const SystemInfo& sys_info = {},
                const IC_8259A* pic = nullptr,
                const IC_8253* pit = nullptr,
-               const ISA_EGA* ega = nullptr);
+               const ISA_EGA* ega = nullptr,
+               SerialMouse* mouse = nullptr);
 
     // Bind BRD net names to live signals for board view.
     // Call after start() returns (board_view is initialized by then).
@@ -124,6 +126,7 @@ private:
     const BusProbe* bus_probe_ = nullptr;
     const ISA_CGA* cga_ = nullptr;
     const ISA_EGA* ega_ = nullptr;
+    SerialMouse* mouse_ = nullptr;
     TestKeyboard* kbd_ = nullptr;
     ISA_FloppyController* fdc_ = nullptr;
     IC_8284A* clk_gen_ = nullptr;

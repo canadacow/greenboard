@@ -437,6 +437,7 @@ private:
     bool nmi_pending_ = false;
     Level nmi_prev_ = Level::HiZ;
     bool halted_ = false;
+    bool cs_trap_fired_ = false;  // one-shot wild-execution (CS < 0x40) trap
     bool breakpoint_ = false;
     uint32_t last_logged_cs_ip_ = ~0u;
 

@@ -510,6 +510,22 @@ void IC_8088::set_flags(int new_flags) {
 }
 
 void IC_8088::set_opcode(uint8_t opcode) {
+    // Authentic 8088 decode for 186+ encodings: they do not exist on
+    // this CPU. The decode PLA ignores the distinguishing bit, so the
+    // bytes execute as their documented twins:
+    //   60-6F -> 70-7F  (conditional jumps; bit 4 ignored)
+    //   C0,C1 -> C2,C3  (RET imm16 / RET -- not 186 shift-imm)
+    //   C8,C9 -> CA,CB  (RETF imm16 / RETF -- not ENTER/LEAVE)
+    // (0F = POP CS and D6 = SALC are already decoded by the tables.)
+    // A 186-compiled binary run on a real 8088 gets these aliases, not
+    // invented instructions -- CTMOUSE 2.1's `ror bx, 2` (C1 CB 02)
+    // must execute as RET, or its ISR falls out of instruction
+    // alignment onto an IRET byte and teleports through the stack.
+    if (opcode >= 0x60 && opcode <= 0x6F)
+        opcode += 0x10;
+    else if (opcode == 0xC0 || opcode == 0xC1 ||
+             opcode == 0xC8 || opcode == 0xC9)
+        opcode += 2;
     xlat_opcode_id_ = TABLE[TABLE_XLAT_OPCODE][raw_opcode_id_ = opcode];
     extra_ = TABLE[TABLE_XLAT_SUBFUNCTION][opcode];
     i_mod_size_ = TABLE[TABLE_I_MOD_SIZE][opcode];
@@ -575,6 +591,33 @@ EUTask<void> IC_8088::eu_run() {
     bool advanceIp = true;
 
     if (cs_ip == 0) { halted_ = true; break; }
+
+    // One-shot wild-execution trap: no legitimate code runs with CS in
+    // the IVT/BDA. Dump the state and the stack (the corrupted return
+    // frame is still on it) the first time it happens.
+    if (regs16()[REG_CS] < 0x0040 && !cs_trap_fired_) {
+        cs_trap_fired_ = true;
+        spdlog::warn("[8088] WILD CS: {:04X}:{:04X}  SS:SP={:04X}:{:04X} "
+                     "AX={:04X} BX={:04X} CX={:04X} DX={:04X} instr={}",
+                     regs16()[REG_CS], reg_ip_, regs16()[REG_SS], regs16()[REG_SP],
+                     regs16()[REG_AX], regs16()[REG_BX], regs16()[REG_CX],
+                     regs16()[REG_DX], instr_count_);
+        if (debug_peek_) {
+            uint32_t sp_lin = 16u * regs16()[REG_SS] + regs16()[REG_SP];
+            char buf[16 * 6 + 1] = {};
+            int n = 0;
+            for (int i = 0; i < 16; ++i) {
+                uint16_t w = debug_peek_(sp_lin + i * 2) |
+                             (debug_peek_(sp_lin + i * 2 + 1) << 8);
+                n += snprintf(buf + n, sizeof(buf) - n, "%04X ", w);
+            }
+            spdlog::warn("[8088] WILD CS stack: {}", buf);
+            uint16_t v0c_off = debug_peek_(0x30) | (debug_peek_(0x31) << 8);
+            uint16_t v0c_seg = debug_peek_(0x32) | (debug_peek_(0x33) << 8);
+            spdlog::warn("[8088] WILD CS: INT 0C vector = {:04X}:{:04X}",
+                         v0c_seg, v0c_off);
+        }
+    }
 
 #if BENCH_CFG_TRACE
     if (tracer_) {
@@ -1445,11 +1488,15 @@ EUTask<void> IC_8088::eu_run() {
             nmi_pending_ = false;
             PC_INTERRUPT_(2);
         } else if (pin_intr_.level() == Level::High) {
+            uint16_t from_cs = regs16()[REG_CS];
+            uint16_t from_ip = reg_ip_;
             uint8_t _vec = co_await IntaAwaiter{*this};
             PC_INTERRUPT_(_vec);
-            if (_vec == 0x0E) {
-                spdlog::info("[8088] INT 0Eh dispatched, ISR at {:04X}:{:04X}",
-                             regs16()[REG_CS], reg_ip_);
+            // Timer/keyboard excluded (constant traffic); everything else
+            // logs interrupted CS:IP and the handler the vector sent us to.
+            if (_vec != 0x08 && _vec != 0x09) {
+                spdlog::info("[8088] IRQ vec={:02X}: at {:04X}:{:04X} -> handler {:04X}:{:04X}",
+                             _vec, from_cs, from_ip, regs16()[REG_CS], reg_ip_);
             }
         }
     }
