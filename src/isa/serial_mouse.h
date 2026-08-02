@@ -29,12 +29,19 @@ namespace bench {
 class SerialMouse final : public SerialDevice {
 public:
     // Host-side input: relative motion (host pixels, Y down) and
-    // current button states. Thread-safe, callable from any thread.
+    // current button states. Thread-safe single-producer: events go
+    // through an SPSC ring so each update is consumed whole by the
+    // clock thread -- a packet can never mix one update's motion with
+    // another's button state.
     void host_update(int dx, int dy, bool left, bool right) {
-        acc_dx_.fetch_add(dx, std::memory_order_relaxed);
-        acc_dy_.fetch_add(dy, std::memory_order_relaxed);
-        buttons_.store((uint8_t)((left ? 1 : 0) | (right ? 2 : 0)),
-                       std::memory_order_relaxed);
+        uint8_t t = etail_.load(std::memory_order_relaxed);
+        uint8_t n = (uint8_t)((t + 1) & (EVLEN - 1));
+        if (n == ehead_.load(std::memory_order_acquire))
+            return;  // ring full: drop (mouse on a busy machine drops too)
+        events_[t].dx = (int16_t)dx;
+        events_[t].dy = (int16_t)dy;
+        events_[t].buttons = (uint8_t)((left ? 1 : 0) | (right ? 2 : 0));
+        etail_.store(n, std::memory_order_release);
     }
 
     // --- SerialDevice ---
@@ -45,8 +52,8 @@ public:
         if (rts && !powered_) {
             head_ = tail_ = 0;
             sent_buttons_ = 0;
-            acc_dx_.store(0, std::memory_order_relaxed);
-            acc_dy_.store(0, std::memory_order_relaxed);
+            acc_dx_ = acc_dy_ = 0;
+            cur_buttons_ = 0;
             push(0x4D);  // 'M'
         }
         powered_ = rts;
@@ -58,18 +65,28 @@ public:
 
         // Refill with a movement/button packet when the queue drains.
         if (head_ == tail_) {
-            uint8_t btn = buttons_.load(std::memory_order_relaxed);
-            int dx = acc_dx_.load(std::memory_order_relaxed);
-            int dy = acc_dy_.load(std::memory_order_relaxed);
-            if (dx == 0 && dy == 0 && btn == sent_buttons_)
+            // Drain whole host events into the clock-thread accumulator
+            // (coalescing motion, last-wins buttons -- what a real
+            // mouse's own sampling does).
+            uint8_t h = ehead_.load(std::memory_order_relaxed);
+            while (h != etail_.load(std::memory_order_acquire)) {
+                acc_dx_ += events_[h].dx;
+                acc_dy_ += events_[h].dy;
+                cur_buttons_ = events_[h].buttons;
+                h = (uint8_t)((h + 1) & (EVLEN - 1));
+            }
+            ehead_.store(h, std::memory_order_release);
+
+            if (acc_dx_ == 0 && acc_dy_ == 0 && cur_buttons_ == sent_buttons_)
                 return false;
 
             // Take up to one packet's worth of motion; leave the rest
             // accumulated for the next packet.
-            int px = (dx > 127) ? 127 : (dx < -128) ? -128 : dx;
-            int py = (dy > 127) ? 127 : (dy < -128) ? -128 : dy;
-            acc_dx_.fetch_sub(px, std::memory_order_relaxed);
-            acc_dy_.fetch_sub(py, std::memory_order_relaxed);
+            int px = (acc_dx_ > 127) ? 127 : (acc_dx_ < -128) ? -128 : acc_dx_;
+            int py = (acc_dy_ > 127) ? 127 : (acc_dy_ < -128) ? -128 : acc_dy_;
+            acc_dx_ -= px;
+            acc_dy_ -= py;
+            uint8_t btn = cur_buttons_;
             sent_buttons_ = btn;
 
             uint8_t x = (uint8_t)(int8_t)px;
@@ -102,9 +119,10 @@ public:
         powered_ = false;
         head_ = tail_ = 0;
         sent_buttons_ = 0;
-        acc_dx_.store(0, std::memory_order_relaxed);
-        acc_dy_.store(0, std::memory_order_relaxed);
-        buttons_.store(0, std::memory_order_relaxed);
+        acc_dx_ = acc_dy_ = 0;
+        cur_buttons_ = 0;
+        ehead_.store(0, std::memory_order_relaxed);
+        etail_.store(0, std::memory_order_relaxed);
     }
 
 private:
@@ -121,11 +139,16 @@ private:
     uint8_t q_[QLEN] = {};
     uint8_t head_ = 0, tail_ = 0;
     uint8_t sent_buttons_ = 0;
+    int acc_dx_ = 0;
+    int acc_dy_ = 0;
+    uint8_t cur_buttons_ = 0;
 
-    // Host-thread input accumulators.
-    std::atomic<int> acc_dx_{0};
-    std::atomic<int> acc_dy_{0};
-    std::atomic<uint8_t> buttons_{0};
+    // Host -> clock thread event ring (SPSC).
+    struct Event { int16_t dx, dy; uint8_t buttons; };
+    static constexpr int EVLEN = 16;
+    Event events_[EVLEN] = {};
+    std::atomic<uint8_t> ehead_{0};
+    std::atomic<uint8_t> etail_{0};
 };
 
 } // namespace bench

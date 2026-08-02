@@ -1,48 +1,47 @@
-; test_mouse.asm -- Microsoft serial mouse on COM1 (AST SixPakPlus, J4)
+; test_mouse.asm -- Microsoft serial mouse: driver + polling application
 ;
-; Exercises the full real path an app/driver sees: program the 8250
-; UART at 3F8h for 1200 baud 7N1, unmask IRQ4 on the PIC, enable the
-; UART's "data available" interrupt, then toggle RTS to power/reset
-; the mouse. The mouse identifies itself with 'M' (0x4D), interrupt-
-; driven through INT 0Ch, exactly like MOUSE.COM's detection sequence.
+; Structured the way real software is layered, in isolation:
 ;
-; After identification, the test harness injects synthetic host motion
-; via SerialMouse::host_update() (C++ side, between polling windows).
-; The mouse should emit a standard 3-byte Microsoft packet:
+;   DRIVER (interrupt side): a nominal mouse driver whose ISR does only
+;   driver work -- read UART bytes on IRQ4, sync on bit 6, assemble
+;   3-byte Microsoft packets, sign-extend and ACCUMULATE dx/dy into a
+;   driver state block (X, Y, buttons, packet count), exactly the job
+;   MOUSE.COM's INT 0Ch handler does behind INT 33h.
+;
+;   APPLICATION (main line): installs the driver (vector + PIC),
+;   starts it (UART 1200 7N1, IER, MCR OUT2, RTS power-on), then runs
+;   a regular non-interrupt polling loop over the driver's state --
+;   never touching the UART itself -- verifying each observed movement
+;   against the known injected motion.
+;
+; The harness injects motion via SerialMouse::host_update() when the
+; app writes a stage marker to [0x05F0]:
+;   marker 1 -> inject dx=+20, dy=-10, left down
+;   marker 2 -> inject dx=+5,  dy=+15, left up, right down
+; Final accumulated state: X=+25, Y=+5, buttons=right only.
+;
+; Microsoft packet (1200 baud 7N1):
 ;   byte1 = 01LRYYXX (bit6 sync, L/R buttons, Y7-6, X7-6)
 ;   byte2 = 00XXXXXX (X5-0)
-;   byte3 = 00YYYYYY (Y5-0)
-; caught byte-by-byte via the same IRQ4 handler, then decoded and
-; checked against the known injected (dx, dy, buttons).
+;   byte3 = 00YYYYYY (Y5-0)      Y positive = down
 ;
-; 8250 register file at 3F8-3FF (LCR bit7 selects divisor latch):
-;   3F8 RBR/THR (DLAB=0) / DLL (DLAB=1)
-;   3F9 IER (DLAB=0) / DLM (DLAB=1)
-;   3FA IIR (read)
-;   3FB LCR
-;   3FC MCR
-;   3FD LSR
-;   3FE MSR
-;
-; Expected results:
-;   [0500] = 0x0001   Mouse identified ('M' received via IRQ4)
+; Results:
+;   [0500] = 0x0001   Driver online (mouse ident 'M' received via IRQ4)
 ;   [0502] = 0x004D   Ident byte value
-;   [0504] = 0x0001   Movement packet received (3 bytes via IRQ4)
-;   [0506] = dx (sign-extended word, expect +0x0014 = 20)
-;   [0508] = dy (sign-extended word, expect -0x000A = -10, i.e. 0xFFF6)
-;   [050A] = 0x0001   Left button reported down
-;   [050C] = 0x0001   Right button reported up (not pressed)
-;   [050E] = 0x0001   Sync bit (bit6) was set on packet byte 1
+;   [0504] = 0x0001   Move 1 observed correctly by polling (X=20 Y=-10 L)
+;   [0506] = 0x0019   Final accumulated X (+20 +5)
+;   [0508] = 0x0005   Final accumulated Y (-10 +15)
+;   [050A] = 0x0002   Final buttons (right down, left up)
+;   [050C] = 0x0001   At least two packets serviced by the driver
 
-; @name Serial mouse (COM1, IRQ4)
-; @expect 0500 0001 Mouse identified via IRQ4
+; @name Serial mouse (driver + polling app)
+; @expect 0500 0001 Driver online (ident 'M' via IRQ4)
 ; @expect 0502 004D Ident byte value ('M')
-; @expect 0504 0001 Movement packet received
-; @expect 0506 0014 dx = +20
-; @expect 0508 FFF6 dy = -10
-; @expect 050A 0001 Left button down
-; @expect 050C 0001 Right button up
-; @expect 050E 0001 Packet sync bit set
+; @expect 0504 0001 Move 1 observed via polling
+; @expect 0506 0019 Final X = +25
+; @expect 0508 0005 Final Y = +5
+; @expect 050A 0002 Final buttons = right only
+; @expect 050C 0001 Two+ packets serviced
 
 cpu 8086
 org 0x0100
@@ -53,6 +52,24 @@ COM1_RBR  equ 0x3F8
 COM1_IER  equ 0x3F9
 COM1_LCR  equ 0x3FB
 COM1_MCR  equ 0x3FC
+COM1_LSR  equ 0x3FD
+
+; ---- Driver state block (the "device driver's" data segment) ----
+DRV_ONLINE  equ 0x0600      ; byte: 1 once ident received
+DRV_IDENT   equ 0x0601      ; byte: the ident byte itself
+DRV_X       equ 0x0602      ; word: accumulated X (signed)
+DRV_Y       equ 0x0604      ; word: accumulated Y (signed)
+DRV_BTN     equ 0x0606      ; byte: current buttons (bit0=L, bit1=R)
+DRV_COUNT   equ 0x0607      ; byte: packets serviced
+DRV_PHASE   equ 0x0608      ; byte: bytes collected of current packet
+DRV_B1      equ 0x0609      ; byte: packet byte 1
+DRV_B2      equ 0x060A      ; byte: packet byte 2
+
+MARKER      equ 0x05F0      ; harness injection stage marker
+
+; =====================================================================
+; APPLICATION
+; =====================================================================
 
     cli
     xor ax, ax
@@ -61,7 +78,7 @@ COM1_MCR  equ 0x3FC
     mov ss, ax
     mov sp, 0x0800
 
-    ; Zero results
+    ; Zero results + driver state
     mov word [0x0500], 0
     mov word [0x0502], 0
     mov word [0x0504], 0
@@ -69,188 +86,215 @@ COM1_MCR  equ 0x3FC
     mov word [0x0508], 0
     mov word [0x050A], 0
     mov word [0x050C], 0
-    mov word [0x050E], 0
+    mov word [DRV_ONLINE], 0    ; online + ident
+    mov word [DRV_X], 0
+    mov word [DRV_Y], 0
+    mov word [DRV_BTN], 0       ; buttons + count
+    mov word [DRV_PHASE], 0
+    mov byte [MARKER], 0
 
-    ; Working state
-    mov byte [0x05E0], 0    ; bytes received so far (this phase)
-    mov byte [0x05E1], 0    ; phase: 0=waiting ident, 1=collecting packet
-    mov byte [0x05E2], 0    ; packet byte 0
-    mov byte [0x05E3], 0    ; packet byte 1
-    mov byte [0x05E4], 0    ; packet byte 2
-
-    ; Install INT 0Ch handler (IRQ4, vector base 8 -> INT 0Ch)
-    mov word [0x0C*4],   irq4_handler
+    ; ---- 1. Install the driver ----
+    mov word [0x0C*4],   mouse_driver_isr
     mov word [0x0C*4+2], 0x0100
 
-    ; Initialize PIC: edge-triggered, single, ICW4, vector base 8
-    mov al, 0x13
+    mov al, 0x13                ; PIC: edge, single, ICW4, base 8
     out PIC_CMD, al
     mov al, 0x08
     out PIC_DATA, al
     mov al, 0x01
     out PIC_DATA, al
-    mov al, 0xFF             ; mask all initially
+    mov al, 0xEF                ; unmask IRQ4 only
     out PIC_DATA, al
 
-    ; ---- Program the 8250: 1200 baud, 7N1 ----
-    ; Ports above 0xFF need the DX-indirect OUT/IN form -- the 8-bit
-    ; imm8 encoding can only address ports 0-255.
-    ; Divisor = 115200 / 1200 = 96 = 0x0060
+    ; ---- 2. Start the driver: program the UART, power the mouse ----
+    ; (Ports above 0xFF need the DX-indirect OUT/IN form.)
     mov dx, COM1_LCR
-    mov al, 0x80              ; LCR: DLAB=1
+    mov al, 0x80                ; DLAB=1
     out dx, al
     mov dx, COM1_RBR
-    mov al, 0x60              ; DLL = 0x60
+    mov al, 0x60                ; divisor 96 -> 1200 baud
     out dx, al
     mov dx, COM1_IER
-    mov al, 0x00              ; DLM = 0x00
+    mov al, 0x00
     out dx, al
     mov dx, COM1_LCR
-    mov al, 0x02              ; LCR: DLAB=0, 7 data bits, no parity, 1 stop
+    mov al, 0x02                ; DLAB=0, 7N1
     out dx, al
-
-    ; Enable "data available" interrupt
     mov dx, COM1_IER
-    mov al, 0x01
+    mov al, 0x01                ; RX data available interrupt
     out dx, al
-
-    ; MCR: OUT2=1 (gate IRQ to bus), DTR=1, RTS=0 initially (mouse unpowered)
     mov dx, COM1_MCR
-    mov al, 0x09              ; DTR=1, RTS=0, OUT2=1
+    mov al, 0x09                ; DTR=1, RTS=0, OUT2=1 (mouse unpowered)
     out dx, al
-
-    ; Unmask IRQ4 only
-    mov al, 0xEF
-    out PIC_DATA, al
     sti
 
-    ; Small delay so DTR settles before RTS toggles (not required by
-    ; the model, but mirrors a real driver's init sequence).
-    mov cx, 0x0100
-.predelay:
-    nop
-    loop .predelay
-
-    ; Raise RTS: power/reset the mouse -- it should identify with 'M'.
     mov dx, COM1_MCR
-    mov al, 0x0B               ; DTR=1, RTS=1, OUT2=1
+    mov al, 0x0B                ; RTS=1: power/reset the mouse
     out dx, al
 
-    ; ---- Wait for identification (IRQ4-driven) ----
+    ; ---- 3. Poll (regular loop) until the driver reports online ----
     mov cx, 0xFFFF
-.wait_ident:
-    cmp word [0x0500], 1
-    je .ident_done
-    loop .wait_ident
-.ident_done:
+.wait_online:
+    cmp byte [DRV_ONLINE], 1
+    je .online
+    loop .wait_online
+    jmp .done                   ; timeout: results show what happened
+.online:
+    mov word [0x0500], 1
+    mov al, [DRV_IDENT]
+    xor ah, ah
+    mov [0x0502], ax
 
-    ; ---- Inject synthetic motion, then wait for a movement packet ----
-    ; The harness watches for [0x05F0] going non-zero and calls
-    ; mouse.host_update(dx=20, dy=-10, left=true, right=false) exactly
-    ; once, then the mouse device produces a real 3-byte packet through
-    ; the same poll_rx() path the UART already exercises for 'M'.
-    mov byte [0x05F0], 1        ; signal harness: inject motion now
+    ; ---- 4. Move 1: inject, poll driver state, verify ----
+    mov byte [MARKER], 1        ; harness: inject dx=+20 dy=-10 L-down
 
     mov cx, 0xFFFF
-.wait_packet:
-    cmp word [0x0504], 1
-    je .packet_done
-    loop .wait_packet
-.packet_done:
+.wait_move1:
+    cmp byte [DRV_COUNT], 1
+    jae .got_move1
+    loop .wait_move1
+    jmp .done
+.got_move1:
+    ; The application confirms the movement it observed is the movement
+    ; that happened: X=+20, Y=-10, left button down.
+    cmp word [DRV_X], 20
+    jne .move1_bad
+    cmp word [DRV_Y], 0xFFF6    ; -10
+    jne .move1_bad
+    cmp byte [DRV_BTN], 0x01
+    jne .move1_bad
+    mov word [0x0504], 1
+.move1_bad:
 
+    ; ---- 5. Move 2: inject, poll for it, record final state ----
+    mov byte [MARKER], 2        ; harness: inject dx=+5 dy=+15 L-up R-down
+
+    mov cx, 0xFFFF
+.wait_move2:
+    cmp byte [DRV_COUNT], 2
+    jae .got_move2
+    loop .wait_move2
+    jmp .done
+.got_move2:
+
+    ; ---- 6. Record what the application observed ----
+    mov ax, [DRV_X]
+    mov [0x0506], ax
+    mov ax, [DRV_Y]
+    mov [0x0508], ax
+    mov al, [DRV_BTN]
+    xor ah, ah
+    mov [0x050A], ax
+    cmp byte [DRV_COUNT], 2
+    jb .done
+    mov word [0x050C], 1
+
+.done:
     cli
     int3
 
 ; =====================================================================
-; INT 0Ch handler -- IRQ4. Reads LSR/RBR from the UART, tracks
-; ident-vs-packet phase, decodes the 3-byte packet on completion.
+; DRIVER -- IRQ4 ISR. Driver work only: no test logic, no result
+; writes. Reads UART bytes, tracks ident, syncs and assembles packets,
+; accumulates movement into the driver state block.
 ; =====================================================================
-irq4_handler:
+mouse_driver_isr:
     push ax
+    push bx
+    push cx
+    push dx
     push ds
     xor ax, ax
     mov ds, ax
 
-    mov dx, COM1_RBR + 5        ; LSR (0x3FD)
+.drain:
+    mov dx, COM1_LSR
     in al, dx
-    test al, 1                 ; data ready?
-    jz .no_data
+    test al, 1                  ; data ready?
+    jz .out
 
     mov dx, COM1_RBR
-    in al, dx                   ; read the byte, clears DR
+    in al, dx
 
-    cmp byte [0x05E1], 0
-    jne .in_packet
+    cmp byte [DRV_ONLINE], 1
+    je .packet_engine
 
-    ; ---- Ident phase ----
-    xor ah, ah
-    mov [0x0502], ax             ; store ident byte
-    cmp al, 0x4D                 ; 'M'?
-    jne .not_ident
-    mov word [0x0500], 1         ; mouse identified
-    mov byte [0x05E1], 1         ; switch to packet-collection phase
-    mov byte [0x05E0], 0
-.not_ident:
-    jmp .eoi
+    ; Detection phase: first byte after power-on is the ident.
+    mov [DRV_IDENT], al
+    cmp al, 0x4D                ; 'M' = Microsoft mouse present
+    jne .drain
+    mov byte [DRV_ONLINE], 1
+    mov byte [DRV_PHASE], 0
+    jmp .drain
 
-.in_packet:
-    mov bl, [0x05E0]
-    xor bh, bh
-    mov [0x05E2 + bx], al
-    inc byte [0x05E0]
-    cmp byte [0x05E0], 3
-    jne .eoi
-
-    ; Full packet collected -- decode it.
-    mov al, [0x05E2]             ; byte1: 01LRYYXX
+.packet_engine:
+    ; Sync: bit 6 set = first byte of a packet, always resync on it.
     test al, 0x40
-    jz .no_sync
-    mov word [0x050E], 1
-.no_sync:
-    test al, 0x20
-    jz .no_left
-    mov word [0x050A], 1
-.no_left:
-    test al, 0x10
-    jz .right_up
-    jmp .right_checked
-.right_up:
-    mov word [0x050C], 1
-.right_checked:
+    jz .data_byte
+    mov [DRV_B1], al
+    mov byte [DRV_PHASE], 1
+    jmp .drain
 
-    ; Reassemble dx: bits X7-6 from byte1<1:0>, X5-0 from byte2<5:0>
-    mov bl, al
-    and bl, 0x03
+.data_byte:
+    cmp byte [DRV_PHASE], 1
+    je .second
+    cmp byte [DRV_PHASE], 2
+    je .third
+    jmp .drain                  ; stray byte with no sync: drop
+
+.second:
+    mov [DRV_B2], al
+    mov byte [DRV_PHASE], 2
+    jmp .drain
+
+.third:
+    ; Full packet: byte1=[DRV_B1] byte2=[DRV_B2] byte3=AL. Decode.
+    mov bl, al                  ; BL = byte3 (Y5-0)
+
+    ; dx = (byte1<1:0> << 6) | byte2<5:0>, sign-extended, added to X
+    mov al, [DRV_B1]
+    and al, 0x03
     mov cl, 6
-    shl bl, cl
-    mov ah, [0x05E3]
+    shl al, cl
+    mov ah, [DRV_B2]
     and ah, 0x3F
-    or ah, bl
-    ; sign-extend the 8-bit dx into AX
-    mov al, ah
+    or  al, ah
     cbw
-    mov [0x0506], ax
+    add [DRV_X], ax
 
-    ; Reassemble dy: bits Y7-6 from byte1<3:2>, Y5-0 from byte3<5:0>
-    mov al, [0x05E2]
+    ; dy = (byte1<3:2> << 4) | byte3<5:0>, sign-extended, added to Y
+    mov al, [DRV_B1]
     and al, 0x0C
     mov cl, 4
     shl al, cl
-    mov ah, [0x05E4]
-    and ah, 0x3F
-    or ah, al
-    mov al, ah
+    and bl, 0x3F
+    or  al, bl
     cbw
-    mov [0x0508], ax
+    add [DRV_Y], ax
 
-    mov word [0x0504], 1         ; packet received
-    mov byte [0x05E1], 0
-    mov byte [0x05E0], 0
+    ; buttons from byte1: bit5=L, bit4=R -> bit0=L, bit1=R
+    mov al, [DRV_B1]
+    mov ah, 0
+    test al, 0x20
+    jz .no_l
+    or ah, 0x01
+.no_l:
+    test al, 0x10
+    jz .no_r
+    or ah, 0x02
+.no_r:
+    mov [DRV_BTN], ah
 
-.eoi:
-.no_data:
-    mov al, 0x20
+    inc byte [DRV_COUNT]
+    mov byte [DRV_PHASE], 0
+    jmp .drain
+
+.out:
+    mov al, 0x20                ; EOI
     out PIC_CMD, al
     pop ds
+    pop dx
+    pop cx
+    pop bx
     pop ax
     iret

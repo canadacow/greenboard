@@ -12,6 +12,7 @@
 #include "isa/isa_cga.h"
 #include "isa/isa_ega.h"
 #include "isa/isa_ram.h"
+#include "isa/serial_mouse.h"
 #include "display/renderer.h"
 #include "debug/memory_view.h"
 #if BENCH_CFG_TRACE
@@ -95,6 +96,7 @@ struct System {
     std::unique_ptr<ISA_EGA> ega;
     std::unique_ptr<ISA_MDA> mda;
     std::unique_ptr<ISA_RAM> ram_exp;
+    std::unique_ptr<SerialMouse> mouse;
     std::unique_ptr<TestKeyboard> keyboard;
     std::unique_ptr<PCSpeaker> pc_speaker;
     std::unique_ptr<SpeakerDriver> speaker_driver;
@@ -184,6 +186,10 @@ static System build_system(const SystemConfig& cfg,
         sys.ram_exp = std::make_unique<ISA_RAM>(0x40000, cfg.expansion_kb * 1024);
         sys.isa_bus->insert_card(3, sys.ram_exp.get(), 0, 0x18);  // IRQ4 + IRQ3
         sys.board->add_expansion_kb(cfg.expansion_kb);
+        // Microsoft serial mouse on COM1 (host input wiring comes later;
+        // drivers can detect and install against it now).
+        sys.mouse = std::make_unique<SerialMouse>();
+        sys.ram_exp->set_com_device(0, sys.mouse.get());
     }
 
     sys.board->compute_switches();

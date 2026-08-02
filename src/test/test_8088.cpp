@@ -349,18 +349,24 @@ int main() {
 #endif
             constexpr uint64_t secondTimeout = 60;
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secondTimeout);
-            // Mouse test: the ASM sets [0x05F0]=1 once it wants
-            // synthetic host motion injected. Feed it exactly once --
-            // real driver software has no equivalent, this is purely
-            // the test's way of standing in for host input arriving
-            // asynchronously between polling windows.
+            // Mouse test: the ASM writes a stage marker to [0x05F0]
+            // when it wants synthetic host motion injected -- the
+            // test's stand-in for host input arriving asynchronously.
+            // Stage 1: dx=+20 dy=-10 left down.
+            // Stage 2: dx=+5  dy=+15 left up, right down.
+            // Accumulated: X=+25, Y=+5, buttons=right only.
             bool mouse_test = (tc.bin_file.find("test_mouse") != std::string::npos);
-            bool injected = false;
+            uint8_t injected_upto = 0;
             while (!cpu->breakpoint() && !cpu->halted() && (debugger || std::chrono::steady_clock::now() < deadline)) {
-                if (mouse_test && !injected &&
-                    dram.data()[dram_xlat(0x05F0)] != 0) {
-                    mouse.host_update(20, -10, /*left=*/true, /*right=*/false);
-                    injected = true;
+                if (mouse_test) {
+                    uint8_t marker = dram.data()[dram_xlat(0x05F0)];
+                    if (marker == 1 && injected_upto < 1) {
+                        mouse.host_update(20, -10, /*left=*/true, /*right=*/false);
+                        injected_upto = 1;
+                    } else if (marker == 2 && injected_upto < 2) {
+                        mouse.host_update(5, 15, /*left=*/false, /*right=*/true);
+                        injected_upto = 2;
+                    }
                 }
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
