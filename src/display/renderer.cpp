@@ -36,6 +36,7 @@
 #include "display/board_view.h"
 #include "isa/isa_cga.h"
 #include "isa/isa_ega.h"
+#include "isa/serial_mouse.h"
 #include "core/scheduler.h"
 #include "ic/ic_8088.h"
 #include "isa/isa_mda.h"
@@ -3041,6 +3042,69 @@ void DxState::apply_resize() {
 // ========================================================================
 
 static TestKeyboard* s_kbd = nullptr;  // set by render_loop before window creation
+
+// ---- Mouse capture (Ctrl+Alt toggles; never click-to-capture, clicks
+// belong to ImGui). While captured: cursor hidden and clipped to the
+// window, recentered every frame, relative deltas + buttons fed to the
+// serial mouse; all mouse messages are swallowed so the UI stays inert.
+static SerialMouse* s_mouse = nullptr;   // set by render_loop
+static bool s_mouse_cap = false;
+static uint8_t s_mbtn_prev = 0;
+static std::wstring s_base_title;
+
+static void set_mouse_capture(HWND hwnd, bool on) {
+    if (s_mouse_cap == on)
+        return;
+    s_mouse_cap = on;
+    if (on) {
+        RECT r;
+        GetClientRect(hwnd, &r);
+        POINT tl{ r.left, r.top }, br{ r.right, r.bottom };
+        ClientToScreen(hwnd, &tl);
+        ClientToScreen(hwnd, &br);
+        RECT clip{ tl.x, tl.y, br.x, br.y };
+        ClipCursor(&clip);
+        ShowCursor(FALSE);
+        SetCursorPos((tl.x + br.x) / 2, (tl.y + br.y) / 2);
+    } else {
+        ClipCursor(nullptr);
+        ShowCursor(TRUE);
+    }
+    std::wstring t = s_base_title;
+    if (on)
+        t += L"  [mouse captured -- Ctrl+Alt releases]";
+    SetWindowTextW(hwnd, t.c_str());
+    // Clear guest modifier state: the toggle chord delivered make codes
+    // for Ctrl/Alt to the emulated keyboard; make sure it sees releases.
+    if (s_kbd) {
+        s_kbd->inject_key(0x1D | 0x80);  // Ctrl break
+        s_kbd->inject_key(0x38 | 0x80);  // Alt break
+    }
+}
+
+// Per-frame while captured: recenter the host cursor and feed the
+// accumulated delta + live buttons to the serial mouse.
+static void pump_mouse_capture(HWND hwnd) {
+    if (!s_mouse_cap || !s_mouse)
+        return;
+    RECT r;
+    GetClientRect(hwnd, &r);
+    POINT tl{ 0, 0 };
+    ClientToScreen(hwnd, &tl);
+    int cx = tl.x + r.right / 2;
+    int cy = tl.y + r.bottom / 2;
+    POINT p;
+    GetCursorPos(&p);
+    int dx = p.x - cx, dy = p.y - cy;
+    uint8_t btn = (uint8_t)(((GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? 1 : 0) |
+                            ((GetAsyncKeyState(VK_RBUTTON) & 0x8000) ? 2 : 0));
+    if (dx || dy || btn != s_mbtn_prev) {
+        s_mouse->host_update(dx, dy, (btn & 1) != 0, (btn & 2) != 0);
+        s_mbtn_prev = btn;
+    }
+    if (dx || dy)
+        SetCursorPos(cx, cy);
+}
 static DxState* s_dx = nullptr;       // for drop handler
 
 // OLE IDropTarget for live drag highlighting + drop onto drive rows.
@@ -3128,6 +3192,25 @@ static LRESULT CALLBACK RendererWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                    (msg == WM_KEYDOWN || msg == WM_KEYUP ||
                     msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP);
 
+    // Ctrl+Alt: toggle mouse capture (in either press order). Swallow
+    // the chord so neither ImGui nor the guest reacts to it.
+    if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lp & (1 << 30)) &&
+        s_mouse &&
+        ((wp == VK_MENU && (GetKeyState(VK_CONTROL) & 0x8000)) ||
+         (wp == VK_CONTROL && (GetKeyState(VK_MENU) & 0x8000)))) {
+        set_mouse_capture(hwnd, !s_mouse_cap);
+        return 0;
+    }
+
+    // While captured, the host mouse belongs to the guest: swallow all
+    // mouse messages before ImGui sees them.
+    if (s_mouse_cap && msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST)
+        return 0;
+
+    // Losing focus (Alt+Tab etc.) always releases the capture.
+    if (msg == WM_KILLFOCUS)
+        set_mouse_capture(hwnd, false);
+
     if (!is_fkey && ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
         return true;
 
@@ -3193,9 +3276,11 @@ void Renderer::render_loop(std::stop_token stop) {
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassW(&wc);
 
+    s_mouse = mouse_;
     const wchar_t* title = ega_ ? L"IBM 5150 - EGA"
                          : cga_ ? L"IBM 5150 - CGA"
                                 : L"IBM 5150 - MDA";
+    s_base_title = title;
     HWND hwnd = CreateWindowW(L"BenchRenderer", title,
         WS_OVERLAPPEDWINDOW, x, y,
         wr.right - wr.left, wr.bottom - wr.top,
@@ -3261,6 +3346,7 @@ void Renderer::render_loop(std::stop_token stop) {
                 brd_map_ready_.store(false, std::memory_order_release);
             }
 
+            pump_mouse_capture(hwnd);
             dx.apply_resize();
             dx.render_display();
             dx.render_overlay();
@@ -3268,6 +3354,7 @@ void Renderer::render_loop(std::stop_token stop) {
         }
     }
 
+    set_mouse_capture(hwnd, false);
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -3305,7 +3392,8 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
                      const SystemInfo& sys_info,
                      const IC_8259A* pic,
                      const IC_8253* pit,
-                     const ISA_EGA* ega) {
+                     const ISA_EGA* ega,
+                     SerialMouse* mouse) {
     vram_ = vram;
     clk_cycles_ = clk_cycles;
     scheduler_ = scheduler;
@@ -3318,6 +3406,7 @@ void Renderer::start(const uint8_t* vram, const uint64_t* clk_cycles,
     bus_probe_ = bus;
     cga_ = cga;
     ega_ = ega;
+    mouse_ = mouse;
     kbd_ = kbd;
     fdc_ = fdc;
     clk_gen_ = clk_gen;

@@ -369,19 +369,19 @@ static void start_renderer(Renderer& renderer, System& sys) {
             sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
             nullptr, &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
             nullptr, sys.board->clk_gen, sys_info,
-            sys.board->pic, sys.board->pit_ic, sys.ega.get());
+            sys.board->pic, sys.board->pit_ic, sys.ega.get(), sys.mouse.get());
     } else if (sys.cga) {
         renderer.start(nullptr, &sys.board->clk_gen->clk_cycles_ref(),
             sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
             nullptr, &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
             sys.cga.get(), sys.board->clk_gen, sys_info,
-            sys.board->pic, sys.board->pit_ic);
+            sys.board->pic, sys.board->pit_ic, nullptr, sys.mouse.get());
     } else if (sys.mda) {
         renderer.start(sys.mda->framebuffer(), &sys.board->clk_gen->clk_cycles_ref(),
             sys.scheduler.get(), sys.board->cpu, &sys.memview, sys.board->dma_ic,
             sys.mda.get(), &sys.bus_probe, sys.keyboard.get(), sys.fdc.get(),
             nullptr, sys.board->clk_gen, sys_info,
-            sys.board->pic, sys.board->pit_ic);
+            sys.board->pic, sys.board->pit_ic, nullptr, sys.mouse.get());
     }
 
     renderer.bind_board_signals(sys.board->brd_net_map());
