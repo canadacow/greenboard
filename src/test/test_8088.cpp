@@ -21,6 +21,7 @@
 #include "isa/isa_fdc.h"
 #include "isa/isa_mda.h"
 #include "isa/isa_ram.h"
+#include "isa/serial_mouse.h"
 #include "test_keyboard.h"
 #include "core/signal.h"
 #include "core/callback_component.h"
@@ -190,6 +191,7 @@ int main() {
         "floppy",
         "io_floppy",
         "speaker",
+        "mouse",
         "memw_no_io",
         "post_cpu",
         "post_cass",
@@ -256,9 +258,12 @@ int main() {
     ISA_MDA mda;
     isa_bus.insert_card(2, &mda);
 
-    // ISA RAM expansion: J4, 384KB at 0x40000-0x9FFFF (256KB planar + 384KB = 640KB).
+    // AST SixPakPlus: J4, 384KB RAM at 0x40000-0x9FFFF (256KB planar +
+    // 384KB = 640KB) plus COM1 (3F8/IRQ4) and COM2 (2F8/IRQ3).
     ISA_RAM isa_ram(0x40000, 384 * 1024);
-    isa_bus.insert_card(3, &isa_ram);
+    isa_bus.insert_card(3, &isa_ram, 0, 0x18);  // IRQ4 + IRQ3
+    SerialMouse mouse;
+    isa_ram.set_com_device(0, &mouse);  // COM1
 
     // Configure DIP switches from installed hardware.
     board.add_floppy_drives(2);
@@ -302,6 +307,7 @@ int main() {
         std::memset(testcard.io_data(), 0xFF, 1 << 16);
         std::memset(dram.data(), 0x00, IC_DRAM_256K::size());
         std::memset(const_cast<uint8_t*>(isa_ram.data()), 0x00, isa_ram.size());
+        mouse.reset();
 
         // Preload DMA buffer for the DMA test.
         {
@@ -343,8 +349,21 @@ int main() {
 #endif
             constexpr uint64_t secondTimeout = 60;
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secondTimeout);
-            while (!cpu->breakpoint() && !cpu->halted() && (debugger || std::chrono::steady_clock::now() < deadline))
+            // Mouse test: the ASM sets [0x05F0]=1 once it wants
+            // synthetic host motion injected. Feed it exactly once --
+            // real driver software has no equivalent, this is purely
+            // the test's way of standing in for host input arriving
+            // asynchronously between polling windows.
+            bool mouse_test = (tc.bin_file.find("test_mouse") != std::string::npos);
+            bool injected = false;
+            while (!cpu->breakpoint() && !cpu->halted() && (debugger || std::chrono::steady_clock::now() < deadline)) {
+                if (mouse_test && !injected &&
+                    dram.data()[dram_xlat(0x05F0)] != 0) {
+                    mouse.host_update(20, -10, /*left=*/true, /*right=*/false);
+                    injected = true;
+                }
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
             if (!cpu->breakpoint() && !cpu->halted())
                 spdlog::warn("  timeout -- CPU did not halt/breakpoint within {}s", secondTimeout);
         }
